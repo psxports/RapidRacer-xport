@@ -39,37 +39,40 @@ uint32 vehicle_legacy(const BOAT *boat)
     return 0x800F5BF0u + (uint32)(boat - vehicle_boats) * BOAT_LEGACY_STRIDE;
 }
 
-// Temporary player-context binding until native menu contexts replace legacy identities
-BOAT *vehicle_player(uint32 context)
+BOAT *vehicle_player(const RACE_VIEW *context)
 {
-    if (context == 0x800DE0F0u)
-        return vehicle_players[0];
-    if (context == 0x800DF098u)
-        return vehicle_players[1];
-    abort();
+    if (context == NULL || context->idx >= 2u)
+        abort();
+    return vehicle_players[context->idx];
 }
 
-// Temporary player-context binding for native tracked opponents
-BOAT **vehicle_tracks(uint32 context)
+BOAT **vehicle_tracks(const RACE_VIEW *context)
 {
-    if (context == 0x800DE0F0u)
-        return vehicle_tracked[0];
-    if (context == 0x800DF098u)
-        return vehicle_tracked[1];
-    abort();
+    if (context == NULL || context->idx >= 2u)
+        abort();
+    return vehicle_tracked[context->idx];
 }
 
-// Temporary menu identity boundary until native menu contexts replace legacy records
-BOAT_MENU *vehicle_menu(uint32 menu)
+BOAT_MENU *vehicle_player_menu(const RACE_VIEW *context)
 {
     static BOAT_MENU inactive;
+    BOAT *boat = vehicle_player(context);
 
-    if (menu == 0u)
-        return &inactive;
-    uint32 offset = menu - 0x800F62A8u;
-    if (offset % BOAT_LEGACY_STRIDE != 0u || offset / BOAT_LEGACY_STRIDE >= 16u)
+    return boat != NULL ? &boat->menu : &inactive;
+}
+
+TIME_REC *vehicle_lap_time(BOAT_MENU *menu, uint32 idx)
+{
+    if (idx >= 5u)
         abort();
-    return &vehicle_boats[offset / BOAT_LEGACY_STRIDE].menu;
+    return &menu->lap_times[idx];
+}
+
+TIME_REC *vehicle_checkpoint_time(BOAT_MENU *menu, uint32 lap, uint32 idx)
+{
+    if (lap >= 5u || idx >= 5u)
+        abort();
+    return &menu->checkpoint_times[lap][idx];
 }
 
 static sint32 vehicle_mac_shift12(sint64 value)
@@ -278,7 +281,7 @@ sint32 vehicle_init(BOAT *boat, sint16 segment, sint16 entry, sint32 driver, sin
     boat->control.force_arm[0] = 0;
     boat->control.force_arm[1] = -10;
     boat->control.force_arm[2] = -50;
-    if (r_u32(0x80083484u) == 8u)
+    if (race_cfg.mode == 8u)
     {
         boat->race.progress = (sint32)(0u);
         position[0] = 0;
@@ -308,7 +311,7 @@ sint32 vehicle_init(BOAT *boat, sint16 segment, sint16 entry, sint32 driver, sin
     motion_init_inertia(&boat->motion, (sint32)setup->mass, axis.halfwords);
     SetRotMatrix(&boat->motion.transform.pose);
     SetTransMatrix(&boat->motion.transform.pose);
-    if (r_u32(0x80083484u) == 8u)
+    if (race_cfg.mode == 8u)
     {
         for (index = 1; index < 5; ++index)
         {
@@ -351,18 +354,18 @@ sint32 vehicle_init_slots(void)
     uint32 mode;
 
     FUNCTION_MARKER(0x80023460u, "MAIN.EXE");
-    if (r_u32(0x80083484u) == 8u)
+    if (race_cfg.mode == 8u)
     {
         route_boundaries.count = 0u;
         route_boundaries.entries[0].seg = NULL;
     }
     else
         route_build_boundaries(&route_resources, &route_boundaries);
-    if (r_u32(0x80083484u) == 4u)
+    if (race_cfg.mode == 4u)
         replay_init();
 
     profile = profile_current();
-    if (r_u32(0x80083484u) == 5u)
+    if (race_cfg.mode == 5u)
         segment = scene_start->attract_seg;
     else if ((sint16)race_selection.format == 2)
         segment = (sint32)(route_resources.count - 1u);
@@ -371,7 +374,7 @@ sint32 vehicle_init_slots(void)
         sint32 offset = scene_start->grid_offset;
         segment = (sint32)(route_resources.count - (uint32)offset);
     }
-    mode = r_u32(0x800834A0u);
+    mode = race_cfg.course;
     vehicle_racer_count = (uint32)(0u);
     vehicle_trailer_count = (uint16)(0u);
     vehicle_leader_count = (uint16)(0u);
@@ -404,7 +407,7 @@ sint32 vehicle_init_slots(void)
         {
             uint32 count;
 
-            if (r_u32(0x80083484u) == 5u && player == 0)
+            if (race_cfg.mode == 5u && player == 0)
                 vehicle_players[0] = boat;
             vehicle = participant->boat;
             vehicle_init(boat, (sint16)segment, entry, 0, vehicle);
@@ -422,7 +425,7 @@ sint32 vehicle_init_slots(void)
 
             if (object_mode == 2)
             {
-                mode = r_u32(0x80083478u);
+                mode = race_cfg.players;
                 vehicle_players[0] = boat;
                 vehicle = participant->boat;
                 if (mode == 1u)
@@ -452,7 +455,7 @@ sint32 vehicle_init_slots(void)
         if (accepted >= 0)
         {
             boat->model_slot = (uint32)player;
-            mode = r_u32(0x80083478u);
+            mode = race_cfg.players;
             if (mode == 1u)
             {
                 result = (sint32)participant->mode;
@@ -481,11 +484,11 @@ sint32 vehicle_damp_vel(BOAT *boat)
     return velocity->vector[2];
 }
 
-sint32 vehicle_input(BOAT *boat, uint32 context)
+sint32 vehicle_input(BOAT *boat, const RACE_VIEW *context)
 {
     const BOAT_SETUP *tuning = (&boat->setup);
     CONTROLLER_STATE *controller = input_for_context(context);
-    uint32 stage = r_u32(context + 100u);
+    BOAT_MENU *stage = vehicle_player_menu(context);
     sint32 target_steering = 0;
     sint32 target_speed = 0;
     sint32 acceleration = 0;
@@ -498,7 +501,7 @@ sint32 vehicle_input(BOAT *boat, uint32 context)
 
     FUNCTION_MARKER(0x80023FF4u, "MAIN.EXE");
     boat->control.roll_input = (sint32)(0u);
-    if (vehicle_menu(stage)->mode == 4u || vehicle_menu(stage)->mode == 6u)
+    if (stage->mode == 4u || stage->mode == 6u)
     {
         uint16 buttons = controller->current;
         if (mode == 4)
@@ -561,7 +564,7 @@ sint32 vehicle_input(BOAT *boat, uint32 context)
             acceleration = (buttons & 0x490u) != 0u;
             toggle = (controller->pressed & 0x100u) != 0u;
         }
-        if (vehicle_menu(stage)->mode == 6u)
+        if (stage->mode == 6u)
         {
             target_speed = 0;
             acceleration = 0;
@@ -615,14 +618,14 @@ sint32 vehicle_input(BOAT *boat, uint32 context)
         boat->control.steering = (sint32)((uint32)-512);
     if ((sint32)(uint32)boat->control.steering > 512)
         boat->control.steering = (sint32)(512u);
-    if (acceleration != 0 && (uint32)boat->control.mode == 0u && (r_u8(stage + 592u) != 0u || (((uint32)game_selection.flags | ((uint32)game_selection.ready << 16) | ((uint32)game_selection.event << 24)) & 0x40u) != 0u))
+    if (acceleration != 0 && (uint32)boat->control.mode == 0u && (stage->pickups[3].count != 0u || (((uint32)game_selection.flags | ((uint32)game_selection.ready << 16) | ((uint32)game_selection.event << 24)) & 0x40u) != 0u))
     {
-        sound_queue_command(context, 0, 1, 0);
-        if ((global_fn_8006e9d8() & 3) < 2)
-            sound_queue_command(context, 6, 0, 0);
-        sound_queue_command(context, 30, 2, 0);
+        sound_queue_command(sound_for_context(context), 0, 1);
+        if ((game_random_next() & 3) < 2)
+            sound_queue_command(sound_for_context(context), 6, 0);
+        sound_queue_command(sound_for_context(context), 30, 2);
         boat->control.mode = (uint32)(1u);
-        xport_update_u8(stage + 592u, XPORT_MEMORY_UPDATE_SUBTRACT, 1u);
+        --stage->pickups[3].count;
     }
     if (target_speed < (sint32)(uint32)boat->control.throttle)
     {
@@ -864,7 +867,7 @@ void vehicle_collide_boats(BOAT *boat)
             return;
         if (((uint16)other->race.mode & 1u) != 0u)
             continue;
-        if (r_u32(0x80083478u) == 1u && math_abs_s32((sint32)((uint32)other->race.progress - (uint32)boat->race.progress)) >= 101)
+        if (race_cfg.players == 1u && math_abs_s32((sint32)((uint32)other->race.progress - (uint32)boat->race.progress)) >= 101)
             continue;
         other_collider = &other->capsule;
         dx = (sint32)((uint32)other->motion.position[0] - (uint32)boat->motion.position[0]);
@@ -1599,17 +1602,17 @@ sint32 vehicle_assign_list_identifiers(void)
 
     FUNCTION_MARKER(0x800282C4u, "MAIN.EXE");
     {
-        uint32 entry = r_u32(0x800DE154u);
-        uint32 type = vehicle_menu(entry)->mode;
+        BOAT_MENU *entry = vehicle_player_menu(&race_views[0]);
+        uint32 type = entry->mode;
         if (type == 5u || type == 7u)
-            reserved_first = vehicle_menu(entry)->racer_num;
+            reserved_first = entry->racer_num;
     }
-    if (r_u32(0x80083478u) == 2u)
+    if (race_cfg.players == 2u)
     {
-        uint32 entry = r_u32(0x800DF0FCu);
-        uint32 type = vehicle_menu(entry)->mode;
+        BOAT_MENU *entry = vehicle_player_menu(&race_views[1]);
+        uint32 type = entry->mode;
         if (type == 5u || type == 7u)
-            reserved_second = vehicle_menu(entry)->racer_num;
+            reserved_second = entry->racer_num;
     }
     for (index = 0; index < (sint16)vehicle_leader_count; ++index)
     {
@@ -1737,8 +1740,8 @@ sint32 vehicle_update_route(BOAT *boat)
 
 sint32 race_update_racers(sint32 argument)
 {
-    sint32 players = (sint32)r_u32(0x80083478u);
-    uint32 reference_entry = 0x800DE0F0u;
+    sint32 players = (sint32)race_cfg.players;
+    const RACE_VIEW *reference_entry = &race_views[0];
 
     BOAT *deferred[40];
 
@@ -1747,21 +1750,21 @@ sint32 race_update_racers(sint32 argument)
 
     FUNCTION_MARKER(0x80028814u, "MAIN.EXE");
     motion_horizontal_locked = (sint32)(0u);
-    if (players == 1 && (sint32)vehicle_menu(r_u32(0x800DE154u))->mode < 3)
+    if (players == 1 && (sint32)vehicle_player_menu(&race_views[0])->mode < 3)
         motion_horizontal_locked = (sint32)(1u);
-    else if (r_u32(0x80083478u) == 2u && (sint32)vehicle_menu(r_u32(0x800DE154u))->mode < 3 && (sint32)vehicle_menu(r_u32(0x800DF0FCu))->mode < 3)
+    else if (race_cfg.players == 2u && (sint32)vehicle_player_menu(&race_views[0])->mode < 3 && (sint32)vehicle_player_menu(&race_views[1])->mode < 3)
         motion_horizontal_locked = (sint32)(1u);
-    if (r_u32(0x80083484u) == 8u)
+    if (race_cfg.mode == 8u)
     {
         vehicle_update_terrain(vehicle_players[0], argument);
-        if (r_u32(0x80083478u) == 2u)
+        if (race_cfg.players == 2u)
             return vehicle_update_terrain(vehicle_players[1], argument);
         return 2;
     }
-    if (r_u32(0x80083478u) == 2u || r_u32(0x80083484u) == 5u)
+    if (race_cfg.players == 2u || race_cfg.mode == 5u)
     {
-        ai_sort_racers_by_rank(0x800DE0F0u, 0x800DF098u);
-        if (r_u32(0x80083484u) != 5u)
+        ai_sort_racers_by_rank(&race_views[0], &race_views[1]);
+        if (race_cfg.mode != 5u)
         {
             BOAT *first = vehicle_players[0];
             BOAT *second = vehicle_players[1];
@@ -1779,7 +1782,7 @@ sint32 race_update_racers(sint32 argument)
             {
                 ahead = second;
                 behind = first;
-                reference_entry = 0x800DF098u;
+                reference_entry = &race_views[1];
             }
             gap = (sint32)(uint32)ahead->race.progress - (sint32)(uint32)behind->race.progress - 3;
             if (gap < 0)
@@ -1808,12 +1811,12 @@ sint32 race_update_racers(sint32 argument)
             }
         }
     }
-    else if (vehicle_menu(r_u32(0x800DE154u))->mode == 2u)
-        race_events_racer_modes_trans(0x800DE0F0u);
+    else if (vehicle_player_menu(&race_views[0])->mode == 2u)
+        race_events_racer_modes_trans(&race_views[0]);
     else
     {
         vehicle_players[0]->route.speed = (sint32)(0u);
-        ai_update_racer(0x800DE0F0u);
+        ai_update_racer(&race_views[0]);
     }
     for (index = 0; index < (sint32)vehicle_racer_count; ++index)
     {
@@ -1873,8 +1876,8 @@ sint32 race_update_racers(sint32 argument)
             {
                 uint32 type = (uint32)boat->control.driver;
                 uint32 saved = motion_horizontal_locked;
-                uint32 first_status = vehicle_menu(r_u32(0x800DE154u))->mode;
-                uint32 second_status = vehicle_menu(r_u32(0x800DF0FCu))->mode;
+                uint32 first_status = vehicle_player_menu(&race_views[0])->mode;
+                uint32 second_status = vehicle_player_menu(&race_views[1])->mode;
 
                 if ((type == 2u && first_status == 4u) || (first_status - 5u < 2u) || (type == 3u && second_status == 4u) || (second_status - 5u < 2u))
                     motion_horizontal_locked = (sint32)(0u);
@@ -1899,9 +1902,9 @@ sint32 race_update_racers(sint32 argument)
 
         SetRotMatrix(&boat->motion.transform.pose);
         SetTransMatrix(&boat->motion.transform.pose);
-        if (type == 2u && vehicle_menu(r_u32(0x800DE154u))->mode == 4u)
+        if (type == 2u && vehicle_player_menu(&race_views[0])->mode == 4u)
             reset = 0;
-        else if (type == 3u && vehicle_menu(r_u32(0x800DF0FCu))->mode == 4u)
+        else if (type == 3u && vehicle_player_menu(&race_views[1])->mode == 4u)
             reset = 0;
         vehicle_sum_contacts(boat, reset);
         vehicle_contact_force(boat, &boat->contacts.points[1], NULL);
@@ -1927,7 +1930,7 @@ sint32 race_update_racers(sint32 argument)
             pickup_scan(boat);
             route_advance_target(route, &route_resources);
             route_init_steps(boat, boat->contacts.points[0].seg);
-            route_update_speed_ctrl(vehicle_player(reference_entry), boat, r_u32(0x80083484u));
+            route_update_speed_ctrl(vehicle_player(reference_entry), boat, race_cfg.mode);
             route_select_dir(boat, &route_resources);
             if (motion_horizontal_locked == 0u)
             {
@@ -1968,8 +1971,8 @@ sint32 race_update_racers(sint32 argument)
         {
             uint32 saved = motion_horizontal_locked;
             uint32 type = (uint32)boat->control.driver;
-            uint32 first_status = vehicle_menu(r_u32(0x800DE154u))->mode;
-            uint32 second_status = vehicle_menu(r_u32(0x800DF0FCu))->mode;
+            uint32 first_status = vehicle_player_menu(&race_views[0])->mode;
+            uint32 second_status = vehicle_player_menu(&race_views[1])->mode;
 
             if ((type == 2u && first_status == 4u) || (first_status - 5u < 2u) || (type == 3u && second_status == 4u) || (second_status - 5u < 2u))
                 motion_horizontal_locked = (sint32)(0u);
@@ -2015,14 +2018,14 @@ sint32 race_update_racers(sint32 argument)
         else if (state == 5)
             route_init_lookahead(boat, boat->contacts.points[0].seg, route_resources.count);
     }
-    if (r_u32(0x80083484u) == 4u)
+    if (race_cfg.mode == 4u)
     {
         if (replay_state.capturing != 0u)
             replay_record(vehicle_players[0]);
         if (replay_state.playing != 0u)
             replay_advance();
     }
-    if ((uint32)(vehicle_menu(r_u32(0x800DE154u))->mode - 2u) >= 2u)
+    if ((uint32)(vehicle_player_menu(&race_views[0])->mode - 2u) >= 2u)
         return vehicle_assign_list_identifiers();
     return 1;
 }

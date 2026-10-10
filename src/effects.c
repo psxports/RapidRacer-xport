@@ -12,6 +12,7 @@
 #include "callbacks.h"
 #include "effects.h"
 #include "display.h"
+#include "scene.h"
 #include "render.h"
 #include "xport_trace.h"
 
@@ -805,7 +806,7 @@ sint32 effects_advance_tex_cb(CB_NODE *node)
     if (idx >= 14u)
         abort();
     anim = &effects_tex_anims[idx];
-    anim->timer = (sint32)((uint32)anim->timer - (r_u32(0x80083478u) == 2u ? 2u : 1u));
+    anim->timer = (sint32)((uint32)anim->timer - (race_cfg.players == 2u ? 2u : 1u));
     if (anim->timer >= 0)
         return anim->timer;
     anim->timer = (sint32)((uint32)anim->timer + (uint32)anim->period);
@@ -854,7 +855,7 @@ sint32 effects_update_transform_cb(CB_NODE *node)
             cb_unlink_active_node(node);
             return 0;
         }
-        sound_queue_command(0x800DE0F0u, 11, 0, 0u);
+        sound_queue_command(sound_for_context(&race_views[0]), 11, 0);
     }
     frame_rate = (sint32)game_timing.frame_rate;
     if (state->phase != 0)
@@ -930,7 +931,7 @@ sint32 effects_render_depth_quads(uint32 *ot)
         sint16 x, y;
         POLY_FT4 *quad;
 
-        if (r_u32(0x8008348Cu) == 0u)
+        if (race_cfg.variant == 0u)
             vertex.vx = (sint16)(0u - (uint16)vertex.vx);
         gte_ldv0(&vertex);
         gte_rtps();
@@ -967,14 +968,14 @@ sint32 effects_render_depth_quads(uint32 *ot)
     }
     render_packet_publish(packet);
     // Original return negates the mirrored unsigned halfword before restoring it
-    if (r_u32(0x8008348Cu) == 0u)
+    if (race_cfg.variant == 0u)
         return (sint32)(0u - (uint32)(uint16)(0u - (uint16)vertices[0].vx));
-    return (sint32)r_u32(0x8008348Cu);
+    return (sint32)race_cfg.variant;
 }
 
-uint32 effects_init_transform_object(uint32 context)
+uint32 effects_init_transform_object(const RACE_VIEW *context)
 {
-    uint32 idx = r_u32(context + 4u);
+    uint32 idx = context->idx;
     EFFECTS_TRANSFORM *state = effects_transform(idx);
     CB_NODE *node;
 
@@ -985,7 +986,7 @@ uint32 effects_init_transform_object(uint32 context)
     effects_mat_identity(&state->pose);
     state->pose.t[2] = 500;
     effects_mat_identity(&state->view);
-    state->view.m[1][1] = r_u32(0x80083478u) == 2u ? -1840 : -5120;
+    state->view.m[1][1] = race_cfg.players == 2u ? -1840 : -5120;
     cb_set_active_head(&cb_players[idx]);
     node = cb_alloc_node(effects_update_transform_cb);
     cb_set_active_head(NULL);
@@ -1019,7 +1020,7 @@ static void effects_render_particles(uint32 *ot)
 {
     uint32 packet_offset = render_packet_offset();
     POLY_FT4 *packet;
-    sint32 double_height = r_u32(0x80083478u) != 2u;
+    sint32 double_height = race_cfg.players != 2u;
     MATRIX saved;
     MATRIX identity;
     sint32 idx;
@@ -1136,7 +1137,7 @@ sint32 effects_update_particles(CB_NODE *node)
         else
         {
             EFFECT_PARTICLE *particle = &emitter->particles[idx];
-            sint32 random = global_fn_8006e9d8();
+            sint32 random = game_random_next();
             sint32 factor;
             sint32 distance;
             sint32 scale;
@@ -1144,9 +1145,9 @@ sint32 effects_update_particles(CB_NODE *node)
             VECTOR output;
 
             particle->kind = (sint16)(math_rem_s32(random, 3) + 1);
-            random = global_fn_8006e9d8();
+            random = game_random_next();
             particle->size = (sint16)(math_rem_s32(random, 50) + 50);
-            factor = global_fn_8006e9d8() & 0x0FFF;
+            factor = game_random_next() & 0x0FFF;
             gte_intpl12(&emitter->origin[1], &emitter->origin[0], factor, &output);
             particle->pos[0] = (sint16)output.vx;
             particle->pos[1] = (sint16)output.vy;
@@ -1157,7 +1158,7 @@ sint32 effects_update_particles(CB_NODE *node)
             if (distance < 0)
                 distance = -distance;
             scale = math_sra_s32((2048u - (uint32)(distance / 2)) * (uint32)emitter->speed, 11u);
-            random = global_fn_8006e9d8();
+            random = game_random_next();
             factor = (sint32)((uint32)math_rem_s32(random, scale) + (uint32)scale + (uint32)emitter->speed);
             input.vx = (sint16)output.vx;
             input.vy = (sint16)output.vy;
@@ -1229,7 +1230,7 @@ sint32 effects_register_mode(void)
     uint32 mode;
 
     FUNCTION_MARKER(0x80041E30u, "MAIN.EXE");
-    mode = r_u32(0x80083484u);
+    mode = race_cfg.mode;
     if (mode == 8u)
     {
         effects_register_tex(3u);
@@ -1240,14 +1241,14 @@ sint32 effects_register_mode(void)
     }
     else
     {
-        uint32 state = r_u32(0x800834A0u);
+        uint32 state = race_cfg.course;
 
         if (state == 0u)
             effects_register_tex(1u);
-        state = r_u32(0x800834A0u);
+        state = race_cfg.course;
         if (state == 1u)
         {
-            if (r_u32(0x8008348Cu) == 2u)
+            if (race_cfg.variant == 2u)
             {
                 effects_register_tex(8u);
                 effects_register_tex(9u);
@@ -1256,9 +1257,9 @@ sint32 effects_register_mode(void)
                 effects_register_tex(12u);
                 effects_register_tex(13u);
             }
-            state = r_u32(0x800834A0u);
+            state = race_cfg.course;
         }
-        if (state == 4u && r_u32(0x8008348Cu) == 2u)
+        if (state == 4u && race_cfg.variant == 2u)
         {
             effects_register_tex(0u);
             effects_init_particles();
@@ -1295,14 +1296,17 @@ typedef struct
     uint16 clut, tpage;
 } EFFECT_TEXTURE;
 
+// Immutable forward vector from MAIN.EXE 800B4054
+static const SVECTOR effects_forward = {0, 0, 4096, 0};
+
 static SVECTOR effects_cache_direction;
 static EFFECT_SAMPLE effects_samples[2];
 static EFFECT_TEXTURE effects_cache_textures[7];
 
-sint32 effects_capture_screen_region(uint32 state, sint32 buffer_index)
+sint32 effects_capture_screen_region(const RACE_VIEW *state, sint32 buffer_index)
 {
     PSX_RECT rectangle;
-    uint32 side = state == 0x800DE0F0u ? 0u : 1u;
+    uint32 side = state == &race_views[0] ? 0u : 1u;
     EFFECT_SAMPLE *cache = &effects_samples[side];
     sint32 x = cache->sample.x;
     sint32 y;
@@ -1320,7 +1324,7 @@ sint32 effects_capture_screen_region(uint32 state, sint32 buffer_index)
     frame_rate = game_timing.frame_rate;
     y = draw->ofs[1] + (uint16)cache->sample.y;
     if (frame_rate == game_timing.base_rate)
-        y = (y | 1) - ((sint32)r_u32(0x800B3FECu) >> 31);
+        y = (y | 1) - GetODE();
     rectangle.x = (sint16)x;
     rectangle.y = (sint16)y;
     rectangle.w = cache->sample.w;
@@ -1330,22 +1334,19 @@ sint32 effects_capture_screen_region(uint32 state, sint32 buffer_index)
 
 sint32 effects_init_cache(void)
 {
-    uint32 vector_words[2];
     uint32 mode;
     sint32 index;
     sint32 upper = 32000;
     sint32 lower = 31744;
 
     FUNCTION_MARKER(0x80042958u, "MAIN.EXE");
-    vector_words[0] = r_u32(0x800B4054u);
-    vector_words[1] = r_u32(0x800B4058u);
     for (index = 0; index < 2; ++index)
     {
         effects_samples[index].sample = (PSX_RECT){0, 0, 2, 1};
         effects_samples[index].pixels = 0;
         effects_samples[index].fade = 255;
     }
-    mode = r_u32(0x80083484u);
+    mode = race_cfg.mode;
     if (mode == 8u)
     {
         effects_cache_direction.vx = 1313;
@@ -1355,9 +1356,7 @@ sint32 effects_init_cache(void)
     else
     {
         MATRIX matrix;
-        MATRIX rotation_matrix;
-        SVECTOR rotation;
-        SVECTOR source;
+        SVECTOR src = effects_forward;
         VECTOR transformed;
         sint32 angle;
         sint32 value;
@@ -1366,33 +1365,23 @@ sint32 effects_init_cache(void)
         matrix.m[0][0] = 4096;
         matrix.m[1][1] = 4096;
         matrix.m[2][2] = 4096;
-        mode = r_u32(0x800834A0u);
-        value = (sint32)r_u32(0x800935E0u + mode * 8u);
+        mode = race_cfg.course;
+        value = scene_light_angles[mode].pitch;
         angle = (sint32)((uint32)value << 12) / 360;
-        memset(&rotation, 0, sizeof(rotation));
-        rotation.vx = (sint16)angle;
-        RotMatrix(&rotation, &rotation_matrix);
-        MulMatrix2(&rotation_matrix, &matrix);
-        mode = r_u32(0x800834A0u);
-        value = (sint32)r_u32(0x800935E4u + mode * 8u);
+        RotMatrixX(angle, &matrix);
+        mode = race_cfg.course;
+        value = scene_light_angles[mode].yaw;
         angle = (sint32)((uint32)value << 12) / 360;
-        memset(&rotation, 0, sizeof(rotation));
-        rotation.vy = (sint16)angle;
-        RotMatrix(&rotation, &rotation_matrix);
-        MulMatrix2(&rotation_matrix, &matrix);
+        RotMatrixY(angle, &matrix);
         SetRotMatrix(&matrix);
-        source.vx = (sint16)(uint16)vector_words[0];
-        source.vy = (sint16)(uint16)(vector_words[0] >> 16);
-        source.vz = (sint16)(uint16)vector_words[1];
-        source.pad = (sint16)(uint16)(vector_words[1] >> 16);
-        ApplyRotMatrix(&source, &transformed);
+        ApplyRotMatrix(&src, &transformed);
         transformed.vx = transformed.vx < -32768 ? -32768 : transformed.vx > 32767 ? 32767 : transformed.vx;
         transformed.vy = transformed.vy < -32768 ? -32768 : transformed.vy > 32767 ? 32767 : transformed.vy;
         transformed.vz = transformed.vz < -32768 ? -32768 : transformed.vz > 32767 ? 32767 : transformed.vz;
         effects_cache_direction.vx = (sint16)transformed.vx;
         effects_cache_direction.vy = (sint16)transformed.vy;
         effects_cache_direction.vz = (sint16)transformed.vz;
-        if (r_u32(0x8008348Cu) == 0u)
+        if (race_cfg.variant == 0u)
             effects_cache_direction.vx = (sint16)((uint16)-effects_cache_direction.vx);
     }
     for (index = 0; index < 7; ++index)
@@ -1417,7 +1406,7 @@ sint32 effects_init_cache(void)
 static const sint16 effects_proj_widths[7] = {32, 8, 12, 16, 32, 20, 40};
 static const uint32 effects_proj_scales[7] = {0u, 400u, 600u, 800u, 1000u, 1200u, 1400u};
 
-sint32 effects_render_quad_proj_fade(uint32 state, sint32 buffer_index)
+sint32 effects_render_quad_proj_fade(const RACE_VIEW *state, sint32 buffer_index)
 {
     SVECTOR source;
     SVECTOR transformed_ir;
@@ -1425,7 +1414,7 @@ sint32 effects_render_quad_proj_fade(uint32 state, sint32 buffer_index)
     VECTOR scaled;
     uint32 packet_offset = render_packet_offset();
     POLY_FT4 *packet;
-    uint32 side = state == 0x800DE0F0u ? 0u : 1u;
+    uint32 side = state == &race_views[0] ? 0u : 1u;
     const CAMERA_STATE *view = camera_for_view(state);
     uint32 *scene_ot = render_scene_ot(render_frame(view, buffer_index));
     uint32 *primary = &scene_ot[2];
@@ -1505,7 +1494,7 @@ sint32 effects_render_quad_proj_fade(uint32 state, sint32 buffer_index)
         center_x = (sint16)((uint16)scaled.vx + (uint16)geometry_x);
         center_y = (sint16)((uint16)scaled.vy + (uint16)geometry_y);
         width = effects_proj_widths[index];
-        height = r_u32(0x80083478u) == 2u ? width / 2 : width;
+        height = race_cfg.players == 2u ? width / 2 : width;
         packet = render_packet_at(packet_offset, sizeof(*packet));
         packet->x0 = packet->x2 = (sint16)(uint16)(center_x - width);
         packet->x1 = packet->x3 = (sint16)(uint16)(center_x + width);
@@ -1542,20 +1531,19 @@ sint32 effects_render_quad_proj_fade(uint32 state, sint32 buffer_index)
     return result;
 }
 
-void effects_render(uint32 player, sint32 player_index)
+void effects_render(const RACE_VIEW *player, sint32 player_index)
 {
-    uint32 state = player + 1784u * (uint32)player_index + 104u;
     EFFECTS_TRANSFORM *transform;
 
     FUNCTION_MARKER(0x800430C8u, "MAIN.EXE");
     camera_bias_matrix(camera_for_view(player), &camera_identity, 1);
-    if (r_u32(0x800834A0u) == 4u && r_u32(0x8008348Cu) == 2u)
+    if (race_cfg.course == 4u && race_cfg.variant == 2u)
         effects_render_particles(render_object_ot(render_frame(camera_for_view(player), player_index)));
-    if (r_u32(0x80083484u) == 5u)
+    if (race_cfg.mode == 5u)
         sprite_packets_build2(render_scene_ot(render_frame(camera_for_view(player), player_index)) + 1);
-    if (r_u32(0x800834A0u) == 5u)
+    if (race_cfg.course == 5u)
         effects_render_depth_quads(render_object_ot(render_frame(camera_for_view(player), player_index)));
-    transform = effects_transform(r_u32(player + 4u));
+    transform = effects_transform(player->idx);
     if (transform->phase != -1)
     {
         // Lighting and back color from MAIN.EXE 80093534..80093574
@@ -1639,7 +1627,7 @@ sint32 effects_run_expanding_circle_trans(void)
     uint32 mode;
 
     FUNCTION_MARKER(0x80043AD0u, "MAIN.EXE");
-    mode = r_u32(0x80083478u);
+    mode = race_cfg.players;
     if (mode == 1u)
     {
         do

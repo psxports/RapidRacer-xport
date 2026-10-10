@@ -60,13 +60,17 @@ typedef struct
 
 extern NAME_REELS name_reels;
 
+extern const char name_code_frac[5];
+extern const char name_code_winr[5];
+extern const char name_code_hurr[5];
+
 char *name_player_text(uint32 slot);
 void name_reset_players(void);
 uint8 *name_save_byte(uint32 offset);
 
 void name_apply_player_name_cheats(void);
 sint32 name_refresh_menu_text(void);
-sint32 name_player_name_matches(sint16 index, uint32 value);
+sint32 name_matches(sint16 idx, const char *code);
 sint32 name_copy_player_name_bytes(uint16 index, char *output);
 void name_commit_chars(void);
 sint32 name_reset_wheel(void);
@@ -83,6 +87,5 @@ sint32 name_reset_reels(void);
 sint32 time_copy_chars7(char *source, char *destination);
 
 sint32 name_bytes_copy8(char *source, char *destination);
-uint32 time_parts_to_tenths(uint32 value);
 
 #endif /* RR_NAME_H */

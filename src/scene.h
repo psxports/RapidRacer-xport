@@ -3,6 +3,15 @@
 
 #include "psx.h"
 
+struct RACE_VIEW;
+
+typedef struct
+{
+    sint32 pitch, yaw;
+} SCENE_LIGHT_ANGLES;
+
+extern const SCENE_LIGHT_ANGLES scene_light_angles[7];
+
 struct ROUTE_SEGMENT;
 #include "timer.h"
 #include <stddef.h>
@@ -140,10 +149,10 @@ void scene_load_sections(const uint8 *src, size_t size);
 SCENE_SECTION *scene_section(uint32 idx);
 void scene_clear_sections(void);
 
-sint32 scene_render_player(uint32 context, sint32 buffer);
+sint32 scene_render_player(const struct RACE_VIEW *context, sint32 buffer);
 sint32 scene_clear_group_item_flags(sint16 group);
 
-void scene_render_player_sequence(const struct ROUTE_SEGMENT *sequence, uint32 state_base, sint32 state_index);
+void scene_render_player_sequence(const struct ROUTE_SEGMENT *sequence, const struct RACE_VIEW *state_base, sint32 state_index);
 sint32 scene_process_published_rec_flags(void);
 
 #endif /* RR_SCENE_H */

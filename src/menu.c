@@ -31,6 +31,173 @@
 #include <stdlib.h>
 
 static uint32 menu_pause_ot;
+static uint32 menu_pad_ticks[2];
+
+typedef struct
+{
+    uint16 prepared;
+    uint16 pad_layout;
+    uint16 prev_pad_layout;
+} MENU_ASSET_STATE;
+
+static MENU_ASSET_STATE menu_assets;
+
+typedef struct
+{
+    PSX_RECT pixels;
+    PSX_RECT clut;
+    const uint32 *pixel_data;
+    const uint32 *clut_data;
+} MENU_PAD_IMAGE;
+
+static const uint32 menu_pad_pixels_0[] = {
+    0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0x76CEFFFFu, 0xDA843334u, 0xFFFFFFFFu, 0x7CFFFFFFu,
+    0x33333333u, 0xFF643333u, 0xFFFFFFFFu, 0x3333334Cu, 0x33333333u, 0xFFFF6333u, 0x33338FFFu, 0x33333333u,
+    0x33333313u, 0x38FFFFF7u, 0x51333333u, 0x315EEEEEu, 0xFF433333u, 0x3333336Fu, 0xEEEEE413u, 0x333317EEu,
+    0x333FF233u, 0xE9133333u, 0x19EEEEEEu, 0xD3333333u, 0x33333336u, 0xEE56EEA1u, 0x33318EEEu, 0x33348333u,
+    0x9EE41333u, 0xEEEEE911u, 0x33333331u, 0x13333334u, 0xEEEEEEEBu, 0x331AEEEEu, 0x33363333u, 0xEEEEA133u,
+    0xEEEEEEEEu, 0x7333333Eu, 0xE313333Eu, 0x7444449Eu, 0x315EEEEEu, 0x336FC333u, 0x317EE933u, 0xEEE51333u,
+    0xF73312EEu, 0xEB4337FFu, 0x33333335u, 0x169BBBB7u, 0x7FFFFD33u, 0x33311133u, 0x11133333u, 0xFFD43111u,
+    0x3336FFFFu, 0x33333333u, 0x83333333u, 0xFFFFFFFFu, 0x333336FFu, 0x33333333u, 0xFFFFFD83u, 0xFFFFFFFFu,
+    0x3333486Du, 0xFFFFC624u, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu
+};
+
+static const uint32 menu_pad_clut_0[] = {
+    0x55A07FFFu, 0x51804540u, 0x2CC04D60u, 0x49403D00u, 0x20804520u, 0x248038E0u, 0x2C8134C1u, 0x00002061u
+};
+
+static const uint32 menu_pad_pixels_1[] = {
+    0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0x333116A8u, 0xFFFF8B21u,
+    0xFFFFFFFFu, 0xFFFFFFFFu, 0x33331AFFu, 0x33333333u, 0xFFFFFFB1u, 0xFFFFFFFFu, 0x331AFFFFu, 0x33333333u,
+    0xB3333333u, 0xFFFFFFFFu, 0x6FFFFFFFu, 0x33333333u, 0x33333333u, 0xFFF13334u, 0xFFFFFFFFu, 0x933332FFu,
+    0xDDDDDDDDu, 0x333ADDDDu, 0xFFFFFF13u, 0x33BFFFFFu, 0xDDDDC333u, 0xDDDDDDDDu, 0xF233336Du, 0xFFFFFFFFu,
+    0xC333333Fu, 0x344ADDDDu, 0x335DDDDDu, 0xFFFFA333u, 0x333BFFFFu, 0xDDDDC333u, 0xDDDD6629u, 0x2333336Du,
+    0xFFFFFFFFu, 0xC3333331u, 0xDDDDDDDDu, 0x3338EDDDu, 0xFFFF3333u, 0x3331FFFFu, 0xDDDDC333u, 0xDDDD999Du,
+    0x3333332Du, 0xFFFFFFFFu, 0xC3333336u, 0x444ADDDDu, 0x335DDDDDu, 0xFFFF1333u, 0x3338FFFFu, 0xDDDDC333u,
+    0xDDDD2218u, 0xA333335Du, 0xFFFFFFFFu, 0xC333336Fu, 0xDDDDDDDDu, 0x331DDDDDu, 0xFFFFF133u, 0x31FFFFFFu,
+    0x9997A333u, 0x89999999u, 0xF8333331u, 0xFFFFFFFFu, 0x43331FFFu, 0x44444444u, 0x33334444u, 0xFFFFFF81u,
+    0xFFFFFFFFu, 0x3333333Bu, 0x33333333u, 0xFFFF2333u, 0xFFFFFFFFu, 0x36FFFFFFu, 0x33333333u, 0xF8233333u,
+    0xFFFFFFFFu, 0xFFFFFFFFu, 0x125AFFFFu, 0xA6213333u, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu,
+    0xFFFFFFFFu, 0xFFFFFFFFu
+};
+
+static const uint32 menu_pad_clut_1[] = {
+    0x49607FFFu, 0x51804540u, 0x390059A0u, 0x20804120u, 0x248028A0u, 0x3CE134C1u, 0x18211840u, 0x00001001u
+};
+
+static const uint32 menu_pad_pixels_2[] = {
+    0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xDDBB74FFu, 0xFF57BDDDu, 0xFFFFFFFFu,
+    0x2FFFFFFFu, 0xDDDDDDB7u, 0x9BDDDDDDu, 0xFFFFFFF4u, 0xD7FFFFFFu, 0xEEEEEEEDu, 0xEEEEEEEDu, 0xFFFFFF9Du,
+    0xDDBFFFFFu, 0xB99999BDu, 0xB999999Du, 0xFFFF4BDDu, 0xEDDB2FFFu, 0x61111119u, 0x6111111Cu, 0xFFF4DDDDu,
+    0xDDDD9FFFu, 0x9311118Bu, 0x9611118Bu, 0xFFFBDDDDu, 0xDDDDD4FFu, 0xE81113EEu, 0xEA1113DEu, 0xFF7DDDDDu,
+    0xDDDDDBFFu, 0xE81113DDu, 0xEC1113BDu, 0xFFBDDDDDu, 0xDDDDDDFFu, 0xE81113DDu, 0xEC1113BDu, 0xFFDDDDDDu,
+    0xDDDDDDFFu, 0xE81113DDu, 0xEC1113BDu, 0xFFDDDDDDu, 0xDDDDDBFFu, 0xE81113DDu, 0xEC1113BDu, 0xFFBDDDDDu,
+    0xDDDDD5FFu, 0xE81113EEu, 0xEA1113DEu, 0xFF7DDDDDu, 0xEDDDBFFFu, 0x82111169u, 0x83111169u, 0xFF2DDDDDu,
+    0xEDDB4FFFu, 0x61111119u, 0x6111111Au, 0xFFF5DDDDu, 0xDDB4FFFFu, 0xDBDDDBDEu, 0xDBDDDBDEu, 0xFFFF5DDDu,
+    0xD9FFFFFFu, 0xDDDDDDDDu, 0xDDDDDDDDu, 0xFFFFF4BDu, 0x4FFFFFFFu, 0xDDDDDDDBu, 0xBDDDDDDDu, 0xFFFFFFF5u,
+    0xFFFFFFFFu, 0xDDBBA52Fu, 0xF479BDDDu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu
+};
+
+static const uint32 menu_pad_clut_2[] = {
+    0x14037FFFu, 0x14051C06u, 0x200C2009u, 0x200F1409u, 0x2013180Eu, 0x24161C11u, 0x24181810u, 0x00002419u
+};
+
+static const uint32 menu_pad_pixels_3[] = {
+    0x11111111u, 0x11111111u, 0x11111111u, 0x11111111u, 0x11111111u, 0xEEDDA731u, 0x137BDEEEu, 0x11111111u,
+    0x31111111u, 0xEEEEEEDBu, 0xCDEEEEEEu, 0x11111117u, 0xEA111111u, 0xEEEEEEEEu, 0xEEEEEEEEu, 0x111113CEu,
+    0xEED31111u, 0xCCDEEEEEu, 0xEEEEDCCCu, 0x11117DEEu, 0xEEED3111u, 0x222CEEEEu, 0xEEEC2222u, 0x1117EEEEu,
+    0xEEEEC111u, 0x62ADEEEEu, 0xEEEEB466u, 0x113DEEEEu, 0xEEEEE711u, 0x64EEEEEEu, 0xEEEEE866u, 0x11AEEEEEu,
+    0xEEEEED11u, 0x64EEEEEEu, 0xEEEEE866u, 0x11DEEEEEu, 0xEEEEEE11u, 0x64EEEEEEu, 0xEEEEE866u, 0x11EEEEEEu,
+    0xEEEEEE11u, 0x64EEEEEEu, 0xEEEEE866u, 0x11EEEEEEu, 0xEEEEED11u, 0x64EEEEEEu, 0xEEEEE866u, 0x11DEEEEEu,
+    0xEEEEE711u, 0x64EEEEEEu, 0xEEEEE866u, 0x11BEEEEEu, 0xEEEED311u, 0x628CEEEEu, 0xEEED8266u, 0x115EEEEEu,
+    0xEEED7111u, 0x222CEEEEu, 0xEEED6222u, 0x1119EEEEu, 0xEED71111u, 0xEDEEEEEEu, 0xEEEEEDEEu, 0x11119EEEu,
+    0xEC311111u, 0xEEEEEEEEu, 0xEEEEEEEEu, 0x111117DEu, 0x71111111u, 0xEEEEEEEDu, 0xDEEEEEEEu, 0x11111119u,
+    0x11111111u, 0xEEDDB931u, 0x17ACDEEEu, 0x11111111u, 0x11111111u, 0x11111111u, 0x11111111u, 0x11111111u
+};
+
+static const uint32 menu_pad_clut_3[] = {
+    0x00007FFFu, 0x00001403u, 0x1C071405u, 0x200A1406u, 0x200C1809u, 0x2010200Fu, 0x24162013u, 0x00002418u
+};
+
+static const uint32 menu_pad_pixels_4[] = {
+    0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x4C985000u, 0x87C44444u, 0x0000000Au, 0x2EB00000u,
+    0xD99CF233u, 0x0BE4632Fu, 0x50000000u, 0xA57D232Cu, 0xD7BA5BB5u, 0x0005E232u, 0xB9234800u, 0x4224FE85u,
+    0x329B5B9Fu, 0x328000B4u, 0x11349A84u, 0x46311111u, 0x054348A7u, 0x3DAB4345u, 0x11111111u, 0x8AC61111u,
+    0x72695F34u, 0x1111169Au, 0x11111111u, 0x7627A921u, 0x134B5C6Cu, 0x11111111u, 0x5F311111u, 0xA72C96F5u,
+    0x11111129u, 0x11111111u, 0x929A7211u, 0x1127A92Cu, 0x11111111u, 0x84311111u, 0xB46C96CAu, 0x111113D5u,
+    0x11111111u, 0x9648AC61u, 0x348AC628u, 0x11111111u, 0xAB431111u, 0x23E0826Du, 0x111348AEu, 0x31111111u,
+    0x0966CA8Fu, 0x55D63CA0u, 0x311332D7u, 0x6D557D43u, 0x9A000AE6u, 0x855BE232u, 0xB55879E7u, 0x0007232Cu,
+    0x32CB0000u, 0x8BB88E46u, 0x5E2364D7u, 0x00000000u, 0x624F9500u, 0xD4262222u, 0x00000057u, 0x00000000u,
+    0x777775A0u, 0x00000A58u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u
+};
+
+static const uint32 menu_pad_clut_4[] = {
+    0x085B0000u, 0x08581074u, 0x34C11873u, 0x28C71076u, 0x28CA30C3u, 0x30C234E0u, 0x208E20ADu, 0x1C9024CBu
+};
+
+static const uint32 menu_pad_pixels_5[] = {
+    0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xE6689000u, 0x0000000Fu,
+    0x00000000u, 0x00000000u, 0x63000000u, 0x00362A67u, 0x00000000u, 0x00000000u, 0x00000000u, 0x399422C0u,
+    0x00000826u, 0x00000000u, 0x00000000u, 0x822B0000u, 0x82639839u, 0x00000000u, 0x00000000u, 0xB0000000u,
+    0x42239366u, 0x00082659u, 0x00000000u, 0x00000000u, 0x39822300u, 0x63982112u, 0x000000D2u, 0x00000000u,
+    0x22300000u, 0x11112393u, 0x08265942u, 0x00000000u, 0x00000000u, 0x12893623u, 0x94211111u, 0x000082A5u,
+    0x00000000u, 0x93623000u, 0x11111128u, 0x26594711u, 0x00000004u, 0x28000000u, 0x11128936u, 0x21111111u,
+    0x00426594u, 0x00000000u, 0x289362C0u, 0x11111111u, 0x99421111u, 0x0000042Au, 0x362B0000u, 0x11111289u,
+    0x11111111u, 0x42699A71u, 0x80000000u, 0x11289362u, 0x11111111u, 0x47111111u, 0x00042A59u, 0x89362300u,
+    0x77777726u, 0x77777777u, 0xA5942777u, 0x22900042u, 0x55555994u, 0x55555555u, 0x55555555u, 0x03223995u,
+    0x33422D00u, 0x33333333u, 0x33333333u, 0x68333333u, 0x300009A7u, 0x444444A4u, 0x44444444u, 0x44444444u,
+    0x0008A444u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
+    0x00000000u, 0x00000000u
+};
+
+static const uint32 menu_pad_clut_5[] = {
+    0x36400000u, 0x35603600u, 0x354035A0u, 0x362035E0u, 0x35203580u, 0x318035C0u, 0x31A03160u, 0x312031C0u
+};
+
+static const uint32 menu_pad_pixels_6[] = {
+    0x11111111u, 0x11111111u, 0x11111111u, 0x11111111u, 0x4D611111u, 0x44444444u, 0x44444444u, 0x111111EDu,
+    0x00A76111u, 0x00000000u, 0x00000000u, 0x1111EFB0u, 0x7C00CD11u, 0x22222222u, 0x72222222u, 0x1119A085u,
+    0xE7780511u, 0x22222223u, 0xE3222222u, 0x116C0B27u, 0xAE6A0511u, 0x00000000u, 0xA0000000u, 0x116C056Du,
+    0x846A0511u, 0x00000000u, 0x80000000u, 0x116C0562u, 0xB46A0511u, 0x00000000u, 0x80000000u, 0x116C0563u,
+    0xB46A0511u, 0x00000000u, 0x80000000u, 0x116C0563u, 0xB46A0511u, 0x00000000u, 0x80000000u, 0x116C0563u,
+    0xB46A0511u, 0x00000000u, 0x80000000u, 0x116C0563u, 0xB46A0511u, 0x00000000u, 0x80000000u, 0x116C0563u,
+    0xB46A0511u, 0x00000000u, 0x80000000u, 0x116C0563u, 0x846A0511u, 0x00000000u, 0x80000000u, 0x116C0562u,
+    0xAE6A0511u, 0x00000000u, 0xB0000000u, 0x116C056Du, 0xE97B0511u, 0x77777777u, 0xD7777777u, 0x116C0B97u,
+    0x2580AD11u, 0x99999999u, 0x34999999u, 0x1113B0B5u, 0x00BFE111u, 0x00000080u, 0x88000000u, 0x1111D588u,
+    0x33E11111u, 0x33333333u, 0x33333333u, 0x111111D3u, 0x11111111u, 0x11111111u, 0x11111111u, 0x11111111u
+};
+
+static const uint32 menu_pad_clut_6[] = {
+    0x0000413Fu, 0x40EA410Au, 0x45343D06u, 0x410D3D00u, 0x3CE7455Du, 0x453C4139u, 0x3D044538u, 0x413240E1u
+};
+
+static const uint32 menu_pad_pixels_7[] = {
+    0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
+    0x3438D000u, 0x00000333u, 0x33300000u, 0x000D8343u, 0x2FF62A00u, 0x00031111u, 0x11113000u, 0x00A26FF2u,
+    0xFFFF9300u, 0x0411115Cu, 0xC5111140u, 0x0039FFFFu, 0xFFF99400u, 0x411114FFu, 0xFF411114u, 0x00499FFFu,
+    0xF6115400u, 0x1112FFFFu, 0xFFFF2111u, 0x0045116Fu, 0x11114000u, 0x154FFFFCu, 0xCFFFF451u, 0x00041111u,
+    0x11140000u, 0x6FFFFF21u, 0x12FFFFF6u, 0x00004111u, 0x11400000u, 0xFFFF4111u, 0x1114FFFFu, 0x00000411u,
+    0x11400000u, 0xFFFF4111u, 0x1114FFFFu, 0x00000411u, 0x11140000u, 0x6FFFFF21u, 0x12FFFFF6u, 0x00004111u,
+    0x11114000u, 0x154FFFFCu, 0xCFFFF451u, 0x00041111u, 0xF6115400u, 0x1112FFFFu, 0xFFFF2111u, 0x0045116Fu,
+    0xFFF99400u, 0x411114FFu, 0xFF411114u, 0x00499FFFu, 0xFFFF9300u, 0x0411115Cu, 0xC5111140u, 0x0039FFFFu,
+    0x2FF62A00u, 0x00031111u, 0x11113000u, 0x00A26FF2u, 0x3438D000u, 0x00000333u, 0x33300000u, 0x000D8343u,
+    0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u
+};
+
+static const uint32 menu_pad_clut_7[] = {
+    0x51AB0000u, 0x45674D89u, 0x51AA4967u, 0x35014968u, 0x518A4145u, 0x3D443922u, 0x39024566u, 0x28E04503u
+};
+
+static const MENU_PAD_IMAGE menu_pad_images[8] = {
+    {{902, 360, 7, 20}, {960, 470, 16, 1}, menu_pad_pixels_0, menu_pad_clut_0},
+    {{901, 296, 9, 20}, {960, 472, 16, 1}, menu_pad_pixels_1, menu_pad_clut_1},
+    {{902, 256, 8, 20}, {960, 471, 16, 1}, menu_pad_pixels_2, menu_pad_clut_2},
+    {{902, 276, 8, 20}, {960, 469, 16, 1}, menu_pad_pixels_3, menu_pad_clut_3},
+    {{902, 360, 7, 20}, {960, 470, 16, 1}, menu_pad_pixels_4, menu_pad_clut_4},
+    {{901, 296, 9, 20}, {960, 472, 16, 1}, menu_pad_pixels_5, menu_pad_clut_5},
+    {{902, 256, 8, 20}, {960, 471, 16, 1}, menu_pad_pixels_6, menu_pad_clut_6},
+    {{902, 276, 8, 20}, {960, 469, 16, 1}, menu_pad_pixels_7, menu_pad_clut_7}
+};
 
 // Pause-menu sprite templates by layout and language from reviewed MAIN.EXE
 static const HUD_SPRITE menu_hud_sprites[3][5][19] = {
@@ -1094,30 +1261,6 @@ static sint32 menu_update_controller_text(void)
     return menu_fn_80052830(&input_controllers[0]);
 }
 
-// Resource and language bindings move with menu and assets in stages 4 and 5
-static void menu_init_hud_text(void)
-{
-    TEXT_HUD_STRINGS strings;
-    static const uint32 boats[3] = {0x800A9720u, 0x800A97A0u, 0x800A9820u};
-    size_t row, group;
-    strings.status = text_bind(0x800A8388u);
-    strings.time = text_bind(0x80083460u);
-    strings.paused = text_bind(0x8008346Cu);
-    for (row = 0; row < 10; ++row)
-        strings.names[row] = text_bind(0x800A8460u + 8u * (uint32)row);
-    for (group = 0; group < 3; ++group)
-        for (row = 0; row < 9; ++row)
-            strings.boats[group][row] = text_bind(boats[group] + 14u * (uint32)row);
-    text_init_hud(&strings);
-}
-
-static void menu_show_pause(void)
-{
-    static const uint32 messages[5] = {0x800A8390u, 0x80098408u, 0x800A8428u, 0x800A83B0u, 0x800A83D8u};
-    uint8 language = menu_state.language;
-    text_show_pause(language < 5 ? text_bind(messages[language]) : NULL, language < 5 ? (language == 0 ? 1 : 2) : 0);
-}
-
 #include <string.h>
 
 typedef struct
@@ -1188,14 +1331,14 @@ static void hud_format_time(char *dst, sint32 value)
 }
 
 // Confirmation handling from menu_run_pause, MAIN.EXE 80011540
-static sint32 menu_confirm_pause(uint32 context, MENU_PAUSE_ACTION action, const CONTROLLER_STATE *input, uint8 changed, uint8 *redraw)
+static sint32 menu_confirm_pause(const RACE_VIEW *context, MENU_PAUSE_ACTION action, const CONTROLLER_STATE *input, uint8 changed, uint8 *redraw)
 {
     sint32 value;
     if (menu_state.confirm != MENU_CONFIRM_CLOSED)
     {
         if ((input->pressed & 0x8000u) != 0u && changed == 0u)
         {
-            (void)sound_queue_command(context, 4, 1, 0u);
+            (void)sound_queue_command(sound_for_context(context), 4, 1);
             value = (sint32)(menu_state.confirm - 1u);
             menu_state.confirm = (uint32)value;
             if (value <= 0)
@@ -1204,7 +1347,7 @@ static sint32 menu_confirm_pause(uint32 context, MENU_PAUSE_ACTION action, const
         }
         if ((input->pressed & 0x2000u) != 0u && changed == 0u)
         {
-            (void)sound_queue_command(context, 4, 1, 0u);
+            (void)sound_queue_command(sound_for_context(context), 4, 1);
             value = (sint32)(menu_state.confirm + 1u);
             menu_state.confirm = (uint32)value;
             if (value >= 3)
@@ -1214,7 +1357,7 @@ static sint32 menu_confirm_pause(uint32 context, MENU_PAUSE_ACTION action, const
     }
     if ((input->pressed & 0x40u) == 0u || changed != 0u)
         return 0;
-    (void)sound_queue_command(context, 4, 1, 0u);
+    (void)sound_queue_command(sound_for_context(context), 4, 1);
     value = (sint32)menu_state.confirm;
     if (value == MENU_CONFIRM_CLOSED)
     {
@@ -1229,17 +1372,17 @@ static sint32 menu_confirm_pause(uint32 context, MENU_PAUSE_ACTION action, const
     else if (value == MENU_CONFIRM_ACCEPT)
     {
         if (action == MENU_PAUSE_QUIT)
-            result_state.quit_player = context != 0x800DE0F0u;
+            result_state.quit_player = context != &race_views[0];
         menu_state.confirm = MENU_CONFIRM_CANCEL;
         game_selection.selection = (uint16)(action == MENU_PAUSE_RESTART ? -5 : -1);
-        w_u32(0x8008373Cu, 1u);
+        race_paused = (uint32)(1u);
         (void)fb_remove_vert_offset();
         return 1;
     }
     return 0;
 }
 
-sint32 menu_run_pause(uint32 context)
+sint32 menu_run_pause(const RACE_VIEW *context)
 {
     CONTROLLER_STATE *input;
     uint32 mode;
@@ -1252,20 +1395,20 @@ sint32 menu_run_pause(uint32 context)
     sint32 forced = 0;
 
     FUNCTION_MARKER(0x80011540u, "MAIN.EXE");
-    if (r_u32(0x80083484u) == 5u)
+    if (race_cfg.mode == 5u)
         return (input_controllers[0].current | input_controllers[1].current) != 0u;
-    mode = r_u32(0x80083478u);
+    mode = race_cfg.players;
     if (mode == 1u)
     {
         if ((sint16)input_controllers[0].type == -1)
             forced = 1;
-        mode = r_u32(0x80083478u);
+        mode = race_cfg.players;
     }
     if (mode == 2u)
     {
-        if ((sint16)input_controllers[0].type == -1 && context == 0x800DE0F0u)
+        if ((sint16)input_controllers[0].type == -1 && context == &race_views[0])
             forced = 1;
-        if (r_u32(0x80083478u) == 2u && (sint16)input_controllers[1].type == -1 && context == 0x800DF098u)
+        if (race_cfg.players == 2u && (sint16)input_controllers[1].type == -1 && context == &race_views[1])
             forced = 1;
     }
     input = input_for_context(context);
@@ -1275,15 +1418,14 @@ sint32 menu_run_pause(uint32 context)
     (void)game_render_frame();
     buffer_index = display_state.scene_buffer;
     menu_input = input_for_context(context);
-    w_u32(0x8008373Cu, 1u);
+    race_paused = (uint32)(1u);
     menu_state.confirm = MENU_CONFIRM_CLOSED;
-    w_u32(0x800B6B3Cu, context);
     display_state.scene_buffer = 1u - buffer_index;
     (void)fb_submit_strips();
     (void)fb_capture_strips();
-    if (r_u32(0x80083484u) == 8u)
+    if (race_cfg.mode == 8u)
         mode_eight = 1u;
-    w_u32(0x800B6B28u, 1u);
+    cd_pause_audio();
     for (;;)
     {
         uint8 menu_changed = 0u;
@@ -1295,8 +1437,8 @@ sint32 menu_run_pause(uint32 context)
         (void)cd_update_audio(0);
         (void)CdControl(9, NULL, NULL);
         if (((uint32)resource << 16) == 0u)
-            resource = (uint32)sound_fade_all_voice_volumes(0x800DE0F0u, 0x200);
-        sound_remove_inactive_voice_recs(context + 0xE5Cu);
+            resource = (uint32)sound_fade_pause(0x200);
+        sound_remove_inactive_voice_recs(sound_for_context(context));
 
         if ((menu_input->pressed & 0x0800u) != 0u && menu_state.confirm == 0u)
             exit_requested = 1u;
@@ -1308,7 +1450,7 @@ sint32 menu_run_pause(uint32 context)
                 menu = 3;
             if (menu < 0)
                 menu = 5;
-            (void)sound_queue_command(context, 3, 1, 0u);
+            (void)sound_queue_command(sound_for_context(context), 3, 1);
         }
         if ((menu_input->pressed & 0x4000u) != 0u && menu_state.confirm == 0u)
         {
@@ -1318,7 +1460,7 @@ sint32 menu_run_pause(uint32 context)
                 menu = 5;
             if (menu >= 6)
                 menu = 0;
-            (void)sound_queue_command(context, 3, 1, 0u);
+            (void)sound_queue_command(sound_for_context(context), 3, 1);
         }
 
         if (menu == 1)
@@ -1326,18 +1468,16 @@ sint32 menu_run_pause(uint32 context)
             if ((menu_input->pressed & 0x8000u) != 0u)
             {
                 sound_step_track(-1);
-                (void)sound_queue_command(context, 4, 1, 0u);
+                (void)sound_queue_command(sound_for_context(context), 4, 1);
                 redraw = 1u;
-                (void)CdControl(8, NULL, NULL);
-                w_u32(0x800B6B28u, 0u);
+                cd_stop_audio();
             }
             if ((menu_input->pressed & 0x2000u) != 0u)
             {
                 sound_step_track(1);
-                (void)sound_queue_command(context, 4, 1, 0u);
+                (void)sound_queue_command(sound_for_context(context), 4, 1);
                 redraw = 1u;
-                (void)CdControl(8, NULL, NULL);
-                w_u32(0x800B6B28u, 0u);
+                cd_stop_audio();
             }
         }
 
@@ -1351,47 +1491,43 @@ sint32 menu_run_pause(uint32 context)
             frame_rate = game_timing.frame_rate;
             if (base_rate != frame_rate)
             {
-                if ((menu_input->current & 0x8000u) != 0u && (sint16)r_u16(0x80083494u) != 0)
+                if ((menu_input->current & 0x8000u) != 0u && (sint16)sound_mix.music != 0)
                 {
-                    w_u16(0x80083494u, (uint16)(r_u16(0x80083494u) - 1u));
+                    sound_mix.music = (uint16)(sound_mix.music - 1u);
                     changed = 1;
                 }
-                if ((menu_input->current & 0x2000u) != 0u && (sint16)r_u16(0x80083494u) < 63)
+                if ((menu_input->current & 0x2000u) != 0u && (sint16)sound_mix.music < 63)
                 {
-                    w_u16(0x80083494u, (uint16)(r_u16(0x80083494u) + 1u));
+                    sound_mix.music = (uint16)(sound_mix.music + 1u);
                     changed = 1;
                 }
             }
-            if ((menu_input->current & 0x8000u) != 0u && (sint16)r_u16(0x80083494u) != 0)
+            if ((menu_input->current & 0x8000u) != 0u && (sint16)sound_mix.music != 0)
             {
-                w_u16(0x80083494u, (uint16)(r_u16(0x80083494u) - 1u));
+                sound_mix.music = (uint16)(sound_mix.music - 1u);
                 changed = 1;
             }
-            if ((menu_input->current & 0x2000u) != 0u && (sint16)r_u16(0x80083494u) < 63)
+            if ((menu_input->current & 0x2000u) != 0u && (sint16)sound_mix.music < 63)
             {
-                w_u16(0x80083494u, (uint16)(r_u16(0x80083494u) + 1u));
+                sound_mix.music = (uint16)(sound_mix.music + 1u);
                 changed = 1;
             }
             if (changed != 0)
             {
-                uint32 voice;
-                uint32 sample;
+                SOUND_VOICE *voice;
+                const SOUND_CFG *sample;
                 sint32 coefficient;
                 sint32 volume;
 
-                w_u32(0x800D6B58u, 0xC0u);
-                value = (sint32)((uint32)r_u16(0x80083494u) << 9);
-                w_u16(0x800D6B6Au, (uint16)value);
-                w_u16(0x800D6B68u, (uint16)value);
-                SpuSetCommonAttr((SpuCommonAttr *)psx_addr(0x800D6B58u, sizeof(SpuCommonAttr)));
-                (void)sound_queue_command(context, 5, 1, 0u);
-                voice = r_u32(context + 0xE94u);
-                sample = r_u32(voice + 8u);
-                coefficient = (sint16)r_u16(sample + 2u);
-                volume = (sint16)r_u16(0x80083494u);
+                cd_set_audio_vol(sound_mix.music);
+                (void)sound_queue_command(sound_for_context(context), 5, 1);
+                voice = sound_for_context(context)->pending;
+                sample = voice->cfg;
+                coefficient = (sint16)sample->gain;
+                volume = (sint16)sound_mix.music;
                 value = (sint32)((uint32)coefficient * (uint32)volume);
-                w_u32(voice + 12u, (uint32)value);
-                (void)voice_update_volume(r_u32(context + 0xE94u));
+                voice->gain = (uint32)value;
+                (void)voice_update_volume(sound_for_context(context)->pending);
             }
         }
 
@@ -1405,37 +1541,37 @@ sint32 menu_run_pause(uint32 context)
             frame_rate = game_timing.frame_rate;
             if (base_rate != frame_rate)
             {
-                if ((menu_input->current & 0x8000u) != 0u && (sint16)r_u16(0x80083490u) != 0)
+                if ((menu_input->current & 0x8000u) != 0u && (sint16)sound_mix.effects != 0)
                 {
-                    w_u16(0x80083490u, (uint16)(r_u16(0x80083490u) - 1u));
+                    sound_mix.effects = (uint16)(sound_mix.effects - 1u);
                     changed = 1;
                 }
-                if ((menu_input->current & 0x2000u) != 0u && (sint16)r_u16(0x80083490u) < 63)
+                if ((menu_input->current & 0x2000u) != 0u && (sint16)sound_mix.effects < 63)
                 {
-                    w_u16(0x80083490u, (uint16)(r_u16(0x80083490u) + 1u));
+                    sound_mix.effects = (uint16)(sound_mix.effects + 1u);
                     changed = 1;
                 }
             }
-            if ((menu_input->current & 0x8000u) != 0u && (sint16)r_u16(0x80083490u) != 0)
+            if ((menu_input->current & 0x8000u) != 0u && (sint16)sound_mix.effects != 0)
             {
-                w_u16(0x80083490u, (uint16)(r_u16(0x80083490u) - 1u));
+                sound_mix.effects = (uint16)(sound_mix.effects - 1u);
                 changed = 1;
             }
-            if ((menu_input->current & 0x2000u) != 0u && (sint16)r_u16(0x80083490u) < 63)
+            if ((menu_input->current & 0x2000u) != 0u && (sint16)sound_mix.effects < 63)
             {
-                w_u16(0x80083490u, (uint16)(r_u16(0x80083490u) + 1u));
+                sound_mix.effects = (uint16)(sound_mix.effects + 1u);
                 changed = 1;
             }
             if (changed != 0)
             {
-                (void)sound_scale_player_volumes(0x800DE0F0u, 0x800DF098u);
-                (void)sound_queue_command(context, 5, 1, 0u);
+                (void)sound_scale_player_volumes(&sound_players[0], &sound_players[1]);
+                (void)sound_queue_command(sound_for_context(context), 5, 1);
             }
         }
 
         if ((menu_input->pressed & 0x40u) != 0u && menu_changed == 0u && menu == 0)
         {
-            (void)sound_queue_command(context, 4, 1, 0u);
+            (void)sound_queue_command(sound_for_context(context), 4, 1);
             exit_requested = 1u;
         }
 
@@ -1448,10 +1584,10 @@ sint32 menu_run_pause(uint32 context)
 
         if (exit_requested != 0u)
         {
-            (void)voice_restore_reverb(0x800DE0F0u);
-            if (r_u32(0x80083478u) == 2u)
-                (void)voice_restore_reverb(0x800DF098u);
-            w_u32(0x8008373Cu, 0u);
+            (void)voice_restore_reverb(sound_for_context(&race_views[0]));
+            if (race_cfg.players == 2u)
+                (void)voice_restore_reverb(sound_for_context(&race_views[1]));
+            race_paused = (uint32)(0u);
             (void)fb_remove_vert_offset();
             return 0;
         }
@@ -1460,7 +1596,7 @@ sint32 menu_run_pause(uint32 context)
         (void)VSync(0);
         if (redraw != 0u)
             (void)fb_restore_strips();
-        if (r_u32(0x80083478u) == 1u)
+        if (race_cfg.players == 1u)
         {
             uint32 buffer = display_state.scene_buffer;
             HUD_STATE *hud = render_frame_hud(render_frame(camera_for_view(context), buffer));
@@ -1514,7 +1650,7 @@ sint32 menu_init_layout(void)
         for (uint32 layout = 0; layout < 3u; ++layout)
             memcpy(render_hud_sprites((HUD_LAYOUT)layout) + 19,
                    menu_hud_sprites[layout][selector], sizeof(menu_hud_sprites[layout][selector]));
-    menu_mode = r_u32(0x80083484u);
+    menu_mode = race_cfg.mode;
     if (menu_mode == 4u)
     {
         menu_set_hud_group(2, 0u);
@@ -1560,13 +1696,13 @@ sint32 menu_init_layout(void)
     return 4 << 16;
 }
 
-sint32 menu_update_race_hud(uint32 state)
+sint32 menu_update_race_hud(const RACE_VIEW *state)
 {
-    uint32 src = r_u32(state + 100u);
+    BOAT_MENU *src = vehicle_player_menu(state);
     HUD_DESC *descs = render_hud.descs;
     HUD_PRIM *prims = render_hud.prims;
-    sint32 peer_first = state == 0x800DE0F0u ? 1 : 0;
-    sint32 own_index = state == 0x800DE0F0u ? 0 : 1;
+    sint32 peer_first = state == &race_views[0] ? 1 : 0;
+    sint32 own_index = state == &race_views[0] ? 0 : 1;
     sint32 peer_index = 1 - own_index;
     sint32 alternate;
     sint32 flag;
@@ -1580,16 +1716,16 @@ sint32 menu_update_race_hud(uint32 state)
         char *text = descs[1].text;
         sint16 total = (sint16)((sint16)vehicle_racer_count + (sint16)vehicle_leader_count + (sint16)vehicle_trailer_count);
 
-        text_format_decimal_digits(vehicle_menu(src)->racer_num, text, 1);
+        text_format_decimal_digits(src->racer_num, text, 1);
         text[1u] = (uint8)('/');
         text_format_decimal_digits(total, text + 2u, 1);
         text[3u] = (uint8)(0u);
     }
-    text_format_decimal_digits(r_u8(src) + 1, descs[2].text, 1);
+    text_format_decimal_digits(src->lap_idx + 1, descs[2].text, 1);
     text_format_decimal_digits(scene_race->laps, descs[2].text + 2u, 1);
 
-    flag = (sint32)r_u32(0x800B69ECu) > 0 && vehicle_menu(src)->mode == 4u;
-    if ((sint32)r_u32(0x800DCFD4u) > 0 && !flag)
+    flag = (sint32)result_state.bonus_timer > 0 && src->mode == 4u;
+    if ((sint32)race_freeze_time.ticks > 0 && !flag)
         descs[0].clut = 26871u;
     else
     {
@@ -1611,14 +1747,13 @@ sint32 menu_update_race_hud(uint32 state)
     time_copy_chars7((char *)(flag ? race_bonus_time.text : race_time.text), descs[0].text);
     hud_text.time[4] = 0;
 
-    if (r_u32(src + 548u) != 0u)
+    if (src->delta_timer != 0u)
     {
-        uint32 peer = r_u32(peer_first ? 0x800DF0FCu : 0x800DE154u);
-        uint32 idx_src = alternate ? peer : src;
-        uint32 offset = 16u * (r_u8(idx_src + 2u) + 5u * r_u8(idx_src));
-        uint32 first = peer_first ? peer + offset : src + offset;
-        uint32 second = peer_first ? src + offset : peer + offset;
-        sint32 difference = (sint32)(r_u32(first + 112u) - r_u32(second + 112u));
+        BOAT_MENU *peer = vehicle_player_menu(peer_first ? &race_views[1] : &race_views[0]);
+        BOAT_MENU *idx_menu = (alternate ? peer : src);
+        const TIME_REC *left = vehicle_checkpoint_time((peer_first ? peer : src), idx_menu->lap_idx, idx_menu->checkpoint_idx);
+        const TIME_REC *right = vehicle_checkpoint_time((peer_first ? src : peer), idx_menu->lap_idx, idx_menu->checkpoint_idx);
+        sint32 difference = (sint32)(left->ticks - right->ticks);
         char *text = descs[7].text;
 
         descs[7].visible = 1u;
@@ -1634,15 +1769,15 @@ sint32 menu_update_race_hud(uint32 state)
     if (!flag)
     {
         flag = 1;
-        if ((sint16)r_u16(state + 76u) == 2)
-            flag = vehicle_menu(src)->mode != 4u;
+        if ((sint16)camera_for_view(state)->direction == 2)
+            flag = src->mode != 4u;
     }
     descs[6].visible = (uint8)(1 - flag);
     for (idx = 0; idx < 3; ++idx)
     {
         HUD_PRIM *prim = prims + idx;
 
-        if (idx < r_u8(src + 592u))
+        if (idx < src->pickups[3].count)
         {
             prim->state = 1u;
             prim->sprite.clut = 0x41F7u;
@@ -1654,7 +1789,7 @@ sint32 menu_update_race_hud(uint32 state)
     {
         HUD_PRIM *prim = prims + (2 - idx);
 
-        if (idx < r_u8(src + 572u))
+        if (idx < src->pickups[1].count)
         {
             prim->state = 1u;
             prim->sprite.clut = 0x42F7u;
@@ -1663,25 +1798,25 @@ sint32 menu_update_race_hud(uint32 state)
     return 0;
 }
 
-sint32 menu_dispatch_layout(uint32 state)
+sint32 menu_dispatch_layout(const RACE_VIEW *state)
 {
     FUNCTION_MARKER(0x80020548u, "MAIN.EXE");
-    if (r_u32(0x80083484u) == 8u)
+    if (race_cfg.mode == 8u)
         return menu_update_trial_hud(state);
-    if (r_u32(0x80083478u) == 1u)
+    if (race_cfg.players == 1u)
         return results_layout_populate(state);
     return menu_update_race_hud(state);
 }
 
-sint32 race_update_segment_bufs(uint32 state, sint32 argument)
+sint32 race_update_segment_bufs(const RACE_VIEW *state, sint32 argument)
 {
     uint32 gate;
-    uint32 menu;
+    BOAT_MENU *menu;
     sint32 result;
 
     FUNCTION_MARKER(0x80020B60u, "MAIN.EXE");
-    gate = r_u32(0x8008373Cu);
-    menu = r_u32(state + 100u);
+    gate = race_paused;
+    menu = vehicle_player_menu(state);
     result = (sint16)argument;
     if (gate == 0u)
     {
@@ -1701,7 +1836,7 @@ sint32 race_update_segment_bufs(uint32 state, sint32 argument)
         boat = vehicle_player(state);
         seg = boat->contacts.points[0].seg;
         position = (sint32)seg->next.idx - 1;
-        menu_type = r_u8(menu + 2u);
+        menu_type = menu->checkpoint_idx;
         limit = scene_checkpoint(menu_type)->seg;
         if (position < 0)
             position = (sint32)seg->prev.idx + 1;
@@ -1710,14 +1845,14 @@ sint32 race_update_segment_bufs(uint32 state, sint32 argument)
             race_process_lap_completion(state, menu, 0, 0u);
             pickup_restore();
         }
-        menu_type = r_u32(0x80083484u);
+        menu_type = race_cfg.mode;
         if (menu_type == 8u)
             results_fn_8003cf10(state, menu, 0, 0u);
     }
     return (sint16)result;
 }
 
-sint32 menu_submit_recs_refresh(uint32 unused, uint32 *ot)
+sint32 menu_submit_recs_refresh(uint32 *ot)
 {
     HUD_PRIM *records = render_hud.prims;
 
@@ -1727,28 +1862,28 @@ sint32 menu_submit_recs_refresh(uint32 unused, uint32 *ot)
     return render_submit_active_recs(records, ot);
 }
 
-sint32 menu_dispatch_state_render_mode(uint32 state, uint32 *ot, sint32 result)
+sint32 menu_dispatch_state_render_mode(const RACE_VIEW *state, uint32 *ot, sint32 result)
 {
-    sint32 mode = (sint32)r_u32(0x80083484u);
+    sint32 mode = (sint32)race_cfg.mode;
 
     FUNCTION_MARKER(0x80020E98u, "MAIN.EXE");
     if (mode == 5)
         return (sint16)result;
     menu_dispatch_layout(state);
-    if (r_u32(0x8008373Cu) != 0u)
+    if (race_paused != 0u)
         menu_update_select_recs(render_hud.prims);
     else
     {
         render_build_text_packets();
         hud_transition_prims(render_hud.prims);
     }
-    mode = (sint32)r_u32(0x80083484u);
+    mode = (sint32)race_cfg.mode;
     if (mode == 3 || mode == 4 || mode == 8 || mode == 9)
         render_submit_active_recs(render_hud.prims, ot);
     return (sint16)result;
 }
 
-sint32 race_render_segment_update(uint32 state, uint32 *ot)
+sint32 race_render_segment_update(const RACE_VIEW *state, uint32 *ot)
 {
     sint16 result;
 
@@ -1757,7 +1892,7 @@ sint32 race_render_segment_update(uint32 state, uint32 *ot)
     return (sint16)menu_dispatch_state_render_mode(state, ot, result);
 }
 
-sint32 menu_render_multiplayer_result(uint32 state, uint32 *ot)
+sint32 menu_render_multiplayer_result(const RACE_VIEW *state, uint32 *ot)
 {
     sint32 result;
     sint32 complete = 0;
@@ -1765,31 +1900,31 @@ sint32 menu_render_multiplayer_result(uint32 state, uint32 *ot)
 
     FUNCTION_MARKER(0x80020FD0u, "MAIN.EXE");
     race_render_segment_update(state, ot);
-    mode = r_u32(0x80083478u);
+    mode = race_cfg.players;
     result = 2;
     if (mode == 1u)
     {
-        uint32 peer = r_u32(0x800DE154u);
+        BOAT_MENU *peer = vehicle_player_menu(&race_views[0]);
 
-        if (vehicle_menu(peer)->mode == 7u)
+        if (peer->mode == 7u)
             complete = 1;
         else
-            mode = r_u32(0x80083478u);
+            mode = race_cfg.players;
     }
     if (complete == 0 && mode == 2u)
     {
-        uint32 peer = r_u32(0x800DE154u);
+        BOAT_MENU *peer = vehicle_player_menu(&race_views[0]);
 
         result = 7;
-        if (vehicle_menu(peer)->mode == 7u)
+        if (peer->mode == 7u)
         {
-            result = (sint32)(vehicle_menu(r_u32(0x800DF0FCu))->mode ^ 7u);
+            result = (sint32)(vehicle_player_menu(&race_views[1])->mode ^ 7u);
             complete = result == 0;
         }
     }
     if (complete != 0)
     {
-        if (r_u32(0x800B6B1Cu) != 0u)
+        if (result_state.finished != 0u)
         {
             result = -2;
             if (race_selection.ranks[0] == 0u)
@@ -1865,7 +2000,7 @@ sint32 menu_update_select_recs(HUD_PRIM *prims)
     else
     {
         layout = 4;
-        if (r_u32(0x80083484u) != 8u && menu_state.pause_action != 2u)
+        if (race_cfg.mode != 8u && menu_state.pause_action != 2u)
             layout = 5;
         mode = menu_state.confirm;
         if (mode == 1u)
@@ -1879,7 +2014,7 @@ sint32 menu_update_select_recs(HUD_PRIM *prims)
             coord1 = (uint16)geom[24].y;
             coord2 = (uint16)geom[19 + layout].y;
             value = coord0 - coord1 + coord2;
-            if (r_u32(0x80083484u) == 8u)
+            if (race_cfg.mode == 8u)
                 value -= 50u;
             if (menu_state.pause_action == 2u)
             {
@@ -1910,7 +2045,7 @@ sint32 menu_update_select_recs(HUD_PRIM *prims)
             coord1 = (uint16)geom[24].y;
             coord2 = (uint16)geom[19 + layout].y;
             value = coord0 - coord1 + coord2;
-            if (r_u32(0x80083484u) == 8u)
+            if (race_cfg.mode == 8u)
                 value -= 50u;
             if (menu_state.pause_action == mode)
             {
@@ -1998,10 +2133,10 @@ sint32 menu_update_selected_prims(sint16 selected)
         flags[7] = 1u;
     else if (selected == 4 || selected == 5)
         flags[8] = flags[9] = 1u;
-    prims[6].sprite.u0 = (uint8)(((sint16)(64 - (sint16)r_u16(0x80083494u)) >= 65) ? 64 : 64 - r_u16(0x80083494u));
-    prims[6].sprite.w = (uint16)(((sint16)(r_u16(0x80083494u) + 1u) >= 65) ? 64 : r_u16(0x80083494u) + 1u);
-    prims[7].sprite.u0 = (uint8)(((sint16)(64 - (sint16)r_u16(0x80083490u)) >= 65) ? 64 : 64 - r_u16(0x80083490u));
-    prims[7].sprite.w = (uint16)(((sint16)(r_u16(0x80083490u) + 1u) >= 65) ? 64 : r_u16(0x80083490u) + 1u);
+    prims[6].sprite.u0 = (uint8)(((sint16)(64 - (sint16)sound_mix.music) >= 65) ? 64 : 64 - sound_mix.music);
+    prims[6].sprite.w = (uint16)(((sint16)(sound_mix.music + 1u) >= 65) ? 64 : sound_mix.music + 1u);
+    prims[7].sprite.u0 = (uint8)(((sint16)(64 - (sint16)sound_mix.effects) >= 65) ? 64 : 64 - sound_mix.effects);
+    prims[7].sprite.w = (uint16)(((sint16)(sound_mix.effects + 1u) >= 65) ? 64 : sound_mix.effects + 1u);
     if (count <= 0)
         return count;
     for (idx = 0; idx < count; ++idx, ++prims)
@@ -2013,7 +2148,7 @@ sint32 menu_update_selected_prims(sint16 selected)
         if ((uint32)(idx - 6) < 2u)
             continue;
         screen = menu_state.language;
-        if (r_u32(0x80083478u) == 1u)
+        if (race_cfg.players == 1u)
         {
             x = flags[idx] && screen == 0u ? 720 : 704;
             if (flags[idx])
@@ -2057,19 +2192,19 @@ sint32 menu_render_select(sint32 selected, const HUD_STATE *hud, CONTROLLER_STAT
     selection = (sint16)render_hud.hud_count;
     menu_prims = render_hud.prims;
     prim = menu_prims + selection + 17;
-    value = r_u8(0x80083494u);
+    value = (uint8)sound_mix.music;
     prim->sprite.u0 = 0xFFFFFF8Fu - value;
-    value = r_u16(0x80083494u);
+    value = sound_mix.music;
     selection = (sint16)render_hud.hud_count;
     prim->sprite.w = value + 1u;
 
     prim = render_hud.prims + selection + 18;
     menu_prims = render_hud.prims;
-    value = r_u8(0x80083490u);
+    value = (uint8)sound_mix.effects;
     prim->sprite.u0 = 0xFFFFFF8Fu - value;
     selection = (sint16)render_hud.hud_count;
     menu_prims = render_hud.prims;
-    value = r_u16(0x80083490u);
+    value = sound_mix.effects;
     menu_prims += selection;
     prim->sprite.w = value + 1u;
 
@@ -2100,7 +2235,7 @@ sint32 menu_render_select(sint32 selected, const HUD_STATE *hud, CONTROLLER_STAT
 
             if ((uint16)(idx - 17) >= 2u && (uint16)(idx - 8) >= 2u)
             {
-                uint32 mode = r_u32(0x80083478u);
+                uint32 mode = race_cfg.players;
                 uint32 flag = flags[idx];
                 uint32 screen = menu_state.language;
 
@@ -2215,9 +2350,9 @@ sint32 menu_render_select(sint32 selected, const HUD_STATE *hud, CONTROLLER_STAT
     return result;
 }
 
-sint32 menu_select_result_clut(uint32 state)
+sint32 menu_select_result_clut(const RACE_VIEW *state)
 {
-    sint32 value = (sint16)r_u16(state + 3716u) >> 2;
+    sint32 value = (sint16)sound_for_context(state)->speed >> 2;
     uint16 result;
 
     FUNCTION_MARKER(0x80021CE4u, "MAIN.EXE");
@@ -2230,9 +2365,9 @@ sint32 menu_select_result_clut(uint32 state)
     return result;
 }
 
-sint32 menu_update_status_clut(uint32 state)
+sint32 menu_update_status_clut(const RACE_VIEW *state)
 {
-    sint32 value = (sint16)r_u16(state + 3716u) >> 2;
+    sint32 value = (sint16)sound_for_context(state)->speed >> 2;
     uint16 result;
 
     FUNCTION_MARKER(0x80021D4Cu, "MAIN.EXE");
@@ -2257,9 +2392,9 @@ sint32 menu_set_hud_group(sint16 group, uint8 state)
     return -1;
 }
 
-sint32 menu_update_trial_hud(uint32 state)
+sint32 menu_update_trial_hud(const RACE_VIEW *state)
 {
-    uint32 src = r_u32(state + 100u);
+    BOAT_MENU *src = vehicle_player_menu(state);
     HUD_DESC *descs = render_hud.descs;
     HUD_PRIM *prims = render_hud.prims;
     sint32 alternate;
@@ -2273,8 +2408,8 @@ sint32 menu_update_trial_hud(uint32 state)
     for (idx = 0; idx < 4; ++idx)
         descs[idx + 17].visible = 0u;
 
-    alternate = (sint32)r_u32(0x800B69ECu) > 0 && vehicle_menu(src)->mode == 4u;
-    if ((sint32)r_u32(0x800DCFD4u) > 0 && !alternate)
+    alternate = (sint32)result_state.bonus_timer > 0 && src->mode == 4u;
+    if ((sint32)race_freeze_time.ticks > 0 && !alternate)
         descs[0].clut = 27508u;
     else
     {
@@ -2295,12 +2430,12 @@ sint32 menu_update_trial_hud(uint32 state)
     hud_text.time[4] = 0;
 
     for (idx = 0; idx < 5; ++idx)
-        prims[idx + 4].state = idx < r_u8(src + 582u);
+        prims[idx + 4].state = idx < src->pickups[2].count;
     for (idx = 0; idx < 3; ++idx)
     {
         HUD_PRIM *prim = prims + idx;
 
-        if (idx < r_u8(src + 592u))
+        if (idx < src->pickups[3].count)
         {
             prim->state = 1u;
             prim->sprite.clut = 0x6A34u;
@@ -2312,7 +2447,7 @@ sint32 menu_update_trial_hud(uint32 state)
     {
         HUD_PRIM *prim = prims + (2 - idx);
 
-        if (idx < r_u8(src + 572u))
+        if (idx < src->pickups[1].count)
         {
             prim->state = 1u;
             prim->sprite.clut = 0x6774u;
@@ -2321,28 +2456,28 @@ sint32 menu_update_trial_hud(uint32 state)
     return 0;
 }
 
-sint32 menu_update_result_rec_palettes(uint32 state)
+sint32 menu_update_result_rec_palettes(const RACE_VIEW *state)
 {
     uint32 mode;
-    uint32 src;
+    BOAT_MENU *src;
     HUD_PRIM *prims;
     sint32 idx;
 
     FUNCTION_MARKER(0x80022134u, "MAIN.EXE");
-    mode = r_u32(0x80083478u);
-    src = r_u32(state + 100u);
+    mode = race_cfg.players;
+    src = vehicle_player_menu(state);
     if (mode == 1u)
     {
         prims = render_hud.prims;
         for (idx = 0; idx < 5; ++idx)
-            prims[idx + 4].state = idx < r_u8(src + 582u);
+            prims[idx + 4].state = idx < src->pickups[2].count;
     }
     prims = render_hud.prims;
     for (idx = 0; idx < 3; ++idx)
     {
         HUD_PRIM *prim = prims + idx;
 
-        if (idx < r_u8(src + 592u))
+        if (idx < src->pickups[3].count)
         {
             prim->state = 1u;
             prim->sprite.clut = 0x6A34u;
@@ -2355,7 +2490,7 @@ sint32 menu_update_result_rec_palettes(uint32 state)
     {
         HUD_PRIM *prim = prims + (2 - idx);
 
-        if (idx < r_u8(src + 572u))
+        if (idx < src->pickups[1].count)
         {
             prim->state = 1u;
             prim->sprite.clut = 0x6774u;
@@ -2371,36 +2506,36 @@ sint32 menu_update_select_mode(void)
     return menu_after_outer();
 }
 
-sint32 menu_init_race(uint32 state, uint32 unused1, sint32 unused2)
+sint32 menu_init_race(const RACE_VIEW *state, uint32 unused1, sint32 unused2)
 {
-    uint32 menu = r_u32(state + 100u);
+    BOAT_MENU *menu = vehicle_player_menu(state);
     sint16 mode;
     sint32 index;
 
     FUNCTION_MARKER(0x8003C458u, "MAIN.EXE");
-    w_u8(menu, 0u);
-    w_u8(menu + 1u, 20u);
-    w_u32(menu + 624u, 0u);
-    time_init_rec_zero(menu + 532u);
+    menu->lap_idx = 0u;
+    menu->best_lap_idx = 20u;
+    menu->finish_state = 0u;
+    time_init(&menu->best_time);
     mode = (sint16)race_selection.format;
     if (mode == 1)
     {
-        w_u8(menu + 2u, 0u);
-        w_u32(menu + 8u, 0u);
+        menu->checkpoint_idx = 0u;
+        menu->start_ready = 0u;
     }
     else
     {
-        w_u8(menu + 2u, 1u);
-        w_u32(menu + 8u, 1u);
+        menu->checkpoint_idx = 1u;
+        menu->start_ready = 1u;
     }
-    w_u32(menu + 4u, 0u);
-    w_u8(menu + 14u, 1u);
-    time_init_rec_zero(menu + 516u);
+    menu->checkpoint_total = 0u;
+    menu->rank = 1u;
+    time_init(&menu->total_time);
     for (index = 0; index < 5; ++index)
-        time_init_rec_zero(menu + 100u + (uint32)index * 16u);
-    w_u32(menu + 548u, 0u);
+        time_init(vehicle_checkpoint_time(menu, 0u, (uint32)index));
+    menu->delta_timer = 0u;
     mode = (sint16)race_selection.format;
-    vehicle_menu(menu)->mode = (uint32)(sint32)mode;
+    menu->mode = (uint32)(sint32)mode;
     if (mode == 1)
     {
         uint8 first_value = game_options.handicap[0];
@@ -2408,95 +2543,87 @@ sint32 menu_init_race(uint32 state, uint32 unused1, sint32 unused2)
         sint32 first = first_value == 6u ? 10 : first_value;
         sint32 second = second_value == 6u ? 10 : second_value;
         sint32 minimum = first < second ? first : second;
-        sint32 value = r_u32(0x80083478u) == 1u ? 300 : 100 * (state == 0x800DE0F0u ? first - minimum + 3 : second - minimum + 3);
-        race_format_time(menu + 500u, value);
+        sint32 value = race_cfg.players == 1u ? 300 : 100 * (state == &race_views[0] ? first - minimum + 3 : second - minimum + 3);
+        time_format(&menu->start_time, value);
     }
-    sound_queue_command(state, 0, 4, 0u);
-    w_u16(menu + 556u, 0u);
+    sound_queue_command(sound_for_context(state), 0, 4);
     for (index = 0; index < 6; ++index)
     {
-        uint32 record = menu + 562u + (uint32)index * 10u;
-        w_u8(record + 1u, 0u);
-        w_u16(record + 2u, 0u);
-        w_u16(record + 4u, 0u);
-        w_u16(record + 8u, 0u);
-        w_u8(record, 0u);
-        w_u16(record + 6u, 0u);
+        menu->pickups[index] = (PICKUP_SLOT){0};
     }
-    w_u16(menu + 12u, 0u);
     for (index = 0; index < 5; ++index)
-        race_format_time(menu + 20u + (uint32)index * 16u, 0);
+        time_format(vehicle_lap_time(menu, (uint32)index), 0);
     return 0;
 }
 
-sint32 menu_update_trans(uint32 state, uint32 menu, sint32 unused, uint32 argument)
+sint32 menu_update_trans(const RACE_VIEW *state, struct BOAT_MENU *menu, sint32 unused, uint32 argument)
 {
     sint32 mode;
     sint32 result = 0;
     uint32 timer;
 
     FUNCTION_MARKER(0x8003C640u, "MAIN.EXE");
-    if (state == 0x800DE0F0u)
+    if (state == &race_views[0])
     {
-        timer = r_u32(0x800B69ECu);
+        timer = result_state.bonus_timer;
         if ((sint32)timer > 0)
-            w_u32(0x800B69ECu, timer - 1u);
+            result_state.bonus_timer = timer - 1u;
     }
-    timer = r_u32(menu + 548u);
+    timer = menu->delta_timer;
     if (timer != 0u)
     {
         uint32 frame_rate = game_timing.frame_rate;
         uint32 base_rate = game_timing.base_rate;
 
-        w_u32(menu + 548u, timer - (frame_rate == base_rate ? 1u : 2u));
+        menu->delta_timer = timer - (frame_rate == base_rate ? 1u : 2u);
     }
     if ((sint16)r_u16(0x800B6B52u) != 0)
         return 0;
-    mode = (sint32)vehicle_menu(menu)->mode;
+    mode = (sint32)menu->mode;
     if (mode == 1)
     {
-        if (race_timer_decrement(menu + 500u) != 0)
+        if (time_decrement(&menu->start_time) != 0)
         {
             mode = 4;
-            sound_queue_command(state, 10, 0, argument);
-            w_u32(0x800B6BC0u, UINT32_MAX);
+            sound_queue_command(sound_for_context(state), 10, 0);
+            result_state.best_lap_ticks = UINT32_MAX;
         }
-        if (r_u32(menu + 8u) == 0u && (sint32)r_u32(menu + 512u) < 301)
+        if (menu->start_ready == 0u && (sint32)menu->start_time.ticks < 301)
         {
             effects_init_transform_object(state);
-            sound_queue_command(state, 11, 0, argument);
-            w_u32(menu + 8u, 1u);
+            sound_queue_command(sound_for_context(state), 11, 0);
+            menu->start_ready = 1u;
         }
     }
     else if (mode == 4)
     {
-        sint32 position = (uint8)(r_u8(menu + 14u) + (uint8)vehicle_leader_count);
+        sint32 position = (uint8)(menu->rank + (uint8)vehicle_leader_count);
         uint8 previous_position;
 
-        if (state == 0x800DE0F0u)
+        if (state == &race_views[0])
             race_selection.ranks[0] = (uint8)position;
         else
             race_selection.ranks[1] = (uint8)position;
-        if (r_u32(0x800B6AC0u) != 0u)
+        if (result_state.lap_active != 0u)
         {
-            race_timer_increment(menu + 20u + 16u * r_u8(menu));
-            race_timer_increment(menu + 516u);
+            time_increment(vehicle_lap_time(menu, menu->lap_idx));
+            time_increment(&menu->total_time);
         }
-        if (r_u32(0x80083484u) == 4u)
+        if (race_cfg.mode == 4u)
             return 0;
-        previous_position = r_u8(menu + 15u);
+        previous_position = menu->prev_rank;
         if (previous_position != (uint8)position)
         {
-            sound_queue_command(state, previous_position < (uint8)position ? -30 : 30, 2, argument);
-            w_u8(menu + 15u, (uint8)position);
+            sound_queue_command(sound_for_context(state), previous_position < (uint8)position ? -30 : 30, 2);
+            menu->prev_rank = (uint8)position;
         }
-        if (state == 0x800DE0F0u || (r_u32(0x80083478u) == 2u && vehicle_menu(r_u32(0x800DE154u))->mode != 4u))
+        if (state == &race_views[0] || (race_cfg.players == 2u && vehicle_player_menu(&race_views[0])->mode != 4u))
         {
-            if (r_u32(0x800DCFD4u) != 0u)
-                race_timer_decrement(0x800DCFC8u);
+            if (race_freeze_time.ticks != 0u)
+                time_decrement(&race_freeze_time);
             else if (time_decrement(&race_time) != 0)
             {
-                race_format_time(0x800F2578u, 300);
+                time_format(&race_end_time, 300);
                 mode = 6;
             }
         }
@@ -2508,11 +2635,11 @@ sint32 menu_update_trans(uint32 state, uint32 menu, sint32 unused, uint32 argume
     else if (mode == 6)
     {
         sint32 waiting = 1;
-        if (vehicle_menu(r_u32(0x800DE154u))->mode == 6u && (r_u32(0x80083478u) != 2u || vehicle_menu(r_u32(0x800DF0FCu))->mode == 6u))
+        if (vehicle_player_menu(&race_views[0])->mode == 6u && (race_cfg.players != 2u || vehicle_player_menu(&race_views[1])->mode == 6u))
             waiting = 0;
-        if ((state == 0x800DE0F0u || waiting != 0) && race_timer_decrement(0x800F2578u) != 0)
+        if ((state == &race_views[0] || waiting != 0) && time_decrement(&race_end_time) != 0)
         {
-            uint32 game_mode = r_u32(0x80083484u);
+            uint32 game_mode = race_cfg.mode;
             sint32 play_sound = 0;
 
             if (game_mode == 8u)
@@ -2527,21 +2654,21 @@ sint32 menu_update_trans(uint32 state, uint32 menu, sint32 unused, uint32 argume
             else if (game_mode != 9u)
                 play_sound = (sint16)game_selection.mode != 6;
             if (play_sound != 0)
-                sound_queue_command(state, 4, 0, argument);
+                sound_queue_command(sound_for_context(state), 4, 0);
             camera_for_view(state)->mode = 5u;
             mode = 5;
-            if (r_u32(0x80083478u) == 2u && waiting == 0)
+            if (race_cfg.players == 2u && waiting == 0)
             {
-                uint32 peer = r_u32(0x800DF0FCu);
+                BOAT_MENU *peer = vehicle_player_menu(&race_views[1]);
 
                 camera_views[1].mode = 5u;
-                vehicle_menu(peer)->mode = 5u;
+                peer->mode = 5u;
             }
         }
     }
     else if (mode == 7)
         result = 1;
-    vehicle_menu(menu)->mode = (uint32)mode;
+    menu->mode = (uint32)mode;
     return result;
 }
 
@@ -2595,7 +2722,7 @@ sint32 menu_config_display(sint16 width, sint16 height)
     // Original redundant screen offsets are owned by DISPENV.screen
     display_state.width = (uint16)width;
     display_state.height = (uint16)height;
-    global_fn_80068900(1u);
+    SetVideoMode(MODE_PAL);
     display_state.buffer = 0u;
     VSync(0);
     PutDispEnv(display_disp_env((sint16)display_state.buffer));
@@ -2614,7 +2741,7 @@ void menu_select_images(void)
     menu_asset_counts.labels = 4u;
     if (screen == 11)
     {
-        uint32 index = r_u32(0x800834A0u);
+        uint32 index = race_cfg.course;
         uint32 code;
 
         menu_textures.load = 1u;
@@ -2661,7 +2788,7 @@ void menu_select_images(void)
             break;
         case 23:
         {
-            sint32 trophy = (sint16)r_u16(0x800B6AE4u);
+            sint32 trophy = (sint16)menu_state.trophy;
 
             menu_textures.load = 1u;
             menu_asset_counts.labels = 0u;
@@ -2780,9 +2907,7 @@ sint32 menu_format_notice(void)
 sint32 menu_set_resource_prefix(void)
 {
     FUNCTION_MARKER(0x80044B40u, "MAIN.EXE");
-    w_u32(0x800D6958u, 0x4E454D5Cu);
-    w_u8(0x800D695Cu, 'U');
-    w_u8(0x800D695Du, 0u);
+    strcpy(cd_dir, "\\MENU");
     return 0;
 }
 
@@ -2832,10 +2957,10 @@ sint32 menu_prepare_assets(uint32 prefix)
     menu_load_notice_textures(prefix);
     menu_update_tex_select();
     menu_set_resource_prefix();
-    if ((sint16)r_u16(0x800B6BD6u) == 0)
+    if ((sint16)menu_assets.prepared == 0)
     {
         menu_fn_80044c18();
-        w_u16(0x800B6BD6u, 1u);
+        menu_assets.prepared = 1u;
     }
     menu_fn_80044c28();
     menu_textures.load = 0u;
@@ -2846,8 +2971,8 @@ sint32 menu_prepare_assets(uint32 prefix)
 void menu_reset_display_flags(void)
 {
     FUNCTION_MARKER(0x80044CECu, "MAIN.EXE");
-    w_u16(0x800B6BEEu, 0u);
-    w_u16(0x800B6A3Cu, 0u);
+    menu_assets.prev_pad_layout = 0u;
+    menu_assets.pad_layout = 0u;
 }
 
 sint32 menu_select_upload_images(void)
@@ -2865,28 +2990,26 @@ sint32 menu_select_upload_images(void)
     if (selection == 1 && (uint8)game_selection.players == 2u)
     {
         record = &input_controllers[1];
-        w_u16(0x800B6BEEu, UINT16_C(0xFFFF));
+        menu_assets.prev_pad_layout = UINT16_C(0xFFFF);
     }
 
     requested = (sint16)((sint16)record->type == 2);
-    w_u16(0x800B6A3Cu, (uint16)requested);
-    if ((sint16)r_u16(0x800B6BEEu) == requested)
+    menu_assets.pad_layout = (uint16)requested;
+    if ((sint16)menu_assets.prev_pad_layout == requested)
         return requested;
-    w_u16(0x800B6BEEu, (uint16)requested);
+    menu_assets.prev_pad_layout = (uint16)requested;
     {
         uint32 index;
         uint32 first = requested == 1 ? 0u : 4u;
         // Original 0x80044DC8..0x80044E58 refreshes four embedded paletted TIMs
         for (index = 0u; index < 4u; ++index)
         {
-            uint32 tim = r_u32(0x80096784u + 4u * (first + index));
-            uint32 clut = tim + 8u;
-            uint32 pixels = clut + (r_u32(clut) & ~3u);
-            PSX_RECT rectangle;
-            xport_guest_copy(xport_host_ref(&rectangle), xport_guest_ref(pixels + 4u), sizeof(rectangle));
-            LoadImagePSX(&rectangle, (uint32 *)psx_addr(pixels + 12u, 4u));
-            xport_guest_copy(xport_host_ref(&rectangle), xport_guest_ref(clut + 4u), sizeof(rectangle));
-            LoadImagePSX(&rectangle, (uint32 *)psx_addr(clut + 12u, 4u));
+            const MENU_PAD_IMAGE *image = &menu_pad_images[first + index];
+            PSX_RECT rect = image->pixels;
+
+            LoadImagePSX(&rect, (uint32 *)image->pixel_data);
+            rect = image->clut;
+            LoadImagePSX(&rect, (uint32 *)image->clut_data);
         }
     }
     return 0;
@@ -3005,9 +3128,9 @@ sint32 menu_render_frame(void)
 
     FUNCTION_MARKER(0x80045678u, "MAIN.EXE");
     frame_counter = menu_state.frame;
-    state_timer = r_u32(0x800B4120u);
+    state_timer = menu_state.state_ticks;
     menu_state.frame = frame_counter + 1u;
-    w_u32(0x800B4120u, state_timer + 1u);
+    menu_state.state_ticks = state_timer + 1u;
     sprite_update_anims();
     if ((sint16)menu_state.screen == 10)
         profile_populate_select_recs(0u, 0u, 0u, 0u);
@@ -3252,8 +3375,7 @@ sint32 menu_update_tex_select(void)
         if ((state >= 4 && state <= 7) || state == 9 || (state >= 10 && state <= 11) || (state >= 14 && state <= 25))
             menu_load_course_tex(1);
     }
-    w_u8(0x800D6958u, r_u8(0x800B40ACu));
-    w_u8(0x800D6959u, r_u8(0x800B40ADu));
+    strcpy(cd_dir, "\\");
     if (menu_asset_counts.labels != 0u)
     {
         uint32 data;
@@ -3582,7 +3704,7 @@ sint32 menu_fn_8004c740(CONTROLLER_STATE *input)
     }
     else
     {
-        mc_fn_8004beb0();
+        mc_save_state_update();
         mc_load_state_update();
     }
     if ((sint16)mc_state.overwrite_prompt != previous_prompt || (sint16)mc_state.format_prompt != previous_format)
@@ -3599,27 +3721,27 @@ sint32 mc_state_is_three(void)
 void menu_init_runtime(void)
 {
     FUNCTION_MARKER(0x8004CD44u, "MAIN.EXE");
-    w_u16(0x800B6AE4u, 3u);
-    w_u32(0x800B6C1Cu, 0u);
-    w_u32(0x800B6C18u, 0u);
-    w_u16(0x800B69E0u, 0u);
-    w_u16(0x800B6BD2u, 1u);
+    menu_state.trophy = 3u;
+    menu_pad_ticks[1] = 0u;
+    menu_pad_ticks[0] = 0u;
+    menu_state.course_cleared = 0u;
+    mc_state.notice_screen = 1u;
     menu_textures.heading = 0u;
     w_u16(0x800B4118u, 0u);
-    w_u16(0x800B6BD6u, 0u);
+    menu_assets.prepared = 0u;
     menu_textures.selected = UINT16_C(0xFFFF);
     menu_textures.loaded = UINT16_C(0xFFFF);
     menu_state.frame = 0u;
-    w_u32(0x800B4120u, 0u);
+    menu_state.state_ticks = 0u;
     menu_state.running = 1u;
-    w_u16(0x800B6A58u, 0u);
-    w_u16(0x800B6A80u, 0u);
+    menu_state.reward_notice = 0u;
+    menu_state.level_notice = 0u;
     menu_alloc_runtime_buf();
     menu_init_render();
-    w_u16(0x800B4140u, UINT16_C(0xFFFF));
-    w_u16(0x800B6B0Cu, 0u);
-    w_u16(0x800B6A20u, 0u);
-    cd_load_selected_asset(0x80081F64u);
+    menu_state.prev_screen = UINT16_C(0xFFFF);
+    menu_state.series_confirm = 0u;
+    menu_state.pad_missing = 0u;
+    mc_load_icon();
     menu_reset_display_flags();
 }
 
@@ -3645,21 +3767,21 @@ sint32 menu_frame_loop(void)
     menu_start_audio_bank();
     if ((game_selection.flags & 0x10u) != 0u)
     {
-        w_u16(0x800B6B86u, 1u);
+        menu_state.movie_idx = 1u;
         do
         {
-            intro_config_cutscene((sint16)r_u16(0x800B6B86u));
+            intro_config_cutscene((sint16)menu_state.movie_idx);
             menu_state.screen = 25u;
             menu_state.phase = 25u;
-            w_u16(0x800B6B86u, (uint16)(r_u16(0x800B6B86u) + 1u));
+            menu_state.movie_idx = (uint16)(menu_state.movie_idx + 1u);
             VSync(0);
             DrawSync(1);
-        } while ((sint16)r_u16(0x800B6B86u) < 13);
+        } while ((sint16)menu_state.movie_idx < 13);
         game_selection.flags = (uint16)(game_selection.flags - 16u);
     }
-    else if ((sint16)r_u16(0x800B6BF0u) != 0)
+    else if ((sint16)menu_state.cutscene != 0)
     {
-        intro_config_cutscene((sint16)r_u16(0x800B6BF0u));
+        intro_config_cutscene((sint16)menu_state.cutscene);
     }
     w_u16(0x800B6AD4u, 0u);
     if (game_selection.ready == 0u)
@@ -3668,7 +3790,7 @@ sint32 menu_frame_loop(void)
         game_selection.ready = 0u;
         menu_state.screen = 0u;
         game_selection.event = 0u;
-        if ((sint16)r_u16(0x800B6AEEu) == 0)
+        if ((sint16)mc_state.load_error == 0)
         {
             menu_load_course_tex(3);
             menu_state.screen = 1u;
@@ -3680,7 +3802,7 @@ sint32 menu_frame_loop(void)
     menu_alloc_workspace();
     menu_load_localized_data();
     menu_init();
-    w_u16(0x800B4142u, (uint16)-1);
+    menu_state.from_screen = (uint16)-1;
     menu_state.selection = 0u;
     VSync(0);
     DrawSync(0);
@@ -3693,9 +3815,9 @@ sint32 menu_frame_loop(void)
     menu_configurations[1].selection = 0u;
     menu_prepare_rec_groups();
     w_u16(0x800B411Au, 3u);
-    menu_init_hud_text();
+    text_init_hud();
     menu_state.input_enabled = 0u;
-    w_u16(0x800B6AA0u, 0u);
+    menu_state.exit_wait = 0u;
     menu_state.phase = menu_state.screen;
     sprite_reset_labels();
     menu_loop(0u);
@@ -3743,7 +3865,7 @@ sint32 menu_load_localized_data(void)
 
     FUNCTION_MARKER(0x8004D414u, "MAIN.EXE");
     game_push_checkpoint();
-    runtime_copy_guest_text(0x800D6958u, 0x800B4124u);
+    strcpy(cd_dir, "\\MENU");
     switch (menu_state.language)
     {
         case 0:
@@ -3829,7 +3951,7 @@ sint32 menu_init(void)
     render_init_recs();
     menu_dispatch_state();
     menu_prepare_rec_groups();
-    w_u16(0x800B6BEEu, UINT16_C(0xFFFF));
+    menu_assets.prev_pad_layout = UINT16_C(0xFFFF);
     return -1;
 }
 
@@ -3852,7 +3974,7 @@ sint32 menu_start_audio_bank(void)
 {
     FUNCTION_MARKER(0x8004DC0Cu, "MAIN.EXE");
     w_u16(0x800B4118u, 1u);
-    return sound_load_bank_config(0x80083478u);
+    return sound_load_bank_config();
 }
 
 sint32 menu_tex_refresh_if_needed(void)
@@ -3867,7 +3989,7 @@ sint32 menu_tex_refresh_if_needed(void)
     if (texture == (sint16)r_u16(0x800B6A7Cu))
         return texture;
     menu_load_localized_data();
-    w_u16(0x800B6BD6u, 0u);
+    menu_assets.prepared = 0u;
     menu_init();
     return menu_load_course_tex(3);
 }
@@ -3880,7 +4002,7 @@ sint32 menu_play_sound(void)
     if (voice != -1)
     {
         if (r_u16(0x800B4118u) != 0u)
-            voice_start_scaled((sint16)r_u16(0x800834B4u), voice);
+            voice_start_scaled((sint16)sound_banks.main, voice);
         menu_state.sound = UINT16_C(0xFFFF);
     }
     return -1;
@@ -3923,13 +4045,13 @@ sint32 menu_rebuild_config(sint16 selection)
     FUNCTION_MARKER(0x8004DD6Cu, "MAIN.EXE");
     menu_clear_notice();
     state = (sint16)menu_dispatch_state_jump_table(selection);
-    w_u32(0x800B4120u, 0u);
+    menu_state.state_ticks = 0u;
     menu_state.refresh = 0u;
     menu_restore(state);
     previous = (sint16)menu_state.screen;
     menu_state.screen = (uint16)state;
     w_u16(0x800B407Cu, (uint16)(state + 1));
-    w_u16(0x800B4142u, (uint16)previous);
+    menu_state.from_screen = (uint16)previous;
     menu_init();
     current_state = (sint16)menu_state.screen;
     configuration = (uint16)menu_configurations[current_state].selection;
@@ -4164,7 +4286,7 @@ sint32 menu_process_input_commands(CONTROLLER_STATE *input)
     sint32 fallback = 0;
 
     FUNCTION_MARKER(0x8004E1ACu, "MAIN.EXE");
-    blocked = (sint16)r_u16(0x800B6AA0u);
+    blocked = (sint16)menu_state.exit_wait;
     if (blocked != 0)
         return blocked;
     mode = (sint16)menu_state.screen;
@@ -4290,7 +4412,7 @@ scan_stream:
                     if (available == 0)
                         return available;
                 }
-                if ((sint16)menu_course_select.phase != 0 || (sint16)r_u16(0x800B69CAu) != 0)
+                if ((sint16)menu_course_select.phase != 0 || (sint16)menu_state.series_mode != 0)
                     break;
                 if (((sint16)menu_course_select.level == 3) < selection)
                 {
@@ -4322,7 +4444,7 @@ scan_stream:
                     if (blocked == 0)
                         return blocked;
                 }
-                if ((sint16)menu_course_select.phase != 0 || (sint16)r_u16(0x800B69CAu) != 0)
+                if ((sint16)menu_course_select.phase != 0 || (sint16)menu_state.series_mode != 0)
                     break;
                 {
                     sint16 maximum = (sint16)menu_course_select.level == 3 ? 4 : 5;
@@ -4605,11 +4727,11 @@ sint32 menu_dispatch_state(void)
     FUNCTION_MARKER(0x8004EFE8u, "MAIN.EXE");
 
     state = (sint16)menu_state.screen;
-    previous = (sint16)r_u16(0x800B4140u);
+    previous = (sint16)menu_state.prev_screen;
     switch (state)
     {
         case 1:
-            w_u16(0x800B69CAu, 0u);
+            menu_state.series_mode = 0u;
             menu_refresh_language_labels();
             break;
         case 2:
@@ -4664,7 +4786,7 @@ sint32 menu_dispatch_state(void)
             if (state != previous)
                 profile_fn_8005ad20();
             profile_fn_8005afa0();
-            if (r_u16(0x800B6B0Cu) == 0u)
+            if (menu_state.series_confirm == 0u)
             {
                 sprite_records[51].type = 0u;
                 sprite_records[52].type = 0u;
@@ -4705,7 +4827,7 @@ sint32 menu_dispatch_state(void)
             menu_scale_sprite_recs();
             break;
         case 35:
-            w_u16(0x800B69CAu, 3u);
+            menu_state.series_mode = 3u;
             profile_update_limits();
             tournament_reset_result_rows();
             break;
@@ -4754,7 +4876,7 @@ sint32 menu_dispatch_state(void)
             break;
     }
     final_state = menu_state.screen;
-    w_u16(0x800B4140u, final_state);
+    menu_state.prev_screen = final_state;
     return (sint32)final_state;
 }
 
@@ -4848,11 +4970,11 @@ sint32 menu_update_state(CONTROLLER_STATE *input)
         case 0:
             menu_state.language = (uint8)menu_state.selection;
             handled = 1;
-            if ((input->pressed & 0x40u) != 0u || r_u32(0x800B4120u) >= 2500u)
+            if ((input->pressed & 0x40u) != 0u || menu_state.state_ticks >= 2500u)
             {
-                voice_start_scaled((sint16)r_u16(0x800834B4u), 1);
+                voice_start_scaled((sint16)sound_banks.main, 1);
                 if (mc_state_is_three() != 0 || mc_poll_state() != 0)
-                    menu_state.phase = r_u16(0x800B6BD2u);
+                    menu_state.phase = mc_state.notice_screen;
                 else
                     menu_state.phase = 1u;
             }
@@ -4860,12 +4982,12 @@ sint32 menu_update_state(CONTROLLER_STATE *input)
         case 1:
             menu_boat_select.player = 0u;
             if (input->current != 0u)
-                w_u32(0x800B4120u, 0u);
-            if (r_u32(0x800B4120u) >= 1500u)
+                menu_state.state_ticks = 0u;
+            if (menu_state.state_ticks >= 1500u)
             {
                 uint8 profile_index;
 
-                w_u32(0x800D2498u, 0u);
+                game_random_seed(0u);
                 game_selection.attract = (uint8)(game_selection.attract + 1u);
                 game_selection.menu_variant = 0u;
                 game_selection.mode = 4u;
@@ -4927,12 +5049,12 @@ sint32 menu_update_state(CONTROLLER_STATE *input)
             break;
         case 16:
             handled = 1;
-            if (r_u32(0x800B4120u) >= 500u || input->current != 0u)
+            if (menu_state.state_ticks >= 500u || input->current != 0u)
                 menu_state.phase = 0u;
             break;
         case 18:
             profile_fn_8005b350(input);
-            if ((sint16)r_u16(0x800B6B0Cu) == 0)
+            if ((sint16)menu_state.series_confirm == 0)
             {
                 sprite_records[51].type = 0u;
                 sprite_records[52].type = 0u;
@@ -4956,17 +5078,17 @@ sint32 menu_update_state(CONTROLLER_STATE *input)
             name_update_wheel(input, 0u, 0u, 0u);
             break;
         case 26:
-            w_u16(0x800B69CAu, 3u);
+            menu_state.series_mode = 3u;
             game_selection.rules = 0u;
             menu_fn_80050198();
             break;
         case 27:
-            w_u16(0x800B69CAu, 0u);
+            menu_state.series_mode = 0u;
             game_selection.rules = 1u;
             menu_fn_800501b8();
             break;
         case 28:
-            w_u16(0x800B69CAu, 0u);
+            menu_state.series_mode = 0u;
             game_selection.rules = 2u;
             menu_fn_800501d8();
             break;
@@ -5031,11 +5153,11 @@ sint32 menu_update_state(CONTROLLER_STATE *input)
             }
             break;
         case 80:
-            if (r_u32(0x800B4120u) >= 250u || (input->current & 1u) != 0u)
+            if (menu_state.state_ticks >= 250u || (input->current & 1u) != 0u)
                 menu_state.phase = 81u;
             break;
         case 81:
-            if (r_u32(0x800B4120u) >= 250u || (input->current & 2u) != 0u)
+            if (menu_state.state_ticks >= 250u || (input->current & 2u) != 0u)
                 menu_state.phase = 1u;
             break;
         default:
@@ -5043,14 +5165,14 @@ sint32 menu_update_state(CONTROLLER_STATE *input)
     }
     text_hud[2].visible = 0u;
     {
-        sint16 blocker = (sint16)r_u16(0x800B6AA0u);
+        sint16 blocker = (sint16)menu_state.exit_wait;
 
-        w_u16(0x800B6A20u, 0u);
+        menu_state.pad_missing = 0u;
         if (blocker != 0)
         {
             uint16 next_blocker = (uint16)(blocker - 1);
 
-            w_u16(0x800B6AA0u, next_blocker);
+            menu_state.exit_wait = next_blocker;
             if (next_blocker == 0u)
                 menu_state.running = 0u;
             return (sint32)((uint32)next_blocker << 16);
@@ -5058,13 +5180,13 @@ sint32 menu_update_state(CONTROLLER_STATE *input)
     }
     if ((sint16)input_controllers[0].type == -1)
     {
-        menu_show_pause();
-        w_u16(0x800B6A20u, 1u);
+        text_show_pause(menu_state.language);
+        menu_state.pad_missing = 1u;
     }
     if ((sint16)input_controllers[1].type == -1 && state != 1 && (uint8)game_selection.players >= 2u && handled == 0)
     {
-        menu_show_pause();
-        w_u16(0x800B6A20u, 1u);
+        text_show_pause(menu_state.language);
+        menu_state.pad_missing = 1u;
     }
     return 1;
 }
@@ -5276,7 +5398,7 @@ sint32 menu_update_audio_volume(CONTROLLER_STATE *input)
         }
         if (changed != 0)
         {
-            w_u16(0x80083494u, sound_options.music);
+            sound_mix.music = sound_options.music;
             voice_set_volume(7, (sint16)(sound_options.music << 8));
         }
     }
@@ -5302,9 +5424,9 @@ sint32 menu_update_audio_volume(CONTROLLER_STATE *input)
         }
         if (changed != 0)
         {
-            w_u16(0x80083490u, sound_options.effects);
-            sound_fn_8007741c(0, 0x800u);
-            voice_start_scaled((sint16)r_u16(0x800834B4u), 11);
+            sound_mix.effects = sound_options.effects;
+            SpuSetKey(SPU_OFF, 0x800u);
+            voice_start_scaled((sint16)sound_banks.main, 11);
         }
     }
     return menu_scale_sprite_recs();
@@ -5549,7 +5671,7 @@ sint32 menu_fn_80052830(CONTROLLER_STATE *input)
 sint32 menu_fn_80052aa4(void)
 {
     FUNCTION_MARKER(0x80052AA4u, "MAIN.EXE");
-    w_u16(0x800B4232u, 0u);
+    input_calib.released = 0u;
     return menu_fn_80052ac8();
 }
 
@@ -5567,13 +5689,13 @@ sint32 menu_fn_80052ac8(void)
         display_queue_line_segment(256, 128, 256, 124);
         display_queue_line_segment(256, 142, 256, 146);
         input_calibrations[selected].steer_center = (uint16)((uint16)value);
-        if (r_u16(0x800B4232u) != 0u && (controller->pressed & 0x800u) != 0u)
+        if (input_calib.released != 0u && (controller->pressed & 0x800u) != 0u)
         {
             menu_state.sound = 1u;
             menu_state.phase = 40u;
         }
         if (controller->pressed == 0u)
-            w_u16(0x800B4232u, 1u);
+            input_calib.released = 1u;
         return 1;
     }
     menu_state.phase = 2u;
@@ -5583,8 +5705,8 @@ sint32 menu_fn_80052ac8(void)
 sint32 menu_fn_80052c00(void)
 {
     FUNCTION_MARKER(0x80052C00u, "MAIN.EXE");
-    w_u16(0x800B4232u, 0u);
-    w_u16(0x800B4234u, 0u);
+    input_calib.released = 0u;
+    input_calib.peak = 0u;
     return menu_fn_80052c28();
 }
 
@@ -5612,14 +5734,14 @@ sint32 menu_fn_80052c28(void)
         if (400 * (sint16)value / 252 < 9)
         {
             sint32 saved = (sint16)input_calibrations[selected].steer_range >> 6;
-            w_u16(0x800B4234u, 0u);
+            input_calib.peak = 0u;
             value = saved < 0 ? -saved : saved;
         }
-        else if ((sint16)r_u16(0x800B4234u) >= (sint16)value)
-            value = (sint16)r_u16(0x800B4234u);
+        else if ((sint16)input_calib.peak >= (sint16)value)
+            value = (sint16)input_calib.peak;
         else
         {
-            w_u16(0x800B4234u, (uint16)value);
+            input_calib.peak = (uint16)value;
             input_calibrations[selected].steer_range = (uint16)((uint16)(32 * (raw < 0 ? -raw : raw)));
         }
         percent = 400 * (sint16)value / 252;
@@ -5636,13 +5758,13 @@ sint32 menu_fn_80052c28(void)
             text[1u] = (uint8)(percent % 100 / 10 + 48);
             text[2u] = (uint8)(percent % 10 + 48);
         }
-        if (r_u16(0x800B4232u) != 0u && (controller->pressed & 0x800u) != 0u)
+        if (input_calib.released != 0u && (controller->pressed & 0x800u) != 0u)
         {
             menu_state.sound = 1u;
             menu_state.phase = 41u;
         }
         if (controller->pressed == 0u)
-            w_u16(0x800B4232u, 1u);
+            input_calib.released = 1u;
         return 1;
     }
     menu_state.phase = 2u;
@@ -5668,13 +5790,13 @@ sint32 menu_fn_80052f58(void)
         if (200 * value / 255 < 9)
         {
             value = (sint16)input_calibrations[selected].accel_range >> 5;
-            w_u16(0x800B4234u, 0u);
+            input_calib.peak = 0u;
         }
-        else if ((sint16)r_u16(0x800B4234u) >= value)
-            value = (sint16)r_u16(0x800B4234u);
+        else if ((sint16)input_calib.peak >= value)
+            value = (sint16)input_calib.peak;
         else
         {
-            w_u16(0x800B4234u, (uint16)value);
+            input_calib.peak = (uint16)value;
             input_calibrations[selected].accel_range = (uint16)((uint16)(16u * raw));
         }
         percent = 200 * value / 255;
@@ -5691,13 +5813,13 @@ sint32 menu_fn_80052f58(void)
             text[1u] = (uint8)(percent % 100 / 10 + 48);
             text[2u] = (uint8)(percent % 10 + 48);
         }
-        if (r_u16(0x800B4232u) != 0u && (controller->pressed & 0x800u) != 0u)
+        if (input_calib.released != 0u && (controller->pressed & 0x800u) != 0u)
         {
             menu_state.sound = 1u;
             menu_state.phase = 42u;
         }
         if (controller->pressed == 0u)
-            w_u16(0x800B4232u, 1u);
+            input_calib.released = 1u;
         return 1;
     }
     menu_state.phase = 2u;
@@ -5724,13 +5846,13 @@ sint32 menu_fn_800531e8(void)
         if (200 * value / 255 < 9)
         {
             value = (sint16)input_calibrations[selected].brake_range >> 5;
-            w_u16(0x800B4234u, 0u);
+            input_calib.peak = 0u;
         }
-        else if ((sint16)r_u16(0x800B4234u) >= value)
-            value = (sint16)r_u16(0x800B4234u);
+        else if ((sint16)input_calib.peak >= value)
+            value = (sint16)input_calib.peak;
         else
         {
-            w_u16(0x800B4234u, (uint16)value);
+            input_calib.peak = (uint16)value;
             input_calibrations[selected].brake_range = (uint16)((uint16)(16u * raw));
         }
         percent = 200 * value / 255;
@@ -5749,13 +5871,13 @@ sint32 menu_fn_800531e8(void)
             text[1u] = (uint8)(percent % 100 / 10 + 48);
             text[2u] = (uint8)(percent % 10 + 48);
         }
-        if (r_u16(0x800B4232u) != 0u && (controller->pressed & 0x800u) != 0u)
+        if (input_calib.released != 0u && (controller->pressed & 0x800u) != 0u)
         {
             menu_state.sound = 1u;
             menu_state.phase = 2u;
         }
         if (controller->pressed == 0u)
-            w_u16(0x800B4232u, 1u);
+            input_calib.released = 1u;
         return 1;
     }
     menu_state.phase = 2u;
@@ -5809,22 +5931,22 @@ void menu_dispatch_frame(uint32 unused1, uint32 second, uint32 third, uint32 fou
     FUNCTION_MARKER(0x80063BC4u, "MAIN.EXE");
     menu_notice.value = 0u;
     w_u16(0x800B4116u, 0u);
-    if ((sint16)race_selection.special != 0 && r_u32(0x80083484u) != 9u)
-        profile_selection.menu_slot = r_u16(0x800B6BF6u);
+    if ((sint16)race_selection.special != 0 && race_cfg.mode != 9u)
+        profile_selection.menu_slot = profile_selection.saved.menu_slot;
     race_selection.special = 0u;
     if (game_selection.ready != 0u)
     {
-        sound_options.music = r_u16(0x80083494u);
-        sound_options.effects = r_u16(0x80083490u);
+        sound_options.music = sound_mix.music;
+        sound_options.effects = sound_mix.effects;
         state = (sint16)game_selection.mode;
         if (state == 2)
             results_enter_best_times_store(2u, second, third, fourth);
-        else if (r_u32(0x80083484u) == 9u)
+        else if (race_cfg.mode == 9u)
             profile_reset_menu_state();
         else if (state == 6)
             profile_dispatch_mode_result_handler(6u, second, third, fourth);
         else if (state == 4)
-            menu_save_select_state();
+            profile_restore_grid();
         else if (game_selection.menu_variant != 0u)
             results_handle_2p();
         else
@@ -5889,7 +6011,7 @@ sint32 menu_build_player_mode_table(void)
                 race_participants[1].variant = 0u;
             }
         }
-        race_participants[0].boat = name_player_name_matches(0, 0x800B427Cu) != 0 ? 8u : race_selection.boats[(sint32)selected];
+        race_participants[0].boat = name_matches(0, name_code_hurr) != 0 ? 8u : race_selection.boats[(sint32)selected];
         race_participants[0].mode = 2u;
         race_participants[0].variant = 0u;
         for (index = 1; index < 16; ++index)
@@ -5910,10 +6032,10 @@ sint32 menu_build_player_mode_table(void)
     }
     race_participants[0].mode = 2u;
     race_participants[0].variant = 0u;
-    first_index = name_player_name_matches(0, 0x800B427Cu) != 0 ? 8 : race_selection.boats[0];
+    first_index = name_matches(0, name_code_hurr) != 0 ? 8 : race_selection.boats[0];
     race_participants[0].boat = (uint8)first_index;
     race_participants[1].mode = 3u;
-    second_index = name_player_name_matches(1, 0x800B427Cu) != 0 ? 8 : race_selection.boats[1];
+    second_index = name_matches(1, name_code_hurr) != 0 ? 8 : race_selection.boats[1];
     race_participants[1].boat = (uint8)second_index;
     race_participants[1].variant = race_participants[0].boat == race_participants[1].boat;
     if (state == 6 && (sint16)game_selection.rules == 2)
@@ -5923,9 +6045,9 @@ sint32 menu_build_player_mode_table(void)
         second_index = tournament_matches.opponents[row];
         race_participants[0].mode = game_selection.rules;
         race_participants[0].variant = 0u;
-        race_participants[0].boat = name_player_name_matches(first_index, 0x800B427Cu) != 0 ? 8u : race_selection.boats[(sint32)first_index];
+        race_participants[0].boat = name_matches(first_index, name_code_hurr) != 0 ? 8u : race_selection.boats[(sint32)first_index];
         race_participants[1].mode = 3u;
-        race_participants[1].boat = name_player_name_matches(second_index, 0x800B427Cu) != 0 ? 8u : race_selection.boats[(sint32)second_index];
+        race_participants[1].boat = name_matches(second_index, name_code_hurr) != 0 ? 8u : race_selection.boats[(sint32)second_index];
         race_participants[1].variant = race_participants[0].boat == race_participants[1].boat;
     }
     if (game_options.players_only != 0u)
@@ -5965,6 +6087,14 @@ void menu_fn_8006776c(void)
     FUNCTION_MARKER(0x8006776Cu, "MAIN.EXE");
 }
 
+static void menu_update_pad_delay(sint32 idx)
+{
+    if ((sint16)input_controllers[idx].type == -1)
+        menu_pad_ticks[idx] = 0u;
+    else if ((sint32)menu_pad_ticks[idx] < 25)
+        menu_pad_ticks[idx] += 1u;
+}
+
 int menu_run_iteration(CONTROLLER_STATE *input, uint8 *warmup)
 {
     CONTROLLER_STATE *active_input = &input_controllers[0];
@@ -5973,7 +6103,7 @@ int menu_run_iteration(CONTROLLER_STATE *input, uint8 *warmup)
     // Host quit boundary for original loop at 0x8004D1A8
     if (xport_isquit())
         return 0;
-    global_fn_8006e9d8();
+    game_random_next();
     configuration = (sint16)menu_state.screen;
     if ((configuration == 5 && (sint16)menu_boat_select.player == 1) || (configuration == 25 && (sint16)name_editor.player_slot == 1))
     {
@@ -5982,25 +6112,19 @@ int menu_run_iteration(CONTROLLER_STATE *input, uint8 *warmup)
     }
     menu_play_sound();
     input_update_states();
-    if ((sint16)input_controllers[0].type == -1)
-        w_u32(0x800B6C18u, 0u);
-    else if ((sint32)r_u32(0x800B6C18u) < 25)
-        xport_update_u32(0x800B6C18u, XPORT_MEMORY_UPDATE_ADD, 1u);
-    if ((sint16)input_controllers[1].type == -1)
-        w_u32(0x800B6C1Cu, 0u);
-    else if ((sint32)r_u32(0x800B6C1Cu) < 25)
-        xport_update_u32(0x800B6C1Cu, XPORT_MEMORY_UPDATE_ADD, 1u);
-    if (r_u32(0x800B6C18u) != 25u)
+    menu_update_pad_delay(0);
+    menu_update_pad_delay(1);
+    if (menu_pad_ticks[0] != 25u)
     {
         input_controllers[0].pressed = 0u;
         input_controllers[0].current = 0u;
     }
-    if (r_u32(0x800B6C1Cu) != 25u)
+    if (menu_pad_ticks[1] != 25u)
     {
         input_controllers[1].pressed = 0u;
         input_controllers[1].current = 0u;
     }
-    if (r_u16(0x800B6A20u) != 0u)
+    if (menu_state.pad_missing != 0u)
     {
         input_controllers[0].pressed = 0u;
         input_controllers[0].current = 0u;
@@ -6047,8 +6171,7 @@ sint32 menu_after_entry(void)
     mc_close_events();
     game_pop_checkpoint();
     result = (sint8)r_u8(0x800B4080u);
-    w_u8(0x800D6958u, (uint8)result);
-    w_u8(0x800D6959u, r_u8(0x800B4081u));
+    strcpy(cd_dir, "\\");
     return result;
 }
 
@@ -6056,37 +6179,37 @@ sint32 menu_after_outer(void)
 {
     sint32 state;
     sint32 result;
-    w_u32(0x80083478u, game_selection.menu_variant + 1u);
+    race_cfg.players = (uint32)(game_selection.menu_variant + 1u);
     if (game_options.split_layout == 0u)
-        w_u32(0x80083488u, 1u);
+        race_cfg.layout = (uint32)(1u);
     else if (game_options.split_layout == 1u)
-        w_u32(0x80083488u, 2u);
+        race_cfg.layout = (uint32)(2u);
     result = race_selection.boats[0];
-    w_u32(0x8008347Cu, race_selection.boats[0]);
-    w_u32(0x80083480u, race_selection.boats[1]);
+    race_cfg.boats[0] = (uint32)(race_selection.boats[0]);
+    race_cfg.boats[1] = (uint32)(race_selection.boats[1]);
     state = (sint16)game_selection.mode;
     switch (state)
     {
         case 0:
         case 1:
         case 6:
-            w_u32(0x80083484u, 3u);
+            race_cfg.mode = (uint32)(3u);
             result = 3;
             break;
         case 2:
-            w_u32(0x80083484u, 4u);
+            race_cfg.mode = (uint32)(4u);
             result = 4;
             break;
         case 3:
-            w_u32(0x80083484u, 8u);
+            race_cfg.mode = (uint32)(8u);
             result = 8;
             break;
         case 4:
-            w_u32(0x80083484u, 5u);
-            result = race_format_time(0x800F2578u, 9000);
+            race_cfg.mode = (uint32)(5u);
+            result = time_format(&race_end_time, 9000);
             break;
         case 7:
-            w_u32(0x80083484u, 9u);
+            race_cfg.mode = (uint32)(9u);
             result = 9;
             break;
         default:
@@ -6094,7 +6217,7 @@ sint32 menu_after_outer(void)
             break;
     }
     game_selection.selection = 0u;
-    w_u16(0x800B699Cu, 0u);
+    result_state.lap_offset = 0u;
     return result;
 }
 

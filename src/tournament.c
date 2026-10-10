@@ -33,6 +33,23 @@ TOURNAMENT_TIME tournament_times[5];
 // Championship state from MAIN.EXE 800E1A8A
 TOURNAMENT_CHAMP_STATE tournament_champ;
 
+typedef struct
+{
+    sint16 ids[16];
+    uint16 offset;
+} TOURNAMENT_TABLE;
+
+static TOURNAMENT_TABLE tournament_table;
+
+typedef struct
+{
+    uint8 player;
+    uint8 lower_total;
+} TOURNAMENT_RESULT;
+
+static TOURNAMENT_RESULT tournament_result;
+static const char tournament_pending_name[5] = "....";
+
 // Extra native rounds have no representation in the legacy save file
 void tournament_clear_extra_rounds(void)
 {
@@ -261,7 +278,7 @@ sint32 tournament_enter_race(void)
         name_copy_player_name_bytes(tournament_matches.opponents[row], hud_text.names[1]);
     }
     game_selection.event_arg = 0u;
-    w_u16(0x800B6AA0u, 5u);
+    menu_state.exit_wait = 5u;
     menu_state.sound = 1u;
     text_set_hud_visible(0, 1);
     menu_state.phase = 21u;
@@ -330,8 +347,8 @@ sint32 tournament_grid_complete(void)
     game_selection.event = 49u;
     if (lower_total != 0)
     {
-        w_u8(0x800B69E8u, (uint8)selected);
-        w_u8(0x800B69BEu, 1u);
+        tournament_result.player = (uint8)selected;
+        tournament_result.lower_total = 1u;
     }
     else
     {
@@ -341,8 +358,8 @@ sint32 tournament_grid_complete(void)
                 game_selection.event = 1u;
         }
         else
-            w_u8(0x800B69E8u, (uint8)selected);
-        w_u8(0x800B69BEu, 0u);
+            tournament_result.player = (uint8)selected;
+        tournament_result.lower_total = 0u;
     }
     game_selection.event_arg = 2u;
     return 2;
@@ -351,7 +368,7 @@ sint32 tournament_grid_complete(void)
 sint32 tournament_refresh_player_name(void)
 {
     FUNCTION_MARKER(0x8006571Cu, "MAIN.EXE");
-    return name_copy_player_name_bytes(r_u8(0x800B69E8u), text_menu[2].text);
+    return name_copy_player_name_bytes(tournament_result.player, text_menu[2].text);
 }
 
 sint32 tournament_record_result(uint32 unused1, uint32 unused2, uint32 unused3, uint32 unused4)
@@ -459,7 +476,7 @@ sint32 tournament_refresh_matches(void)
         if (tournament_matches.match < index)
         {
             for (character = 0; character < 5; ++character)
-                output[(uint32)character] = r_u8(0x800B4274u + (uint32)character);
+                output[(uint32)character] = tournament_pending_name[(uint32)character];
         }
         else
             name_copy_player_name_bytes(tournament_matches.winners[index], output);
@@ -724,17 +741,17 @@ sint32 tournament_refresh_table(void)
     }
     for (index = 0; index < 3; ++index)
         menu[index].visible = 0u;
-    if ((sint16)r_u16(0x800B69CAu) == 1)
+    if ((sint16)menu_state.series_mode == 1)
     {
         menu[0].visible = 1u;
         rows = 8;
     }
-    else if ((sint16)r_u16(0x800B69CAu) == 2)
+    else if ((sint16)menu_state.series_mode == 2)
     {
         menu[1].visible = 1u;
         rows = 8;
     }
-    else if ((sint16)r_u16(0x800B69CAu) == 3)
+    else if ((sint16)menu_state.series_mode == 3)
     {
         menu[2].visible = 1u;
         rows = (uint8)game_selection.players;
@@ -742,12 +759,12 @@ sint32 tournament_refresh_table(void)
     top = (sint16)(7 * (8 - rows) + 70);
     for (index = 0; index < rows; ++index)
     {
-        sint16 source_index = (sint16)r_u16(0x800B6AF0u) + (sint16)index;
+        sint16 source_index = (sint16)tournament_table.offset + (sint16)index;
         sint16 y = (sint16)(top + 14 * index);
         TEXT_RECORD *left = &menu[source_index + 6];
         TEXT_RECORD *right = &menu[source_index + 38];
         TEXT_RECORD *value_text = &menu[source_index + 22];
-        sint16 value = (sint16)r_u16(0x800DDCF8u + 2u * (uint32)source_index);
+        sint16 value = tournament_table.ids[source_index];
         left[0].visible = 1u;
         left[0].x = 110u;
         left[0].y = (uint16)y;
@@ -803,7 +820,7 @@ sint32 tournament_init_table(void)
     TEXT_RECORD *prims = text_hud;
 
     FUNCTION_MARKER(0x80066B50u, "MAIN.EXE");
-    w_u16(0x800B6AF0u, 0u);
+    tournament_table.offset = 0u;
     for (first = 0; first < (uint8)game_selection.players; ++first)
     {
         TEXT_RECORD *primitive = &prims[first];
@@ -833,13 +850,13 @@ sint32 tournament_init_table(void)
         }
     }
     for (first = 0; first < (uint8)game_selection.players; ++first)
-        w_u16(0x800DDCF8u + 2u * (uint32)first, (uint16)identifiers[first]);
+        tournament_table.ids[first] = identifiers[first];
     return tournament_refresh_table();
 }
 
 sint32 tournament_update_mode_input(CONTROLLER_STATE *input)
 {
-    sint16 mode = (sint16)r_u16(0x800B69CAu);
+    sint16 mode = (sint16)menu_state.series_mode;
 
     FUNCTION_MARKER(0x80066D58u, "MAIN.EXE");
     if (menu_state.input_enabled != 0u && mode == 3)

@@ -1,237 +1,195 @@
-#include "display.h"
-#include "vehicle_select.h"
 #include "mdec.h"
-#include "arena.h"
 #include "cd.h"
-#include "global.h"
+#include "display.h"
+#include "input.h"
+#include "sound.h"
+#include "psx_gpu.h"
+#include "psx_press.h"
+#include "psx_stream.h"
+#include "psx_spu.h"
 #include "xport_trace.h"
 #include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
 
-static sint32 mdec_poll_queue(uint32 *result, uint32 *record)
+#define MDEC_RING_SECTORS 64u
+#define MDEC_VLC_BYTES 132096u
+
+static sint32 mdec_stream_end;
+
+static void mdec_end_stream(void)
 {
-    uint32 queue_index = r_u32(0x800F4264u);
-    uint32 entry = r_u32(0x800FF748u) + 32u * queue_index;
-    if (r_u16(entry) == 1u)
+    mdec_stream_end = 1;
+}
+
+static sint32 mdec_get_frame(uint32 **src, StHEADER **header, sint32 (*skip)(void), sint32 *skipping)
+{
+    sint32 waits = 0;
+    uint32 *record;
+
+    while (StGetNext(src, &record) != 0u)
     {
-        w_u32(0x800F4264u, 0u);
-        if (r_u32(0x800FF2F4u) != 0u)
-            w_u16(entry, 0u);
-        queue_index = r_u32(0x800F4264u);
-        entry = r_u32(0x800FF748u) + 32u * queue_index;
+        sint32 progress = stream_pump();
+        if (mdec_stream_end)
+            return 1;
+        if (progress < 0)
+            return 3;
+        if (progress == 0)
+        {
+            VSync(0);
+            input_update_states();
+            if (!*skipping && skip && skip())
+                *skipping = 1;
+            if (++waits == 250)
+                return 3;
+        }
     }
-    if (r_u16(entry) != 2u)
-        return 1;
-    w_u16(entry, 4u);
-    *result = r_u32(0x800FF748u) + 32u * r_u32(0x80101814u) + 2016u * queue_index;
-    *record = entry;
+    *header = (StHEADER *)record;
     return 0;
 }
 
-static sint32 mdec_release_queue(uint32 request)
+static sint32 mdec_draw_frame(const MDEC_MOVIE *movie, uint32 *src, uint32 *vlc, uint32 *slice, sint32 page)
 {
-    sint32 queue_index = ((sint32)request - (sint32)(r_u32(0x800FF748u) + 32u * r_u32(0x80101814u))) / 2016;
-    uint32 entry = r_u32(0x800FF748u) + 32u * (uint32)queue_index;
-    sint32 count;
-    sint32 index;
+    PSX_RECT rect;
+    sint32 padded_h = (movie->height + 15) & ~15;
+    sint32 slice_w = movie->rgb24 ? 24 : 16;
+    sint32 words = slice_w * padded_h / 2;
+    sint32 x;
 
-    if (r_u16(entry) != 4u)
-        return 1;
-    count = (sint16)r_u16(entry + 6u);
-    for (index = 0; index < count; ++index)
-        w_u16(r_u32(0x800FF748u) + 32u * (uint32)(queue_index + index), 0u);
-    w_u32(0x800F4264u, (uint32)(queue_index + count));
-    return 0;
+    // Bound the SDK output command before decoding into the native VLC buffer
+    if (((src[0] & 0xFFFFu) + 1u) * sizeof(uint32) > MDEC_VLC_BYTES)
+        return 0;
+    if (DecDCTvlc(src, vlc) != 0)
+        return 0;
+    DecDCTin(vlc, movie->rgb24 ? 3 : 2);
+    setRECT(&rect, movie->rgb24 ? movie->x * 3 / 2 : movie->x,
+            movie->y + 8 + page * 256, slice_w, padded_h);
+    for (x = 0; x < movie->width; x += 16)
+    {
+        DecDCTout(slice, words);
+        if (DecDCToutSync(1) != 0)
+            return 0;
+        LoadImagePSX(&rect, slice);
+        rect.x += (sint16)slice_w;
+    }
+    return 1;
 }
 
-sint32 mdec_stream_play(uint32 desc, sint32 (*callback)(void), sint32 mode)
+sint32 mdec_stream_play(const MDEC_MOVIE *movie, sint32 (*skip)(void), sint32 mode)
 {
-    uint32 request = 0x800FF6E0u;
-    sint32 retries;
+    CdlLOC pos;
+    char path[256];
+    size_t len;
+    DISPENV disp, saved = *display_disp_env(display_state.buffer);
+    SpuCommonAttr attr = {0};
+    DecDCTCallback prev_in, prev_out;
+    uint32 *ring, *vlc, *slice, *src = NULL;
+    StHEADER *header;
+    sint32 result = 3, page = 0, skipping = 0;
+    uint32 frames = 0;
 
     FUNCTION_MARKER(0x80062810u, "MAIN.EXE");
-    if (r_u32(desc) == 0u)
+    if (!movie || !movie->path || movie->width == 0 || movie->width > 512 ||
+        movie->height == 0 || movie->height > 240 || (movie->width & 15) != 0)
         return 3;
-    mdec_init_stream(desc);
-    if (cd_retry_read_sequence(request) == 0)
+    if (snprintf(path, sizeof(path), "DATA%s", movie->path) < 0 || strlen(movie->path) + 4u >= sizeof(path))
+        return 3;
+    for (len = 0; path[len]; ++len)
+        if (path[len] == '\\')
+            path[len] = '/';
+    if (strchr(path, ';'))
+        *strchr(path, ';') = 0;
+    if (!cd_mount_stream_file(path))
+        return 3;
+    CdIntToPos(0, &pos);
+    ring = malloc(MDEC_RING_SECTORS * 2048u);
+    vlc = malloc(MDEC_VLC_BYTES);
+    slice = malloc((movie->rgb24 ? 48u : 32u) * (uint32)((movie->height + 15) & ~15));
+    if (!ring || !vlc || !slice)
     {
-        mdec_stop_stream(desc);
+        free(slice);
+        free(vlc);
+        free(ring);
         return 3;
     }
-    for (retries = 0; retries < 5; ++retries)
-    {
-        if (mdec_poll_stream_request() != 0)
-            break;
-    }
-    if (retries == 5)
-    {
-        mdec_stop_stream(desc);
-        return 3;
-    }
-    mdec_decode_request(request);
-    mdec_stop_stream(desc);
-    return r_u16(0x800CD598u) != 0u ? 1 : 0;
-}
-
-sint32 mdec_init_stream(uint32 desc)
-{
-    sint16 width = (sint16)r_u16(desc + 8u);
-    sint16 first_y = (sint16)r_u16(desc + 10u);
-    sint16 second_y = (sint16)r_u16(desc + 12u);
-    sint16 third_y = (sint16)r_u16(desc + 14u);
-    sint16 height = (sint16)r_u16(desc + 16u);
-    uint32 size;
-
-    FUNCTION_MARKER(0x80062C14u, "MAIN.EXE");
-    w_u32(0x800B6918u, r_u32(0x800A12A0u));
-    global_fn_80068900(1u);
-    w_u16(0x800CD568u, r_u16(desc + 4u));
-    w_u16(0x800CD56Au, (uint16)width);
-    w_u16(0x800CD56Cu, (uint16)first_y);
-    w_u16(0x800CD56Eu, (uint16)(second_y + 8));
-    w_u16(0x800CD570u, (uint16)third_y);
-    w_u16(0x800CD572u, (uint16)height);
-    w_u32(0x800CD574u, r_u32(desc + 20u));
-    w_u16(0x800CD578u, r_u16(desc + 28u));
-    w_u32(0x800CD57Cu, 0u);
-    w_u16(0x800CD598u, 0u);
-    w_u16(0x800CD59Au, 0u);
-    w_u16(0x800CD59Cu, 0u);
-    w_u16(0x800CD59Eu, 0u);
-    w_u16(0x800CD5A0u, 0u);
+    prev_in = DecDCTinCallback(NULL);
+    prev_out = DecDCToutCallback(NULL);
+    DecDCTReset(0);
+    DecDCTvlcSize(0);
+    StSetRing(ring, MDEC_RING_SECTORS);
+    mdec_stream_end = 0;
+    StSetStream(movie->rgb24, 5u, movie->frames + 1u, NULL, mdec_end_stream);
+    stream_set_read_mode(0xC0u);
     ResetGraph(0);
-    w_u16(0x800CD5BCu, 0u);
-    w_u16(0x800CD5BEu, 18u);
-    w_u16(0x800CD5C0u, 0u);
-    w_u16(0x800CD5C2u, 256u);
-    w_u16(0x800CD5D0u, 0u);
-    w_u16(0x800CD5D2u, 18u);
-    w_u16(0x800CD5D4u, 0u);
-    w_u16(0x800CD5D6u, 256u);
-    w_u8(0x800CD5D9u, r_u16(desc + 4u) == 1u);
-    w_u8(0x800CD5C5u, r_u8(0x800CD5D9u));
-    if (height == 240)
+    display_clear_quadrants();
+    attr.mask = SPU_COMMON_CDVOLL | SPU_COMMON_CDVOLR | SPU_COMMON_CDMIX;
+    attr.cd.volume.left = attr.cd.volume.right = (sint16)(movie->volume << 8);
+    attr.cd.mix = SPU_ON;
+    SpuSetCommonAttr(&attr);
+    if (!CdControlB(CdlSeekL, (uint8 *)&pos, NULL) || !CdRead2(0xC0))
+        goto stop;
+    for (;;)
     {
-        display_clear_page_region(0, 0, 240, 512, 16, 0u, 0u, 0u);
-        display_clear_page_region(1, 0, 240, 512, 16, 0u, 0u, 0u);
-    }
-    w_u16(0x800CD580u, (uint16)mdec_scale_output_width((uint16)first_y));
-    w_u16(0x800CD582u, (uint16)(second_y + 8));
-    w_u16(0x800CD584u, (uint16)mdec_scale_output_width((uint16)third_y));
-    w_u16(0x800CD586u, (uint16)height);
-    w_u16(0x800CD588u, (uint16)mdec_scale_output_width((uint16)first_y));
-    w_u16(0x800CD58Au, (uint16)(second_y + 264));
-    w_u16(0x800CD58Cu, (uint16)mdec_scale_output_width((uint16)third_y));
-    w_u16(0x800CD58Eu, (uint16)height);
-    w_u16(0x800CD594u, (uint16)mdec_scale_output_width(16u));
-    size = r_u32(desc + 24u) != 0u ? r_u32(desc + 24u) : 132096u;
-    w_u32(0x800CD5A4u, arena_alloc_aligned(size));
-    w_u32(0x800CD5A8u, arena_alloc_aligned(size));
-    size = (r_u16(0x800CD568u) != 0u ? 48u : 32u) * (uint32)(sint32)height;
-    w_u32(0x800CD5ACu, arena_alloc_aligned(size));
-    w_u32(0x800CD5B0u, arena_alloc_aligned(size));
-    return 0;
-}
-
-sint32 mdec_stop_stream(uint32 desc)
-{
-    sint32 result = 512;
-
-    FUNCTION_MARKER(0x80063074u, "MAIN.EXE");
-    cd_clear_data_cbs();
-    cd_adjust_audio_volume(0u);
-    CdControlB(CdlStop, 0, 0);
-    w_u32(0x800A12A0u, r_u32(0x800B6918u));
-    if (r_u16(desc + 14u) == 512u)
-    {
-        result = r_u16(0x800CD568u);
+        uint32 frame;
+        result = mdec_get_frame(&src, &header, skip, &skipping);
         if (result != 0)
-            result = vehicle_select_fn_800630f8();
-    }
-    return result;
-}
-
-sint32 mdec_poll_stream_request(void)
-{
-    uint32 result = 0u;
-    uint32 record = 0u;
-    uint32 attempts = 0x800000u;
-    uint32 value;
-
-    FUNCTION_MARKER(0x8006321Cu, "MAIN.EXE");
-    do
-    {
-        --attempts;
-        if (mdec_poll_queue(&result, &record) == 0)
             break;
-    } while (attempts != 0u);
-    if (attempts == 0u)
-        return 0;
-    xport_update_u32(0x800CD57Cu, XPORT_MEMORY_UPDATE_ADD, 1u);
-    value = r_u32(record + 8u);
-    if (r_u32(0x800CD574u) - 20u < value)
-        w_u32(0x800B4268u, 1u);
-    if (r_u32(0x800CD574u) < value || value < r_u32(0x800CD57Cu) || r_u16(record + 16u) != r_u16(0x800CD570u) || r_u16(record + 18u) != r_u16(0x800CD572u))
-        w_u16(0x800CD598u, 1u);
-    return (sint32)result;
-}
-
-sint32 mdec_decode_request(uint32 request)
-{
-    sint32 result = 0;
-
-    FUNCTION_MARKER(0x80063320u, "MAIN.EXE");
-    if (request != 0u)
-    {
-        xport_update_u16(0x800CD59Eu, XPORT_MEMORY_UPDATE_XOR, 1u);
-        result = mdec_release_queue(request);
+        ++frames;
+        frame = header->frameCount;
+        if (header->width != movie->width || header->height != movie->height ||
+            frame < frames || frame > movie->frames)
+        {
+            result = 1;
+            StFreeRing(src);
+            src = NULL;
+            break;
+        }
+        if (!mdec_draw_frame(movie, src, vlc, slice, page))
+        {
+            result = 3;
+            StFreeRing(src);
+            src = NULL;
+            break;
+        }
+        StFreeRing(src);
+        src = NULL;
+        if (frames == 1u && mode >= 5)
+            sound_start_special_voice(12);
+        input_update_states();
+        if (!skipping && skip)
+            skipping = skip() != 0;
+        if ((movie->frames - 20u < frame && (uint32)(mode - 1) < 4u) || skipping)
+            result = cd_adjust_audio_volume(1u);
+        SetDefDispEnv(&disp, 0, page * 256, movie->screen_width, 256);
+        disp.screen.y = 18;
+        disp.screen.h = 256;
+        disp.isrgb24 = movie->rgb24 != 0;
+        DrawSync(0);
+        VSync(0);
+        PutDispEnv(&disp);
+        SetDispMask(1);
+        gpu_present();
+        page ^= 1;
+        if (frame == movie->frames)
+            result = 1;
+        if (result != 0)
+            break;
     }
+stop:
+    if (src)
+        StFreeRing(src);
+    StUnSetRing();
+    StSetRing(NULL, 0u);
+    CdControlB(CdlStop, NULL, NULL);
+    DecDCTReset(1);
+    DecDCTinCallback(prev_in);
+    DecDCToutCallback(prev_out);
+    cd_adjust_audio_volume(0u);
+    if (movie->width == 512 && movie->rgb24)
+        display_clear_quadrants();
+    PutDispEnv(&saved);
+    free(slice);
+    free(vlc);
+    free(ring);
     return result;
-}
-
-sint32 mdec_wait_output(void)
-{
-    uint32 attempts = 0x7FFFFFu;
-    uint32 slot;
-    sint32 result;
-
-    FUNCTION_MARKER(0x80063388u, "MAIN.EXE");
-    while (r_u16(0x800CD59Au) == 0u && attempts != 0u)
-        --attempts;
-    w_u16(0x800CD59Au, 0u);
-    xport_update_u16(0x800CD59Cu, XPORT_MEMORY_UPDATE_XOR, 1u);
-    slot = 0x800CD580u + 8u * r_u16(0x800CD59Cu);
-    w_u16(0x800CD590u, r_u16(slot));
-    result = r_u16(slot + 2u);
-    w_u16(0x800CD592u, (uint16)result);
-    return result;
-}
-
-sint32 mdec_get_output_buf_size(void)
-{
-    sint32 groups = ((sint32)r_u16(0x800CD572u) + 15) >> 4;
-
-    FUNCTION_MARKER(0x800634E4u, "MAIN.EXE");
-    return groups * (r_u16(0x800CD568u) != 0u ? 192 : 128);
-}
-
-sint32 mdec_scale_output_width(uint16 value)
-{
-    FUNCTION_MARKER(0x80063554u, "MAIN.EXE");
-    if (r_u16(0x800CD568u) != 0u)
-        return (sint32)(uint16)((3u * value) >> 1);
-    return value;
-}
-
-sint32 mdec_get_output_depth(void)
-{
-    FUNCTION_MARKER(0x8006358Cu, "MAIN.EXE");
-    return r_u16(0x800CD568u) != 0u ? 3 : 2;
-}
-
-void mdec_fn_8007361c(uint32 first, uint32 second, uint32 third)
-{
-    FUNCTION_MARKER(0x8007361Cu, "MAIN.EXE");
-    w_u32(0x800FF700u, first);
-    w_u32(0x800DE090u, second);
-    w_u32(0x800FF2F4u, third);
 }

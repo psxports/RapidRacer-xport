@@ -1,3 +1,4 @@
+#include "game.h"
 #include "title.h"
 #include "route.h"
 #include "replay.h"
@@ -213,7 +214,7 @@ static void mesh_transform_point(const MATRIX *matrix, const SVECTOR *point, VEC
 }
 
 
-uint32 *mesh_prepare_player_ot_packet(uint32 state, sint32 player)
+uint32 *mesh_prepare_player_ot_packet(const RACE_VIEW *state, sint32 player)
 {
     FUNCTION_MARKER(0x80033028u, "MAIN.EXE");
     if ((uint32)player >= MESH_OT_BUFFERS)
@@ -262,7 +263,7 @@ sint32 mesh_vis_vert_project(const BOAT *boat)
     return (sint32)((uint32)(sint32)(sint16)transformed.vz + 240u) >= 0;
 }
 
-uint32 *mesh_prepare_racer_ot_packet(uint32 state, uint32 bucket, sint32 player)
+uint32 *mesh_prepare_racer_ot_packet(const RACE_VIEW *state, uint32 bucket, sint32 player)
 {
     FUNCTION_MARKER(0x800331F0u, "MAIN.EXE");
     if (bucket >= 250u)
@@ -272,7 +273,7 @@ uint32 *mesh_prepare_racer_ot_packet(uint32 state, uint32 bucket, sint32 player)
     return mesh_alloc_ot(player, render_route_ot(render_frame(camera_for_view(state), player)) + bucket);
 }
 
-sint32 route_segment_is_in_window(uint32 entry, sint32 offset)
+sint32 route_segment_is_in_window(const RACE_VIEW *entry, sint32 offset)
 {
     const ROUTE_SEGMENT *seg;
     sint32 count;
@@ -310,7 +311,7 @@ sint32 route_segment_is_in_window(uint32 entry, sint32 offset)
     return target >= (sint32)((uint32)edge + (uint32)count) || target <= current;
 }
 
-sint32 mesh_order_bucket(uint32 first, const sint32 position[3], sint16 *host_depth, sint32 *visible)
+sint32 mesh_order_bucket(const RACE_VIEW *first, const sint32 position[3], sint16 *host_depth, sint32 *visible)
 {
     MATRIX *matrix = &camera_for_view(first)->rotation;
     SVECTOR input;
@@ -341,7 +342,7 @@ sint32 mesh_order_bucket(uint32 first, const sint32 position[3], sint16 *host_de
     return depth >= 0 ? depth >> 5 : 0;
 }
 
-void mesh_render_racer_model(uint32 view, sint32 player)
+void mesh_render_racer_model(const RACE_VIEW *view, sint32 player)
 {
     BOAT *candidates[32];
     uint32 *orderings[32];
@@ -366,8 +367,8 @@ void mesh_render_racer_model(uint32 view, sint32 player)
     }
     else
     {
-        mesh_render_state.rand_bit = (uint32)(global_fn_8006e9d8() & 1);
-        mesh_render_state.rand_pair = (uint32)(global_fn_8006e9d8() & 3);
+        mesh_render_state.rand_bit = (uint32)(game_random_next() & 1);
+        mesh_render_state.rand_pair = (uint32)(game_random_next() & 3);
     }
     camera_bias_matrix(camera_for_view(view), &camera_identity, 1);
     for (index = 0; index < (sint32)vehicle_racer_count; ++index)
@@ -380,7 +381,7 @@ void mesh_render_racer_model(uint32 view, sint32 player)
         carried_boat = racer;
         if (racer == vehicle_player(view) && (sint32)camera_for_view(view)->mode < 2)
             visible = 0;
-        if (visible != 0 && (uint32)racer->control.driver == 0u && r_u32(0x80083478u) == 1u)
+        if (visible != 0 && (uint32)racer->control.driver == 0u && race_cfg.players == 1u)
         {
             BOAT *current = vehicle_player(view);
             uint32 racer_route = (uint32)racer->race.progress;
@@ -392,7 +393,7 @@ void mesh_render_racer_model(uint32 view, sint32 player)
             if (route_delta >= 101)
                 visible = 0;
         }
-        if (visible != 0 && r_u32(0x80083484u) != 8u)
+        if (visible != 0 && race_cfg.mode != 8u)
         {
             visible = route_segment_is_in_window(view, (sint32)(uint32)racer->race.progress);
             if (visible != 0)
@@ -400,7 +401,7 @@ void mesh_render_racer_model(uint32 view, sint32 player)
         }
         if (visible == 0)
         {
-            if (r_u32(0x80083478u) == 1u)
+            if (race_cfg.players == 1u)
                 racer->trail.phase = 0u;
             continue;
         }
@@ -465,7 +466,7 @@ void mesh_render_racer_model(uint32 view, sint32 player)
     visible_limit = 3;
     if ((sint32)camera_for_view(view)->mode < 2)
         visible_limit = 2;
-    if (r_u32(0x80083478u) == 2u)
+    if (race_cfg.players == 2u)
         visible_limit = 8;
     for (index = 0; index < count; ++index)
     {
@@ -476,7 +477,7 @@ void mesh_render_racer_model(uint32 view, sint32 player)
             if (racer->trail.phase == 0u)
                 racer->trail.phase = 1u;
         }
-        else if (r_u32(0x80083478u) == 1u)
+        else if (race_cfg.players == 1u)
             racer->trail.phase = 0u;
         orderings[index] = mesh_prepare_racer_ot_packet(view, buckets[index], player);
     }
@@ -523,7 +524,7 @@ void mesh_render_racer_model(uint32 view, sint32 player)
         if (racer->trail.phase != 2u)
             continue;
         carried_boat = racer;
-        if (r_u32(0x80083478u) == 2u && racer != vehicle_player(view))
+        if (race_cfg.players == 2u && racer != vehicle_player(view))
         {
             camera_bias_matrix(camera_for_view(view), &camera_identity, 1);
             trail_render_marker(racer, orderings[index]);
@@ -610,7 +611,7 @@ void mesh_render_racer_model(uint32 view, sint32 player)
             }
         }
     }
-    if (r_u32(0x80083484u) == 4u && replay_state.playing != 0u)
+    if (race_cfg.mode == 4u && replay_state.playing != 0u)
     {
         const ROUTE_SEGMENT *seg = replay_state.contact.seg;
         sint32 route_offset = (sint32)((uint32)seg->next.idx - 1u);
@@ -649,7 +650,7 @@ void mesh_render_racer_model(uint32 view, sint32 player)
         if (racer->trail.phase == 2u)
             continue;
         ordering = mesh_prepare_racer_ot_packet(view, buckets[index], player);
-        if (r_u32(0x80083478u) == 2u && racer != vehicle_player(view))
+        if (race_cfg.players == 2u && racer != vehicle_player(view))
         {
             camera_bias_matrix(camera_for_view(view), &camera_identity, 1);
             trail_render_marker(racer, ordering);

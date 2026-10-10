@@ -35,27 +35,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-static uint32 rr_cd_data_callback_address;
-
-void cd_set_data_cb(uint32 callback)
-{
-    rr_cd_data_callback_address = callback;
-}
-
-static uint32 rr_vsync_guest_callback;
-
-static void runtime_dispatch_vsync(void)
-{
-    if (rr_vsync_guest_callback == 0x800387CCu)
-        cb_vblank_timer();
-}
-
-void runtime_set_vsync_cb(uint32 callback)
-{
-    rr_vsync_guest_callback = callback;
-    VSyncCallback(callback ? runtime_dispatch_vsync : NULL);
-}
-
 typedef struct
 {
     sint32 x;
@@ -70,24 +49,6 @@ static RR_FONT_COMPAT rr_font;
 static sint32 rr_dump_font;
 static sint32 rr_font_texture_x;
 static sint32 rr_font_texture_y;
-static uint32 rr_cd_ready_callback_address;
-
-static void cd_dispatch_ready(uint8 status, uint8 *result)
-{
-    uint32 frame;
-    uint32 response;
-    uint32 index;
-
-    if (rr_cd_ready_callback_address != 0x80038950u || !result)
-        return;
-    frame = guest_stack_push(8u);
-    response = frame;
-    for (index = 0u; index < 5u; ++index)
-        w_u8(response + index, result[index]);
-    cd_handle_ready_cb(status, response);
-    guest_stack_pop(8u);
-}
-
 void runtime_load_font(sint32 x, sint32 y)
 {
     // Image binding for MAIN.EXE:8006A63C, using the original resident font data
@@ -172,27 +133,35 @@ void runtime_set_font_dump(sint32 font)
     rr_dump_font = font;
 }
 
-uint32 cd_set_ready_cb(uint32 callback)
+void runtime_build_cd_path_native(char *dst, const char *src)
 {
-    uint32 previous = rr_cd_ready_callback_address;
-    rr_cd_ready_callback_address = callback;
-    CdReadyCallback(callback ? cd_dispatch_ready : NULL);
-    return previous;
+    size_t idx = 0;
+    const char *dir = cd_dir;
+
+    while (*dir && idx < 125u)
+        dst[idx++] = *dir++;
+    while (*src && idx < 125u)
+        dst[idx++] = *src++;
+    dst[idx++] = ';';
+    dst[idx++] = '1';
+    dst[idx] = '\0';
 }
 
 uint32 runtime_build_cd_path_at(uint32 output, uint32 input)
 {
-    uint32 cursor = output;
-    uint32 source = 0x800D6958u;
+    char src[126];
+    char path[128];
+    size_t idx = 0;
 
-    while (r_u8(source) != 0u && cursor - output < 125u)
-        w_u8(cursor++, r_u8(source++));
-    source = input;
-    while (r_u8(source) != 0u && cursor - output < 125u)
-        w_u8(cursor++, r_u8(source++));
-    w_u8(cursor++, ';');
-    w_u8(cursor++, '1');
-    w_u8(cursor, 0u);
+    while (r_u8(input + (uint32)idx) != 0u && idx < 125u)
+    {
+        src[idx] = (char)r_u8(input + (uint32)idx);
+        ++idx;
+    }
+    src[idx] = '\0';
+    runtime_build_cd_path_native(path, src);
+    for (idx = 0; idx <= strlen(path); ++idx)
+        w_u8(output + (uint32)idx, (uint8)path[idx]);
     return output;
 }
 
@@ -214,7 +183,7 @@ uint32 runtime_join_paths(uint32 prefix, const char *suffix)
     return output;
 }
 
-sint32 runtime_parse_decimal(uint32 text, sint32 length)
+sint32 runtime_parse_decimal(const uint8 *text, sint32 length)
 {
     sint32 result = 0;
     sint16 index = 0;
@@ -222,7 +191,7 @@ sint32 runtime_parse_decimal(uint32 text, sint32 length)
 
     while (--remaining != -1)
     {
-        sint32 digit = (sint32)r_u8(text + (uint32)(sint32)index) - '0';
+        sint32 digit = (sint32)text[index] - '0';
 
         if (remaining == 2)
             result += 100 * digit;

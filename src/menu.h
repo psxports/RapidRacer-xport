@@ -7,6 +7,10 @@
 
 #include "psx.h"
 
+struct RACE_VIEW;
+
+struct BOAT_MENU;
+
 typedef enum
 {
     MENU_LANGUAGE_ENGLISH = 0,
@@ -45,6 +49,20 @@ typedef struct
     uint8 language;
     // Pending sound from MAIN.EXE 800B6AFA, FFFF means idle
     uint16 sound;
+    uint32 state_ticks;
+    uint16 series_mode;
+    uint16 series_confirm;
+    uint16 exit_wait;
+    uint16 pad_missing;
+    uint16 prev_screen;
+    uint16 from_screen;
+    uint16 saved_choice;
+    uint16 reward_notice;
+    uint16 level_notice;
+    uint16 course_cleared;
+    uint16 trophy;
+    uint16 cutscene;
+    uint16 movie_idx;
 } MENU_STATE;
 
 typedef struct
@@ -169,29 +187,29 @@ typedef struct
 
 extern MENU_CONFIGURATION menu_configurations[53];
 
-sint32 menu_run_pause(uint32 context);
+sint32 menu_run_pause(const struct RACE_VIEW *context);
 sint32 menu_init_layout(void);
-sint32 menu_update_race_hud(uint32 state);
-sint32 menu_dispatch_layout(uint32 state);
-sint32 race_update_segment_bufs(uint32 state, sint32 argument);
-sint32 menu_submit_recs_refresh(uint32 unused, uint32 *ot);
-sint32 menu_dispatch_state_render_mode(uint32 state, uint32 *ot, sint32 result);
-sint32 race_render_segment_update(uint32 state, uint32 *ot);
-sint32 menu_render_multiplayer_result(uint32 state, uint32 *ot);
+sint32 menu_update_race_hud(const struct RACE_VIEW *state);
+sint32 menu_dispatch_layout(const struct RACE_VIEW *state);
+sint32 race_update_segment_bufs(const struct RACE_VIEW *state, sint32 argument);
+sint32 menu_submit_recs_refresh(uint32 *ot);
+sint32 menu_dispatch_state_render_mode(const struct RACE_VIEW *state, uint32 *ot, sint32 result);
+sint32 race_render_segment_update(const struct RACE_VIEW *state, uint32 *ot);
+sint32 menu_render_multiplayer_result(const struct RACE_VIEW *state, uint32 *ot);
 
 sint32 hud_transition_prims(HUD_PRIM *prims);
 sint32 menu_update_select_recs(HUD_PRIM *prims);
 sint32 menu_update_selected_prims(sint16 selected);
 sint32 menu_render_select(sint32 selected, const HUD_STATE *hud, CONTROLLER_STATE *inherited_menu_input);
-sint32 menu_select_result_clut(uint32 state);
-sint32 menu_update_status_clut(uint32 state);
+sint32 menu_select_result_clut(const struct RACE_VIEW *state);
+sint32 menu_update_status_clut(const struct RACE_VIEW *state);
 sint32 menu_set_hud_group(sint16 group, uint8 state);
-sint32 menu_update_trial_hud(uint32 state);
-sint32 menu_update_result_rec_palettes(uint32 state);
+sint32 menu_update_trial_hud(const struct RACE_VIEW *state);
+sint32 menu_update_result_rec_palettes(const struct RACE_VIEW *state);
 
 sint32 menu_update_select_mode(void);
-sint32 menu_init_race(uint32 state, uint32 unused1, sint32 unused2);
-sint32 menu_update_trans(uint32 state, uint32 menu, sint32 unused, uint32 argument);
+sint32 menu_init_race(const struct RACE_VIEW *state, uint32 unused1, sint32 unused2);
+sint32 menu_update_trans(const struct RACE_VIEW *state, struct BOAT_MENU *menu, sint32 unused, uint32 argument);
 sint32 menu_outer_loop(void);
 sint32 menu_reset_display(void);
 sint32 menu_config_display(sint16 width, sint16 height);

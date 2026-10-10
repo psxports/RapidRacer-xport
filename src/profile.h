@@ -85,6 +85,13 @@ typedef struct
     uint8 mode_choice;
     uint8 controller;
     uint8 slot;
+    struct
+    {
+        uint16 racers;
+        uint16 leaders;
+        uint16 trailers;
+        uint16 menu_slot;
+    } saved;
 } PROFILE_SELECTION;
 
 extern PROFILE_SELECTION profile_selection;
@@ -95,12 +102,10 @@ sint32 profile_fn_80053458(void);
 sint32 profile_fn_8005347c(void);
 sint32 profile_fn_80053588(void);
 sint32 profile_fn_800535b0(void);
-sint32 profile_format_value_parts3(uint32 values, char *text);
 sint32 profile_format_parts(const uint16 parts[3], char *text);
 uint32 profile_time_ticks(const uint16 parts[3]);
 uint32 profile_time_tenths(const uint16 parts[3]);
 sint32 time_equal(const uint16 first[3], const uint16 second[3]);
-uint32 time_fields_convert(uint32 value);
 void profile_reset_grid_flags(void);
 void profile_update_trans(void);
 sint32 profile_update_mode_select_vis(void);
@@ -157,7 +162,7 @@ void profile_complete_selection(void);
 void profile_apply_action(sint16 action);
 sint32 profile_reset_menu_state(void);
 sint32 profile_dispatch_mode_result_handler(uint32 first, uint32 second, uint32 third, uint32 fourth);
-sint32 menu_save_select_state(void);
+sint32 profile_restore_grid(void);
 
 void profile_process_select_results(void);
 

@@ -28,8 +28,9 @@ static EVENT_REC race_event_recs[EVENT_COURSE_COUNT];
 static RENDER_BILLBOARD race_event_border[EVENT_BORDER_COUNT];
 EVENT_LIST race_event_course, race_event_markers;
 sint32 race_event_selection;
+uint32 race_start_phase;
 
-sint32 race_events_racer_modes_trans(uint32 state)
+sint32 race_events_racer_modes_trans(const RACE_VIEW *state)
 {
     uint16 marker;
     uint32 value;
@@ -43,12 +44,12 @@ sint32 race_events_racer_modes_trans(uint32 state)
     if (marker == value)
     {
         effects_init_transform_object(state);
-        sound_queue_command(0x800DE0F0u, 11, 0, 0u);
+        sound_queue_command(sound_for_context(&race_views[0]), 11, 0);
     }
     participant_count = (sint32)vehicle_racer_count;
     if (participant_count > 0)
     {
-        sint32 loop_mode = (sint32)r_u32(0x800B6B10u);
+        sint32 loop_mode = (sint32)race_start_phase;
 
         index = 0;
         do
@@ -62,7 +63,7 @@ sint32 race_events_racer_modes_trans(uint32 state)
             ++index;
         } while (index < (sint32)vehicle_racer_count);
     }
-    mode = (sint32)r_u32(0x800B6B10u);
+    mode = (sint32)race_start_phase;
     if (mode == 0)
         return 1;
     if (mode == 1)
@@ -72,12 +73,12 @@ sint32 race_events_racer_modes_trans(uint32 state)
     }
     else if (mode == 4)
     {
-        uint32 menu = r_u32(0x800DE154u);
+        BOAT_MENU *menu = vehicle_player_menu(&race_views[0]);
 
-        vehicle_menu(menu)->mode = (uint32)mode;
-        return sound_queue_command(0x800DE0F0u, 10, 0, 0u);
+        menu->mode = (uint32)mode;
+        return sound_queue_command(sound_for_context(&race_views[0]), 10, 0);
     }
-    mode = (sint32)r_u32(0x800B6B10u);
+    mode = (sint32)race_start_phase;
     if (mode <= 0)
         return mode;
     {
@@ -93,10 +94,10 @@ sint32 race_events_racer_modes_trans(uint32 state)
             object = vehicle_player(state);
             object->route.speed = (sint32)(0u);
             object = vehicle_player(state);
-            value = r_u32(0x800B6B10u);
+            value = race_start_phase;
             next = object->setup.throttle;
             value += 1u;
-            w_u32(0x800B6B10u, value);
+            race_start_phase = value;
             object->control.throttle = (sint32)(next);
         }
     }
@@ -108,8 +109,8 @@ sint32 race_events_racer_modes_trans(uint32 state)
             object->race.mode = (uint16)(5u);
             object = vehicle_tracks(state)[0];
             vehicle_init_motion(object);
-            value = r_u32(0x800B6B10u) + 1u;
-            w_u32(0x800B6B10u, value);
+            value = race_start_phase + 1u;
+            race_start_phase = value;
         }
     }
     {
@@ -120,8 +121,8 @@ sint32 race_events_racer_modes_trans(uint32 state)
             object->race.mode = (uint16)(5u);
             object = vehicle_tracks(state)[1];
             vehicle_init_motion(object);
-            value = r_u32(0x800B6B10u) + 1u;
-            w_u32(0x800B6B10u, value);
+            value = race_start_phase + 1u;
+            race_start_phase = value;
             return (sint32)value;
         }
     }
@@ -435,7 +436,7 @@ void race_events_select_frame(sint32 buffer, sint32 view)
     race_event_ot[1] = frame->ot[1];
 }
 
-void race_events_render(uint32 state, uint32 *overlay_ot, sint32 buffer_index)
+void race_events_render(const RACE_VIEW *state, uint32 *overlay_ot, sint32 buffer_index)
 {
     EVENT_REC *route = race_event_course.recs;
     sint32 route_count = race_event_course.count;
@@ -457,7 +458,7 @@ void race_events_render(uint32 state, uint32 *overlay_ot, sint32 buffer_index)
         }
     }
     race_event_ot[0] = render_route_ot(render_frame(camera_for_view(state), buffer_index));
-    if (vehicle_menu(r_u32(0x800DE154u))->mode == 5u || vehicle_menu(r_u32(0x800DE154u))->mode == 1u)
+    if (vehicle_player_menu(&race_views[0])->mode == 5u || vehicle_player_menu(&race_views[0])->mode == 1u)
     {
         AddPrim(overlay_ot, race_event_backdrop);
     }
@@ -596,7 +597,7 @@ sint32 race_events_nearby_event_check(const BOAT *boat)
         result = entry->kind;
         entry->kind = 0;
         if (result == 3)
-            sound_queue_command(0x800DE0F0u, r_u8(r_u32(0x800DE154u) + 582u) + 10, 7, 0u);
+            sound_queue_command(sound_for_context(&race_views[0]), vehicle_player_menu(&race_views[0])->pickups[2].count + 10, 7);
         return result;
     }
     return 0;
@@ -843,7 +844,7 @@ sint32 race_events_cross_marker(const BOAT *boat, EVENT_LIST *list)
             if (race_event_selection == -1)
             {
                 race_event_selection = type;
-                sound_queue_command(0x800DE0F0u, 1, 1, 0u);
+                sound_queue_command(sound_for_context(&race_views[0]), 1, 1);
                 result_state.column = (uint8)results_grid_columns[race_event_selection];
                 result = result_state.column;
             }
@@ -854,7 +855,7 @@ sint32 race_events_cross_marker(const BOAT *boat, EVENT_LIST *list)
     return result;
 }
 
-sint32 vehicle_update_route_segments(uint32 state)
+sint32 vehicle_update_route_segments(const RACE_VIEW *state)
 {
     FUNCTION_MARKER(0x8003AAA4u, "MAIN.EXE");
     race_events_find_nearest(state, &race_event_markers);
@@ -875,7 +876,7 @@ static sint32 race_events_dist_sq(const BOAT *boat, const EVENT_REC *segment)
     return math_add_wrap_s32(math_add_wrap_s32(squared.vx, squared.vy), squared.vz);
 }
 
-sint32 race_events_find_nearest(uint32 state, EVENT_LIST *list)
+sint32 race_events_find_nearest(const RACE_VIEW *state, EVENT_LIST *list)
 {
     BOAT *boat;
     sint32 current;
@@ -993,7 +994,7 @@ sint32 race_events_init_course(void)
     recs[0].border_count = 0;
     checkpoints[0] = (sint16)(math_sub_wrap_s32(count, 1) / (lanes + 1));
     for (idx = 1; idx < lanes; ++idx)
-        checkpoints[idx] = (sint16)((idx + 1) * checkpoints[0] + (global_fn_8006e9d8() & 1));
+        checkpoints[idx] = (sint16)((idx + 1) * checkpoints[0] + (game_random_next() & 1));
     checkpoints[lanes] = (sint16)((uint16)count - 2u);
     for (idx = 0; (sint16)idx < count; ++idx)
     {
@@ -1006,7 +1007,7 @@ sint32 race_events_init_course(void)
         rec->pos[1] = (uint16)y;
         rec->pos[2] = (uint16)(z + 8 * angle);
         rec->angle = (uint16)(((1024 - dir) & 0x0FFF) | 0x3000);
-        item_x = global_fn_8006e9d8() % 470;
+        item_x = game_random_next() % 470;
         if ((sint16)item_x < 0)
             item_x = -item_x;
         item_x = x + item_x - 235;
@@ -1026,7 +1027,7 @@ sint32 race_events_init_course(void)
             rec->kind = 0u;
         else
         {
-            sint32 kind = global_fn_8006e9d8() & 3;
+            sint32 kind = game_random_next() & 3;
             if (kind < 2)
                 rec->kind = (uint16)(kind == 0 ? 4 : 5);
             else
@@ -1071,27 +1072,26 @@ sint32 race_events_init_course(void)
     return count > 0 ? 0 : count;
 }
 
-sint32 race_events_fn_8003b508(void)
+sint32 race_events_init_showcase(void)
 {
-    uint32 players = r_u32(0x80083478u);
+    uint32 players = race_cfg.players;
 
     FUNCTION_MARKER(0x8003B508u, "MAIN.EXE");
     race_event_selection = -1;
-    w_u32(0x800B68B8u, r_u32(0x800914ACu));
     scene_control = NULL;
     scene_clear_start();
-    w_u16(0x800B6A00u, UINT16_MAX);
-    w_u16(0x800B69FEu, UINT16_MAX);
+    result_state.hud_values[2] = UINT16_MAX;
+    result_state.hud_values[1] = UINT16_MAX;
     scene_clear_sections();
-    w_u32(0x800B69FCu, 0u);
+    result_state.hud_values[0] = 0u;
     route_init_showcase();
     race_event_outside = 0u;
-    scene_showcase_horizon(r_u32(0x8008348Cu));
+    scene_showcase_horizon(race_cfg.variant);
     scene_showcase_reverb();
     scene_showcase_race();
     render_select_lighting(RENDER_LIGHT_SHOWCASE);
     race_events_horizon_init(players);
-    race_events_init_backdrop(r_u32(0x8008348Cu));
+    race_events_init_backdrop(race_cfg.variant);
     if (!gpu_register_packet_range(race_event_frames, sizeof(race_event_frames)))
         abort();
     race_events_init_course();
@@ -1176,16 +1176,16 @@ static void race_events_copy_rgb(CVECTOR *dst, const uint8 src[3])
     dst->b = src[2];
 }
 
-void race_events_init_fractal_light(uint32 state, sint32 count)
+void race_events_init_fractal_light(const RACE_CFG *cfg, sint32 count)
 {
-    uint8 ambient[3];
+    uint8 ambient[3] = {50, 30, 40};
     uint8 light_colors[2][3];
     uint8 hsv_rgb[3];
     uint8 light_a[56];
     uint8 light_b[56];
     VECTOR light_vectors[2];
     MATRIX rotation = {{{4096, 0, 0}, {0, 4096, 0}, {0, 0, 4096}}, {0, 0, 0}};
-    SVECTOR source;
+    SVECTOR src = {0, 0, 4096, 0};
     VECTOR transformed;
     ROUTE_SEGMENT *previous_record = route_resources.segments[0];
     RENDER_LIGHTING *lighting = render_lighting(0u);
@@ -1196,13 +1196,10 @@ void race_events_init_fractal_light(uint32 state, sint32 count)
     sint32 index;
 
     FUNCTION_MARKER(0x8003F7D4u, "MAIN.EXE");
-    ambient[0] = r_u8(0x800B3FCCu);
-    ambient[1] = r_u8(0x800B3FCDu);
-    ambient[2] = r_u8(0x800B3FCEu);
-    random = global_fn_8006e9d8() & 3;
+    random = game_random_next() & 3;
     if (random < 2)
     {
-        sint32 hue_offset = global_fn_8006e9d8() % 128;
+        sint32 hue_offset = game_random_next() % 128;
         sint32 secondary_saturation = (hue_offset / 2 + 64) / 2;
 
         race_events_hsv_to_rgb(hsv_rgb, hue_offset + 672, hue_offset / 2 + 64, 128);
@@ -1220,7 +1217,7 @@ void race_events_init_fractal_light(uint32 state, sint32 count)
     }
     else if (random == 2)
     {
-        sint32 hue_offset = global_fn_8006e9d8() % 128;
+        sint32 hue_offset = game_random_next() % 128;
 
         race_events_hsv_to_rgb(hsv_rgb, hue_offset + 162, 135, 255);
         race_events_copy_rgb(&scene_colors(0u, 6u)->colors[0].rgb, hsv_rgb);
@@ -1236,7 +1233,7 @@ void race_events_init_fractal_light(uint32 state, sint32 count)
     }
     else
     {
-        sint32 hue_offset = global_fn_8006e9d8() % 64;
+        sint32 hue_offset = game_random_next() % 64;
 
         race_events_hsv_to_rgb(hsv_rgb, 934, 196 - hue_offset, 112 - hue_offset);
         race_events_copy_rgb(&scene_colors(1u, 6u)->colors[0].rgb, hsv_rgb);
@@ -1251,17 +1248,13 @@ void race_events_init_fractal_light(uint32 state, sint32 count)
         light_colors[1][2] = ' ';
         course = 2;
     }
-    w_u32(0x8008348Cu, (uint32)course);
+    race_cfg.variant = (uint32)((uint32)course);
 
-    source.vx = (sint16)r_u16(0x800B3FD8u);
-    source.vy = (sint16)r_u16(0x800B3FDAu);
-    source.vz = (sint16)r_u16(0x800B3FDCu);
-    source.pad = 0;
-    index = (sint32)r_u32(state + 40u);
-    RotMatrixX((sint32)((uint32)r_u32(0x800935E0u + (uint32)index * 8u) << 12) / 360, &rotation);
-    RotMatrixY((sint32)((uint32)r_u32(0x800935E4u + (uint32)index * 8u) << 12) / 360, &rotation);
+    index = (sint32)cfg->course;
+    RotMatrixX((sint32)((uint32)scene_light_angles[index].pitch << 12) / 360, &rotation);
+    RotMatrixY((sint32)((uint32)scene_light_angles[index].yaw << 12) / 360, &rotation);
     SetRotMatrix(&rotation);
-    ApplyRotMatrix(&source, &transformed);
+    ApplyRotMatrix(&src, &transformed);
     light_vectors[0].vx = -transformed.vx;
     light_vectors[0].vy = -transformed.vy;
     light_vectors[0].vz = -transformed.vz;

@@ -16,9 +16,107 @@
 #include "psx.h"
 #include "xport_trace.h"
 #include <stdlib.h>
+#include <stddef.h>
+#include <string.h>
 
 MC_STATE mc_state;
-#include <string.h>
+
+static const char mc_save_name[] = "BESCES-00394 RRACER";
+static const char *const mc_bonus_names[3] = {"BESCES-00409 PORSCHE", "BISIPS-60016 PORSCHE", "BASCUS-94187 PORSCHE"};
+
+enum
+{
+    MC_FILES_MAX = 15,
+    MC_FILE_HDR_BYTES = 512
+};
+
+typedef struct
+{
+    uint8 prefix[3];
+    uint8 blocks;
+    uint8 payload[MC_FILE_HDR_BYTES - 4];
+} MC_FILE_HEADER;
+
+typedef char MC_FILE_HEADER_SIZE_CHECK[(sizeof(MC_FILE_HEADER) == MC_FILE_HDR_BYTES && offsetof(MC_FILE_HEADER, blocks) == 3) ? 1 : -1];
+
+static DIRENTRY mc_dir[MC_FILES_MAX + 1];
+static MC_FILE_HEADER mc_file_headers[MC_FILES_MAX];
+
+typedef struct
+{
+    uint8 header[MC_FILE_HDR_BYTES];
+    uint8 payload[MC_SAVE_BYTES];
+    uint8 tail[MC_SAVE_FILE_BYTES - MC_FILE_HDR_BYTES - MC_SAVE_BYTES];
+} MC_SAVE_FILE;
+
+typedef char MC_SAVE_FILE_SIZE_CHECK[(sizeof(MC_SAVE_FILE) == MC_SAVE_FILE_BYTES && offsetof(MC_SAVE_FILE, payload) == MC_FILE_HDR_BYTES) ? 1 : -1];
+
+typedef struct
+{
+    uint16 code;
+    uint16 first;
+} MC_TITLE_RANGE;
+
+static const MC_TITLE_RANGE mc_title_ranges[3] = {{33359u, 48u}, {33376u, 65u}, {33409u, 97u}};
+static const uint16 mc_title_punct[33] = {0x8140u, 0x8149u, 0x8168u, 0x8194u, 0x8190u, 0x8193u, 0x8195u, 0x8166u, 0x8169u, 0x816Au, 0x8196u, 0x817Bu, 0x8143u, 0x817Cu, 0x8144u, 0x815Eu, 0x8146u, 0x8147u, 0x8171u, 0x8181u, 0x8172u, 0x8148u, 0x8197u, 0x816Du, 0x818Fu, 0x816Eu, 0x814Fu, 0x8151u, 0x8165u, 0x816Fu, 0x8162u, 0x8170u, 0x8150u};
+
+typedef struct
+{
+    uint8 palette[32];
+    uint8 pixels[128];
+    sint32 ready;
+} MC_ICON;
+
+static MC_ICON mc_icon;
+
+typedef struct
+{
+    uint8 magic[2];
+    uint8 icon_mode;
+    uint8 blocks;
+    uint8 title[MC_TITLE_BYTES];
+    uint8 reserved0[96 - 4 - MC_TITLE_BYTES];
+    uint8 palette[32];
+    uint8 pixels[128];
+    uint8 reserved1[MC_FILE_HEADER_BYTES - 256];
+} MC_SAVE_HEADER;
+
+typedef char MC_SAVE_HEADER_LAYOUT_CHECK[(sizeof(MC_SAVE_HEADER) == MC_FILE_HEADER_BYTES && offsetof(MC_SAVE_HEADER, title) == 4 && offsetof(MC_SAVE_HEADER, palette) == 96 && offsetof(MC_SAVE_HEADER, pixels) == 128) ? 1 : -1];
+
+static sint32 mc_decode_icon(const uint8 *src, size_t size)
+{
+    size_t clut_bytes;
+    size_t pixel_block;
+    size_t pixel_bytes;
+
+    memset(&mc_icon, 0, sizeof(mc_icon));
+    if (!src || size < 20 || xport_load_le32(src) != 0x10u || (xport_load_le32(src + 4) & 8u) == 0u)
+        return 0;
+    clut_bytes = xport_load_le32(src + 8) & ~3u;
+    if (clut_bytes < 44 || clut_bytes > size - 8)
+        return 0;
+    pixel_block = 8 + clut_bytes;
+    if (size - pixel_block < 12)
+        return 0;
+    pixel_bytes = xport_load_le32(src + pixel_block);
+    if (pixel_bytes < 140 || pixel_bytes > size - pixel_block)
+        return 0;
+    memcpy(mc_icon.palette, src + 20, sizeof(mc_icon.palette));
+    memcpy(mc_icon.pixels, src + pixel_block + 12, sizeof(mc_icon.pixels));
+    mc_icon.ready = 1;
+    return 1;
+}
+
+sint32 mc_load_icon(void)
+{
+    const uint8 *src;
+    size_t size = 0;
+
+    FUNCTION_MARKER(0x8004AEB4u, "MAIN.EXE");
+    strcpy(cd_dir, "\\");
+    src = cd_load_file_bytes("MENU\\DATA\\RRBADGE.TIM", &size);
+    return mc_decode_icon(src, size);
+}
 
 void mc_fn_800499e0(void)
 {
@@ -192,95 +290,118 @@ sint32 mc_fn_8004a108(sint32 card)
     return 0;
 }
 
-sint32 mc_enumerate_files(uint32 card, uint32 record)
+sint32 mc_scan_files(uint32 card)
 {
     char pattern[128];
-    uint32 current = record;
-    uint32 count = 0u;
+    DIRENTRY *entry = mc_dir;
 
     FUNCTION_MARKER(0x8004A224u, "MAIN.EXE");
     snprintf(pattern, sizeof(pattern), "bu%.2x:*", card);
-    w_u32(0x800B6BE4u, 0u);
-    if (mc_file_find_first(pattern, record) == record)
+    mc_state.file_count = 0u;
+    // Original 0x800677EC dispatches BIOS B0:42
+    if (firstfile(pattern, entry) == entry)
     {
-        current += 40u;
         do
         {
-            ++count;
-            w_u32(0x800B6BE4u, (uint32)count);
-            if (nextfile(psx_addr(current, 40u)) != psx_addr(current, 40u))
+            ++mc_state.file_count;
+            ++entry;
+            if (nextfile(entry) != entry)
                 break;
-            current += 40u;
-        } while (1);
+        } while (mc_state.file_count < MC_FILES_MAX);
     }
-    return (sint32)r_u32(0x800B6BE4u);
+    return (sint32)mc_state.file_count;
 }
 
-sint32 mc_read_file_entries(uint32 name, sint32 count, sint32 card)
+static sint32 mc_read_header(sint32 card, const char *name, MC_FILE_HEADER *dst)
 {
-    uint32 index;
+    char path[64];
+    sint32 fd;
+    sint32 bytes;
+
+    FUNCTION_MARKER(0x8004A320u, "MAIN.EXE");
+    snprintf(path, sizeof(path), "bu%.2x:%s", (uint32)card, name);
+    fd = openPSX(path, 1u);
+    if (fd < 0)
+    {
+        printf("ERROR: The file could not be opened\n");
+        return 0;
+    }
+    bytes = readPSX(fd, dst, MC_FILE_HDR_BYTES);
+    if (bytes != MC_FILE_HDR_BYTES)
+        printf("ERROR: During reading   Read: [%d]\n", bytes);
+    closePSX(fd);
+    return bytes == MC_FILE_HDR_BYTES;
+}
+
+void mc_read_headers(sint32 count, sint32 card)
+{
+    sint32 idx;
 
     FUNCTION_MARKER(0x8004A2A0u, "MAIN.EXE");
-    for (index = 0u; (sint32)index < count; ++index)
-    {
-        mc_fn_8004a320(card, name, 0x800FF948u + 512u * (uint32)index);
-        name += 40u;
-    }
-    return 0;
+    if (count > MC_FILES_MAX)
+        count = MC_FILES_MAX;
+    for (idx = 0; idx < count; ++idx)
+        mc_read_header(card, mc_dir[idx].name, &mc_file_headers[idx]);
 }
 
-sint32 mc_fn_8004a320(sint32 card, uint32 name, uint32 output)
+sint32 mc_write_header(sint32 card, const char *name, const uint8 src[MC_FILE_HEADER_BYTES])
 {
-    FUNCTION_MARKER(0x8004A320u, "MAIN.EXE");
-    return 0;
-}
-
-sint32 mc_fn_8004a3e0(sint32 card, uint32 name, uint32 input)
-{
-    FUNCTION_MARKER(0x8004A3E0u, "MAIN.EXE");
-    return 0;
-}
-
-sint32 mc_probe(sint32 card, uint32 name)
-{
-    FUNCTION_MARKER(0x8004A4A8u, "MAIN.EXE");
-    return 0;
-}
-
-sint32 mc_file_erase(uint32 card, uint32 name)
-{
-    static const char digits[] = "0123456789abcdef";
     char path[64];
-    uint32 index = 0u;
+    sint32 fd;
+    sint32 bytes;
+
+    FUNCTION_MARKER(0x8004A3E0u, "MAIN.EXE");
+    snprintf(path, sizeof(path), "bu%.2x:%s", (uint32)card, name);
+    fd = openPSX(path, 2u);
+    if (fd < 0)
+        return 0;
+    bytes = writePSX(fd, src, MC_FILE_HEADER_BYTES);
+    closePSX(fd);
+    return (uint32)bytes >= MC_FILE_HEADER_BYTES;
+}
+
+sint32 mc_probe(sint32 card, const char *name)
+{
+    char path[64];
+    sint32 fd;
+
+    FUNCTION_MARKER(0x8004A4A8u, "MAIN.EXE");
+    snprintf(path, sizeof(path), "bu%.2x:%s", (uint32)card, name);
+    fd = openPSX(path, 2u);
+    if (fd >= 0)
+        printf(" file exists.\n");
+    closePSX(fd);
+    return fd >= 0;
+}
+
+sint32 mc_file_erase(uint32 card, const char *name)
+{
+    char path[64];
 
     FUNCTION_MARKER(0x8004A524u, "MAIN.EXE");
-    path[index++] = 'b';
-    path[index++] = 'u';
-    path[index++] = digits[(card >> 4) & 15u];
-    path[index++] = digits[card & 15u];
-    path[index++] = ':';
-    while (index + 1u < sizeof(path) && r_u8(name) != 0u)
-        path[index++] = (char)r_u8(name++);
-    path[index] = '\0';
-    return mc_fn_8006780c(path);
+    snprintf(path, sizeof(path), "bu%.2x:%s", card, name);
+    // Original 0x8006780C dispatches BIOS B0:45
+    return erase(path);
 }
 
 sint32 mc_calc_free_blocks(void)
 {
-    sint32 count = (sint32)r_u32(0x800B6BE4u);
+    sint32 count = (sint32)mc_state.file_count;
     uint32 used = 0u;
-    sint16 index = 0;
+    sint16 idx = 0;
     sint16 used_low;
 
     FUNCTION_MARKER(0x8004A760u, "MAIN.EXE");
+    if (count > MC_FILES_MAX)
+        count = MC_FILES_MAX;
     if (count > 0)
     {
         do
         {
-            uint32 blocks = r_u8(0x800FF94Bu + ((uint32)(sint32)index << 9));
+            uint32 blocks = mc_file_headers[idx].blocks;
             used += blocks != 0u ? blocks : 1u;
-            index = (sint16)(index + 1);
-        } while ((sint32)index < count);
+            idx = (sint16)(idx + 1);
+        } while ((sint32)idx < count);
     }
     used_low = (sint16)(uint16)used;
     if (used_low >= 16)
@@ -288,66 +409,63 @@ sint32 mc_calc_free_blocks(void)
     return (sint16)(uint16)(15u - (uint16)used_low);
 }
 
-sint32 mc_fn_8004ad04(uint32 source, uint32 destination, sint32 unused, uint8 group)
+sint32 mc_encode_title(const char *src, uint8 dst[MC_TITLE_BYTES])
 {
-    uint32 cursor = destination;
-    uint32 index;
-    uint8 character;
+    size_t len;
+    size_t idx;
 
     FUNCTION_MARKER(0x8004AD04u, "MAIN.EXE");
-    for (index = 0u; index < 38u; ++index)
+    for (len = 0u; src[len] != '\0'; ++len)
     {
-        w_u8(cursor++, 0x81u);
-        w_u8(cursor++, 0x40u);
+        uint8 ch = (uint8)src[len];
+
+        if (len >= MC_TITLE_CHARS)
+            return -1;
+        if (ch < 32u || ch > 126u)
+            exit(EXIT_FAILURE);
     }
-    while ((character = r_u8(source++)) != 0u)
+    for (idx = 0u; idx < MC_TITLE_CHARS; ++idx)
     {
-        uint16 encoded;
-        uint8 offset = 0u;
-        if (character >= 32u && character < 48u)
+        dst[2u * idx] = 0x81u;
+        dst[2u * idx + 1u] = 0x40u;
+    }
+    for (idx = 0u; idx < len; ++idx)
+    {
+        uint8 ch = (uint8)src[idx];
+        uint32 group = 0u;
+        uint32 offset = 0u;
+        uint16 code;
+
+        if (ch < 48u)
             offset = 1u;
-        else if (character >= 48u && character < 58u)
+        else if (ch < 58u)
             group = 0u;
-        else if (character >= 58u && character < 65u)
+        else if (ch < 65u)
             offset = 11u;
-        else if (character >= 65u && character < 91u)
+        else if (ch < 91u)
             group = 1u;
-        else if (character >= 91u && character < 97u)
+        else if (ch < 97u)
             offset = 37u;
-        else if (character >= 97u && character < 123u)
+        else if (ch < 123u)
             group = 2u;
         else
             offset = 63u;
         if (offset != 0u)
-            encoded = r_u16(0x800967F0u + 2u * (uint32)(character - (offset + 31u)));
+            code = mc_title_punct[ch - (offset + 31u)];
         else
-            encoded = (uint16)(r_u16(0x800967E4u + 4u * group) + character - r_u16(0x800967E6u + 4u * group));
-        w_u8(cursor++, (uint8)(encoded >> 8));
-        w_u8(cursor++, (uint8)encoded);
+            code = (uint16)(mc_title_ranges[group].code + ch - mc_title_ranges[group].first);
+        dst[2u * idx] = (uint8)(code >> 8);
+        dst[2u * idx + 1u] = (uint8)code;
     }
-    w_u8(cursor++, 0u);
-    w_u8(cursor++, 0u);
-    w_u8(cursor, 0u);
+    dst[2u * len] = 0u;
+    dst[2u * len + 1u] = 0u;
+    dst[2u * len + 2u] = 0u;
     return 0;
 }
 
 void mc_fn_8004ae78(void)
 {
     FUNCTION_MARKER(0x8004AE78u, "MAIN.EXE");
-}
-
-sint32 mc_copy_sized_bytes(uint32 source, uint32 destination, sint32 size)
-{
-    sint32 result = 0;
-    sint32 index;
-
-    FUNCTION_MARKER(0x8004AE80u, "MAIN.EXE");
-    for (index = 0; index < size; ++index)
-    {
-        result = r_u8(source + (uint32)index);
-        w_u8(destination + (uint32)index, (uint8)result);
-    }
-    return result;
 }
 
 void mc_fn_8004af00(void)
@@ -365,9 +483,9 @@ void mc_error_route(sint16 command)
     sint32 flag = -1;
 
     FUNCTION_MARKER(0x8004AF20u, "MAIN.EXE");
-    if (r_u16(0x800B6AE0u) != 0u)
+    if (mc_state.load_active != 0u)
     {
-        w_u16(0x800B6AEEu, (uint16)command);
+        mc_state.load_error = (uint16)command;
         return;
     }
     if (command == -10)
@@ -459,43 +577,85 @@ void mc_init_menu_status(void)
         mc_state.card_status = (uint16)result;
 }
 
-sint32 mc_fn_8004b3ec(uint32 name, uint32 output)
+sint32 mc_read_save(const char *name, uint8 dst[MC_SAVE_FILE_BYTES])
 {
+    char path[64];
+    sint32 fd;
+    sint32 bytes = 0;
+
     FUNCTION_MARKER(0x8004B3ECu, "MAIN.EXE");
-    return 0;
+    snprintf(path, sizeof(path), "bu%.2x:%s", (uint32)(sint32)(sint16)mc_state.card, name);
+    fd = openPSX(path, 1u);
+    if (fd >= 0)
+        bytes = readPSX(fd, dst, MC_SAVE_FILE_BYTES);
+    if (fd < 0 || bytes != MC_SAVE_FILE_BYTES)
+    {
+        mc_fn_8004ae78();
+        bytes = 0;
+    }
+    closePSX(fd);
+    return bytes;
 }
 
-sint32 mc_fn_8004b490(uint32 name, uint32 input)
+sint32 mc_write_save(const char *name, const uint8 src[MC_SAVE_FILE_BYTES])
 {
+    char path[64];
+    sint32 fd;
+    sint32 bytes;
+
     FUNCTION_MARKER(0x8004B490u, "MAIN.EXE");
-    return 0;
+    snprintf(path, sizeof(path), "bu%.2x:%s", (uint32)(sint32)(sint16)mc_state.card, name);
+    fd = openPSX(path, 2u);
+    if (fd >= 0)
+    {
+        mc_fn_8004ae78();
+        closePSX(fd);
+        return 0;
+    }
+    fd = openPSX(path, 0x10200u);
+    if (fd == -1)
+    {
+        mc_fn_8004ae78();
+        return 0;
+    }
+    closePSX(fd);
+    fd = openPSX(path, 2u);
+    if (fd < 0)
+    {
+        mc_fn_8004ae78();
+        return 0;
+    }
+    bytes = writePSX(fd, src, MC_SAVE_FILE_BYTES);
+    if (bytes != MC_SAVE_FILE_BYTES)
+    {
+        mc_fn_8004ae78();
+        bytes = 0;
+    }
+    closePSX(fd);
+    return bytes;
 }
 
-sint32 mc_save_segment_sizes_sum(sint32 unused, sint32 total)
-{
-    FUNCTION_MARKER(0x8004B608u, "MAIN.EXE");
-    return (sint32)((uint32)total + MC_SAVE_BYTES);
-}
 
-sint32 mc_save_segments_gather(uint32 destination)
+
+sint32 mc_save_encode(uint8 dst[MC_SAVE_BYTES])
 {
     FUNCTION_MARKER(0x8004B644u, "MAIN.EXE");
     // Encode the compatible header independently of native layout
-    w_u32(destination, mc_state.save_size);
-    w_u32(destination + 4u, mc_state.save_checksum);
-    for (uint32 index = 0u; index < MC_SAVE_DATA_BYTES; ++index)
-        w_u8(destination + MC_SAVE_HEADER_BYTES + index, profile_save_read_byte(index));
+    xport_store_le32(dst, mc_state.save_size);
+    xport_store_le32(dst + 4u, mc_state.save_checksum);
+    for (uint32 idx = 0u; idx < MC_SAVE_DATA_BYTES; ++idx)
+        dst[MC_SAVE_HEADER_BYTES + idx] = profile_save_read_byte(idx);
     return 0;
 }
 
-sint32 mc_save_segments_scatter(uint32 source)
+sint32 mc_save_decode(const uint8 src[MC_SAVE_BYTES])
 {
     FUNCTION_MARKER(0x8004B6BCu, "MAIN.EXE");
     tournament_clear_extra_rounds();
-    mc_state.save_size = r_u32(source);
-    mc_state.save_checksum = r_u32(source + 4u);
-    for (uint32 index = 0u; index < MC_SAVE_DATA_BYTES; ++index)
-        profile_save_write_byte(index, r_u8(source + MC_SAVE_HEADER_BYTES + index));
+    mc_state.save_size = xport_load_le32(src);
+    mc_state.save_checksum = xport_load_le32(src + 4u);
+    for (uint32 idx = 0u; idx < MC_SAVE_DATA_BYTES; ++idx)
+        profile_save_write_byte(idx, src[MC_SAVE_HEADER_BYTES + idx]);
     return 0;
 }
 
@@ -512,19 +672,21 @@ sint32 mc_save_desc_checksum_calc(void)
     return (sint32)sum;
 }
 
-sint32 mc_save_payload_validate(uint32 data)
+sint32 mc_save_validate(const uint8 data[MC_SAVE_BYTES])
 {
     uint32 size;
     uint32 expected;
     uint32 sum = 0u;
-    uint32 index;
+    uint32 idx;
 
     FUNCTION_MARKER(0x8004B7E0u, "MAIN.EXE");
     mc_save_desc_checksum_calc();
-    size = r_u32(data);
-    expected = r_u32(data + 4u);
-    for (index = 0u; index < size; ++index)
-        sum += r_u8(data + 8u + index);
+    size = xport_load_le32(data);
+    expected = xport_load_le32(data + 4u);
+    if (size != MC_SAVE_DATA_BYTES)
+        return 2;
+    for (idx = 0u; idx < size; ++idx)
+        sum += data[MC_SAVE_HEADER_BYTES + idx];
     if (mc_state.save_size != size)
         return 2;
     return expected != sum;
@@ -551,27 +713,21 @@ sint32 mc_load_state_update(void)
         ResetGraph(0);
         mc_init_menu_status();
         card = (sint16)mc_state.card;
-        if ((sint16)mc_probe(card, 0x80081DCCu) != 0)
+        if ((sint16)mc_probe(card, mc_save_name) != 0)
         {
-            sint32 size;
-            uint32 buffer;
-
-            game_push_checkpoint();
-            size = mc_save_segment_sizes_sum(0, 0);
-            buffer = game_alloc_arena_bytes(size + 512);
-            load_result = mc_fn_8004b3ec(0x80081DCCu, buffer);
+            MC_SAVE_FILE file = {0};
+            load_result = mc_read_save(mc_save_name, (uint8 *)&file);
             if ((sint16)load_result != 0)
             {
-                validation = mc_save_payload_validate(buffer + 512u);
+                validation = mc_save_validate(file.payload);
                 if ((sint16)validation != 0)
                     load_result = 0;
                 else
                 {
-                    mc_save_segments_scatter(buffer + 512u);
+                    mc_save_decode(file.payload);
                     vehicle_select_fn_80062394();
                 }
             }
-            game_pop_checkpoint();
         }
         else
             save_found = 0;
@@ -582,7 +738,7 @@ sint32 mc_load_state_update(void)
         {
             menu_update_flag_index(3, 1);
             game_selection.flags = (uint16)((game_selection.flags & 0xFF00u) | (uint8)(0u));
-            if ((sint16)mc_probe(card, 0x80081DE4u) != 0 || (sint16)mc_probe(card, 0x80081DFCu) != 0 || (sint16)mc_probe(card, 0x80081E14u) != 0)
+            if ((sint16)mc_probe(card, mc_bonus_names[0]) != 0 || (sint16)mc_probe(card, mc_bonus_names[1]) != 0 || (sint16)mc_probe(card, mc_bonus_names[2]) != 0)
             {
                 if (((uint8)game_selection.flags & 0x20u) != 0u)
                     game_selection.flags = (uint16)((game_selection.flags & 0xFF00u) | (uint8)((uint8)((uint8)game_selection.flags - 32u)));
@@ -594,8 +750,8 @@ sint32 mc_load_state_update(void)
             menu_tex_refresh_if_needed();
             if (old_language != menu_state.language)
                 menu_fn_80050440(24, 0);
-            w_u16(0x80083494u, sound_options.music);
-            w_u16(0x80083490u, sound_options.effects);
+            sound_mix.music = sound_options.music;
+            sound_mix.effects = sound_options.effects;
             voice_set_volume(7, (sint32)((uint32)(sint32)(sint16)sound_options.music << 8));
             vehicle_racer_count = (uint32)(8u);
             vehicle_leader_count = (uint16)(8u);
@@ -648,7 +804,7 @@ sint32 mc_load_state_update(void)
     if (phase == MC_LOAD_WAIT && (sint16)mc_state.countdown == 0)
     {
         sint32 index;
-        w_u16(0x800B6B1Au, 4u);
+        mc_state.prev_phase = MC_LOAD_WAIT;
         mc_state.phase = MC_IDLE;
         for (index = 0; index < 26; ++index)
         {
@@ -661,13 +817,24 @@ sint32 mc_load_state_update(void)
     return result;
 }
 
-sint32 mc_fn_8004bd0c(sint32 unused1, sint32 unused2, sint32 language, uint8 group)
+sint32 mc_save_header(void)
 {
+    MC_SAVE_HEADER header = {0};
+
     FUNCTION_MARKER(0x8004BD0Cu, "MAIN.EXE");
-    return 0;
+    if (!mc_icon.ready)
+        return 0;
+    mc_encode_title("RAPID RACER", header.title);
+    header.magic[0] = 'S';
+    header.magic[1] = 'C';
+    header.icon_mode = 0x11u;
+    header.blocks = 1u;
+    memcpy(header.palette, mc_icon.palette, sizeof(header.palette));
+    memcpy(header.pixels, mc_icon.pixels, sizeof(header.pixels));
+    return mc_write_header((sint16)mc_state.card, mc_save_name, (const uint8 *)&header);
 }
 
-sint32 mc_fn_8004beb0(void)
+sint32 mc_save_state_update(void)
 {
     sint32 phase;
     sint32 card;
@@ -687,9 +854,9 @@ sint32 mc_fn_8004beb0(void)
     if (phase == MC_SAVE && (sint16)mc_state.countdown == 0)
     {
         card = (sint16)mc_state.card;
-        count = (sint16)mc_enumerate_files((uint32)card, 0x800D7220u);
-        mc_read_file_entries(0x800D7220u, count, card);
-        save_exists = (sint16)mc_probe(card, 0x80081DCCu);
+        count = (sint16)mc_scan_files((uint32)card);
+        mc_read_headers(count, card);
+        save_exists = (sint16)mc_probe(card, mc_save_name);
         if ((sint16)mc_state.card_status != 0)
             free_blocks = 1;
         else
@@ -703,22 +870,16 @@ sint32 mc_fn_8004beb0(void)
             file_exists = 1;
         if (file_exists != 0)
         {
-            if ((sint16)mc_probe(card, 0x80081DCCu) != 0 && (sint16)mc_state.overwrite == 0)
+            if ((sint16)mc_probe(card, mc_save_name) != 0 && (sint16)mc_state.overwrite == 0)
                 save_exists = 1;
             else
             {
-                sint32 size;
-                uint32 buffer;
-
-                game_push_checkpoint();
-                size = mc_save_segment_sizes_sum(0, 0);
-                buffer = game_alloc_arena_bytes(size + 512);
+                MC_SAVE_FILE file = {0};
                 mc_save_desc_checksum_calc();
-                mc_save_segments_gather(buffer + 512u);
-                mc_file_erase((uint32)card, 0x80081DCCu);
-                save_result = mc_fn_8004b490(0x80081DCCu, buffer);
-                game_pop_checkpoint();
-                mc_fn_8004bd0c(0, 0, 0, 0u);
+                mc_save_encode(file.payload);
+                mc_file_erase((uint32)card, mc_save_name);
+                save_result = mc_write_save(mc_save_name, (const uint8 *)&file);
+                mc_save_header();
                 mc_state.countdown = 150u;
                 mc_state.phase = MC_SAVE_WAIT;
             }
@@ -777,7 +938,7 @@ sint32 mc_fn_8004beb0(void)
     }
     if (phase == MC_SAVE_WAIT && (sint16)mc_state.countdown == 0)
     {
-        w_u16(0x800B6B1Au, 2u);
+        mc_state.prev_phase = MC_SAVE_WAIT;
         mc_state.phase = MC_IDLE;
         for (index = 0; index < 26; ++index)
             text_menu[index + 8].visible = 0u;
@@ -792,29 +953,29 @@ sint32 mc_load_begin(void)
     sint32 result;
 
     FUNCTION_MARKER(0x8004CB04u, "MAIN.EXE");
-    w_u16(0x800B6AE0u, 1u);
-    w_u16(0x800B6AEEu, 0u);
+    mc_state.load_active = 1u;
+    mc_state.load_error = 0u;
     mc_state.countdown = 0u;
     mc_state.phase = MC_LOAD;
     mc_state.card = 0u;
     mc_probe_status(0);
     mc_load_state_update();
-    error = (sint16)r_u16(0x800B6AEEu);
-    w_u16(0x800B6AE0u, 0u);
+    error = (sint16)mc_state.load_error;
+    mc_state.load_active = 0u;
     if (error != 0)
     {
         sint32 message = error == -6 || error == -1 ? 47 : 1;
         if (message == 1)
             mc_calc_free_blocks();
-        w_u16(0x800B6BD2u, (uint16)message);
+        mc_state.notice_screen = (uint16)message;
     }
-    result = (sint16)mc_probe((sint16)mc_state.card, 0x80081DCCu);
+    result = (sint16)mc_probe((sint16)mc_state.card, mc_save_name);
     if (result == 0)
     {
-        sint32 count = (sint16)mc_enumerate_files((uint32)(sint32)(sint16)mc_state.card, 0x800D7220u);
-        mc_read_file_entries(0x800D7220u, count, (sint16)mc_state.card);
+        sint32 count = (sint16)mc_scan_files((uint32)(sint32)(sint16)mc_state.card);
+        mc_read_headers(count, (sint16)mc_state.card);
         if ((sint16)mc_calc_free_blocks() == 0)
-            w_u16(0x800B6BD2u, 52u);
+            mc_state.notice_screen = 52u;
         return 52;
     }
     return (sint32)((uint32)(uint16)result << 16);
@@ -838,51 +999,22 @@ sint32 mc_poll_state(void)
     if (state >= 1 && state <= 4)
         return 1;
     card = (sint16)mc_state.card;
-    if ((sint16)mc_probe(card, 0x80081DCCu) != 0)
+    if ((sint16)mc_probe(card, mc_save_name) != 0)
         return 0;
     card = (sint16)mc_state.card;
-    count = (sint16)mc_enumerate_files((uint32)card, 0x800D7220u);
+    count = (sint16)mc_scan_files((uint32)card);
     card = (sint16)mc_state.card;
-    mc_read_file_entries(0x800D7220u, count, card);
+    mc_read_headers(count, card);
     card = (sint16)mc_state.card;
     if ((sint16)mc_calc_free_blocks() != 0)
         return 0;
-    w_u16(0x800B6BD2u, 52u);
+    mc_state.notice_screen = 52u;
     return 1;
 }
 
-uint32 mc_file_find_first(const char *pattern, uint32 record)
-{
-    FUNCTION_MARKER(0x800677ECu, "MAIN.EXE");
-    return 0u;
-}
 
-sint32 mc_fn_8006780c(const char *path)
-{
-    FUNCTION_MARKER(0x8006780Cu, "MAIN.EXE");
-    return 0;
-}
 
-sint32 mc_fn_80067a8c(uint32 pad1, sint32 pad1_size, uint32 pad2, sint32 pad2_size)
-{
-    FUNCTION_MARKER(0x80067A8Cu, "MAIN.EXE");
-    PadInitDirect((uint8 *)xport_guest_ptr(pad1, sizeof(uint8)), (uint8 *)xport_guest_ptr(pad2, sizeof(uint8)));
-    return 1;
-}
 
-sint32 mc_fn_80067a9c(void)
-{
-    FUNCTION_MARKER(0x80067A9Cu, "MAIN.EXE");
-    PadStartCom();
-    return 1;
-}
-
-sint32 mc_fn_80067bbc(void)
-{
-    FUNCTION_MARKER(0x80067BBCu, "MAIN.EXE");
-    PadStopCom();
-    return 1;
-}
 
 void mc_fn_80074d30(uint32 card)
 {

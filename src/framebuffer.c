@@ -1,3 +1,4 @@
+#include "game.h"
 #include "framebuffer.h"
 #include "display.h"
 #include "callbacks.h"
@@ -23,7 +24,7 @@ static uint32 fb_capture_size(const PSX_RECT *area, uint32 offset)
 
 uint32 fb_capture_strips(void)
 {
-    PSX_RECT *areas = fb_capture_areas[r_u32(0x80083478u) == 2u];
+    PSX_RECT *areas = fb_capture_areas[race_cfg.players == 2u];
     uint32 offset = 0u;
     uint32 index;
 
@@ -46,7 +47,7 @@ uint32 fb_capture_strips(void)
 
 uint32 fb_restore_strips(void)
 {
-    PSX_RECT *areas = fb_capture_areas[r_u32(0x80083478u) == 2u];
+    PSX_RECT *areas = fb_capture_areas[race_cfg.players == 2u];
     uint32 index;
 
     FUNCTION_MARKER(0x80011308u, "MAIN.EXE");
@@ -61,7 +62,7 @@ uint32 fb_restore_strips(void)
 
 uint32 fb_remove_vert_offset(void)
 {
-    PSX_RECT *areas = fb_capture_areas[r_u32(0x80083478u) == 2u];
+    PSX_RECT *areas = fb_capture_areas[race_cfg.players == 2u];
     uint32 frame;
     uint32 index;
 

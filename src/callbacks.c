@@ -18,6 +18,7 @@ static CB_NODE *cb_free, *cb_next;
 static CB_LIST cb_global;
 CB_LIST cb_players[2];
 static CB_LIST *cb_active = &cb_global;
+static volatile uint32 cb_field, cb_vblank_ready;
 
 void cb_init_pool(void)
 {
@@ -118,19 +119,24 @@ sint32 cb_vblank_timer(void)
 
     FUNCTION_MARKER(0x800387CCu, "MAIN.EXE");
     ResetRCnt(0xF2000002u);
-    result = 1u - r_u32(0x800CAE84u);
-    w_u32(0x800CAE84u, result);
-    w_u32(0x800CAE80u, 1u);
+    result = 1u - cb_field;
+    cb_field = result;
+    cb_vblank_ready = 1u;
     return (sint32)result;
+}
+
+static void cb_on_vblank(void)
+{
+    cb_vblank_timer();
 }
 
 sint32 cb_init_vblank_timer(void)
 {
     FUNCTION_MARKER(0x80038810u, "MAIN.EXE");
-    w_u32(0x800CAE84u, 0u);
+    cb_field = 0u;
     menu_fn_8006776c();
     SetRCnt(0xF2000002u, 0xFFFFu, 0x2000u);
-    runtime_set_vsync_cb(0x800387CCu);
+    VSyncCallback(cb_on_vblank);
     global_fn_8006777c();
     return 0;
 }
@@ -140,14 +146,14 @@ sint32 cb_wait_vblank(void)
     sint32 result;
 
     FUNCTION_MARKER(0x80038874u, "MAIN.EXE");
-    w_u32(0x800CAE80u, 0u);
+    cb_vblank_ready = 0u;
     do
     {
         if (VSync(0) < 0)
             return 0;
-        result = (sint32)r_u32(0x800CAE80u);
+        result = (sint32)cb_vblank_ready;
     } while (result == 0);
-    w_u32(0x800CAE80u, 0u);
+    cb_vblank_ready = 0u;
     return result;
 }
 
@@ -156,47 +162,9 @@ sint32 cb_sync_video_field(void)
     sint32 result;
 
     FUNCTION_MARKER(0x800388A0u, "MAIN.EXE");
-    w_u32(0x800CAE80u, 0u);
+    cb_vblank_ready = 0u;
     VSync(0);
-    result = 1 - (sint32)(r_u32(0x800CAE84u) & 1u);
-    w_u32(0x800CAE84u, (uint32)result);
+    result = 1 - (sint32)(cb_field & 1u);
+    cb_field = (uint32)result;
     return result;
-}
-
-void cd_handle_ready_cb(uint8 status, uint32 response)
-{
-    uint32 frame;
-
-    FUNCTION_MARKER(0x80038950u, "MAIN.EXE");
-    if (status != 1u)
-    {
-        w_u32(0x800B6B28u, 0u);
-        return;
-    }
-    frame = guest_stack_push(0x20u);
-    if ((r_u8(response + 4u) & 0x80u) == 0u)
-    {
-        uint8 minute = r_u8(response + 3u);
-        uint8 second;
-
-        w_u8(frame + 0x10u, minute);
-        second = r_u8(response + 4u);
-        w_u8(frame + 0x12u, 0u);
-        w_u8(frame + 0x11u, second);
-        w_u32(0x800B6C08u, (uint32)race_decode_time_bcd(frame + 0x10u));
-    }
-    {
-        sint32 current = (sint32)r_u32(0x800B6C08u);
-        sint32 limit = (sint32)r_u32(0x800B6AE8u);
-
-        if (limit < current)
-        {
-            w_u16(0x800D6B6Au, 0u);
-            w_u16(0x800D6B68u, 0u);
-            w_u32(0x800D6B58u, 0xC0u);
-            SpuSetVoiceAttr((SpuVoiceAttr *)psx_addr(0x800D6B58u, sizeof(SpuVoiceAttr)));
-            w_u32(0x800B6B28u, 0u);
-        }
-    }
-    guest_stack_pop(0x20u);
 }

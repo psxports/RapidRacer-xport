@@ -70,7 +70,7 @@ sint32 trail_render_marker(BOAT *boat, uint32 *ot)
     offset = render_packet_offset();
     packet = render_packet_at(offset, sizeof(*packet));
     depth = gte_project(&point, &screen, &flags);
-    vertical = r_u32(0x80083478u) == 2u ? 10 : 20;
+    vertical = race_cfg.players == 2u ? 10 : 20;
     packet->x0 = packet->x2 = (sint16)(uint16)((uint32)(uint16)screen - 22u);
     packet->x1 = packet->x3 = (sint16)(uint16)((uint32)(uint16)screen + 22u);
     packet->y0 = packet->y1 = (sint16)(uint16)(((uint32)screen >> 16) - 2u * (uint32)vertical);
@@ -247,7 +247,7 @@ sint32 trail_update(BOAT *boat)
             value >>= 15;
             value = (sint32)((uint32)value + (uint32)trail->intensity[index + 1]);
             if (intensity > 0)
-                value = (sint32)((uint32)value + (uint32)math_rem_s32(global_fn_8006e9d8(), intensity));
+                value = (sint32)((uint32)value + (uint32)math_rem_s32(game_random_next(), intensity));
             value = (sint32)(((uint32)value << 2) + (uint32)value);
             value = (sint32)((uint32)value << 2);
             if (value < 0)
@@ -257,7 +257,7 @@ sint32 trail_update(BOAT *boat)
             intensity = (sint32)((uint32)intensity + (uint32)step);
         }
         if (intensity > 0)
-            trail->intensity[0] = (sint32)((uint32)math_rem_s32(global_fn_8006e9d8(), intensity));
+            trail->intensity[0] = (sint32)((uint32)math_rem_s32(game_random_next(), intensity));
         else
             trail->intensity[0] = (sint32)(0u);
         for (index = 3; index >= 0; --index)
@@ -431,7 +431,7 @@ sint32 trail_emit(BOAT *boat)
     }
     else
     {
-        sint32 random = global_fn_8006e9d8();
+        sint32 random = game_random_next();
         sint32 remainder = math_rem_s32(random, intensity);
         uint32 fade;
         uint32 suspension;
@@ -479,59 +479,56 @@ sint32 trail_emit(BOAT *boat)
     return (sint32)first;
 }
 
-static uint32 trail_emit_window(uint32 offset, uint32 *link, uint32 rectangle)
+// Texture windows from MAIN.EXE 800B3F1C/800B3F2C
+static const PSX_RECT trail_tex_window = {64, 0, 64, 64};
+static const PSX_RECT trail_full_window = {0, 0, 256, 256};
+
+static uint32 trail_emit_window(uint32 offset, uint32 *ot_entry, const PSX_RECT *rect)
 {
     DR_TWIN *packet = render_packet_at(offset, sizeof(*packet));
-    uint32 x, y, width, height;
-    setlen(packet, 2);
-    x = r_u8(rectangle) >> 3;
-    width = (uint8)(0u - (uint32)(sint16)r_u16(rectangle + 4u)) >> 3;
-    y = r_u8(rectangle + 2u) >> 3;
-    height = (uint8)(0u - (uint32)(sint16)r_u16(rectangle + 6u)) >> 3;
-    packet->code[0] = 0xE2000000u | (y << 15) | (x << 10) | (height << 5) | width;
-    packet->code[1] = 0;
-    AddPrim(link, packet);
+    SetTexWindow(packet, rect);
+    AddPrim(ot_entry, packet);
     return offset + sizeof(*packet);
 }
 
 uint32 trail_render(BOAT *boat, uint32 *ot, sint32 bucket)
 {
-    BOAT_TRAIL *geometry_state = &boat->trail;
+    BOAT_TRAIL *state = &boat->trail;
     uint32 *link = ot + (uint32)(bucket - 1);
     uint32 packet_offset = render_packet_offset();
     POLY_FT4 *packet;
     sint32 group;
 
     FUNCTION_MARKER(0x80031904u, "MAIN.EXE");
-    packet_offset = trail_emit_window(packet_offset, link, 0x800B3F2Cu);
+    packet_offset = trail_emit_window(packet_offset, link, &trail_full_window);
     for (group = 0; group < 2; ++group)
     {
-        TRAIL_GROUP *trail = &geometry_state->groups[group];
-        sint16 position_x = (sint16)(uint16)trail->front.vx;
-        sint16 position_y = (sint16)(uint16)trail->front.vy;
-        sint16 position_z = (sint16)(uint16)trail->front.vz;
-        sint16 step_x = (sint16)((uint16)trail->rear.vx - (uint16)position_x);
-        sint16 step_y = (sint16)((uint16)trail->rear.vy - (uint16)position_y);
-        sint16 step_z = (sint16)((uint16)trail->rear.vz - (uint16)position_z);
+        TRAIL_GROUP *trail = &state->groups[group];
+        sint16 pos_x = (sint16)(uint16)trail->front.vx;
+        sint16 pos_y = (sint16)(uint16)trail->front.vy;
+        sint16 pos_z = (sint16)(uint16)trail->front.vz;
+        sint16 step_x = (sint16)((uint16)trail->rear.vx - (uint16)pos_x);
+        sint16 step_y = (sint16)((uint16)trail->rear.vy - (uint16)pos_y);
+        sint16 step_z = (sint16)((uint16)trail->rear.vz - (uint16)pos_z);
         TRAIL_PARTICLE *direction;
-        sint16 direction_x;
-        sint16 direction_y;
-        sint16 direction_z;
+        sint16 dir_x;
+        sint16 dir_y;
+        sint16 dir_z;
         sint32 initial_amount;
         sint32 texture = 64;
-        sint32 previous_base = 0;
-        sint32 previous_offset = 0;
+        sint32 prev_base = 0;
+        sint32 prev_offset = 0;
         sint32 segment;
 
         step_x = (sint16)(step_x / 4);
         step_y = (sint16)(step_y / 4);
         step_z = (sint16)(step_z / 4);
         direction = trail->order[0];
-        direction_x = (sint16)(uint16)direction->direction.vx;
+        dir_x = (sint16)(uint16)direction->direction.vx;
         direction = trail->order[0];
-        direction_y = (sint16)(uint16)direction->direction.vy;
+        dir_y = (sint16)(uint16)direction->direction.vy;
         direction = trail->order[0];
-        direction_z = (sint16)(uint16)direction->direction.vz;
+        dir_z = (sint16)(uint16)direction->direction.vz;
         initial_amount = (sint32)(uint32)trail->intensity[0];
         if (initial_amount >= 33)
             initial_amount = 32;
@@ -539,7 +536,7 @@ uint32 trail_render(BOAT *boat, uint32 *ot, sint32 bucket)
         {
             SVECTOR base;
             SVECTOR offset;
-            SVECTOR direction_vector;
+            SVECTOR dir;
             VECTOR scaled;
             sint32 base_screen;
             sint32 offset_screen;
@@ -551,12 +548,12 @@ uint32 trail_render(BOAT *boat, uint32 *ot, sint32 bucket)
             if (segment < 5)
             {
                 amount = segment == 0 ? (sint16)initial_amount : (sint16)(uint32)trail->intensity[segment];
-                base.vx = position_x;
-                base.vy = position_y;
-                base.vz = position_z;
-                position_x = (sint16)(position_x + step_x);
-                position_y = (sint16)(position_y + step_y);
-                position_z = (sint16)(position_z + step_z);
+                base.vx = pos_x;
+                base.vy = pos_y;
+                base.vz = pos_z;
+                pos_x = (sint16)(pos_x + step_x);
+                pos_y = (sint16)(pos_y + step_y);
+                pos_z = (sint16)(pos_z + step_z);
             }
             else
             {
@@ -564,17 +561,17 @@ uint32 trail_render(BOAT *boat, uint32 *ot, sint32 bucket)
                 base.vx = (sint16)(uint16)record->position.vx;
                 base.vy = (sint16)(uint16)record->position.vy;
                 base.vz = (sint16)(uint16)record->position.vz;
-                direction_x = (sint16)(uint16)record->direction.vx;
-                direction_y = (sint16)(uint16)record->direction.vy;
-                direction_z = (sint16)(uint16)record->direction.vz;
+                dir_x = (sint16)(uint16)record->direction.vx;
+                dir_y = (sint16)(uint16)record->direction.vy;
+                dir_z = (sint16)(uint16)record->direction.vz;
                 amount = (sint16)(uint16)record->width;
             }
             base.pad = 0;
-            direction_vector.vx = direction_x;
-            direction_vector.vy = direction_y;
-            direction_vector.vz = direction_z;
-            direction_vector.pad = 0;
-            gte_gpf12(&direction_vector, amount, &scaled);
+            dir.vx = dir_x;
+            dir.vy = dir_y;
+            dir.vz = dir_z;
+            dir.pad = 0;
+            gte_gpf12(&dir, amount, &scaled);
             if (segment >= 5)
                 next_texture = texture + (uint16)record->texture;
             offset.vx = (sint16)((uint16)base.vx + (uint32)scaled.vx);
@@ -592,34 +589,25 @@ uint32 trail_render(BOAT *boat, uint32 *ot, sint32 bucket)
                 packet = render_packet_at(packet_offset, sizeof(*packet));
                 packet->tpage = 60u;
                 packet->clut = 0x7FF1u;
-                packet->code = 0x2E;
-                packet->r0 = packet->g0 = packet->b0 = 64;
-                packet->u0 = (uint8)((uint16)texture);
-                packet->v0 = (uint8)((uint16)((uint16)texture) >> 8);
-                packet->x0 = (sint16)(uint16)((uint32)previous_base);
-                packet->y0 = (sint16)(uint16)((uint32)((uint32)previous_base) >> 16);
-                packet->u1 = (uint8)((uint16)(texture | 0x3F));
-                packet->v1 = (uint8)((uint16)((uint16)(texture | 0x3F)) >> 8);
-                packet->x1 = (sint16)(uint16)((uint32)previous_offset);
-                packet->y1 = (sint16)(uint16)((uint32)((uint32)previous_offset) >> 16);
-                packet->u2 = (uint8)((uint16)next_texture);
-                packet->v2 = (uint8)((uint16)((uint16)next_texture) >> 8);
-                packet->x2 = (sint16)(uint16)((uint32)base_screen);
-                packet->y2 = (sint16)(uint16)((uint32)((uint32)base_screen) >> 16);
-                packet->u3 = (uint8)((uint16)(next_texture | 0x3F));
-                packet->v3 = (uint8)((uint16)((uint16)(next_texture | 0x3F)) >> 8);
-                packet->x3 = (sint16)(uint16)((uint32)offset_screen);
-                packet->y3 = (sint16)(uint16)((uint32)((uint32)offset_screen) >> 16);
+                packet->color0 = 0x2E404040u;
+                packet->uv0 = (uint16)texture;
+                packet->xy0 = (uint32)prev_base;
+                packet->uv1 = (uint16)(texture | 0x3F);
+                packet->xy1 = (uint32)prev_offset;
+                packet->uv2 = (uint16)next_texture;
+                packet->xy2 = (uint32)base_screen;
+                packet->uv3 = (uint16)(next_texture | 0x3F);
+                packet->xy3 = (uint32)offset_screen;
                 packet->tag = *link | 0x09000000u;
                 AddPrim(link, packet);
                 packet_offset += sizeof(*packet);
             }
-            previous_base = base_screen;
-            previous_offset = offset_screen;
+            prev_base = base_screen;
+            prev_offset = offset_screen;
             texture = next_texture;
         }
     }
-    packet_offset = trail_emit_window(packet_offset, link, 0x800B3F1Cu);
+    packet_offset = trail_emit_window(packet_offset, link, &trail_tex_window);
     render_packet_publish(packet_offset);
     return *link;
 }
@@ -662,21 +650,21 @@ static const uint32 trail_spray_lift[5] = {0u, 2867u, 4096u, 2867u, 0u};
 
 uint32 trail_render_spray(BOAT *boat, uint32 *ot, sint32 bucket)
 {
-    BOAT_TRAIL *geometry_state = &boat->trail;
+    BOAT_TRAIL *state = &boat->trail;
     uint32 *link = ot + (uint32)(bucket - 1);
     uint32 packet_offset = render_packet_offset();
     POLY_FT4 *packet;
     sint32 index;
     sint32 texture;
-    sint32 previous_left = 0;
-    sint32 previous_center = 0;
-    sint32 previous_right = 0;
+    sint32 prev_left = 0;
+    sint32 prev_center = 0;
+    sint32 prev_right = 0;
 
     FUNCTION_MARKER(0x80031FA0u, "MAIN.EXE");
-    packet_offset = trail_emit_window(packet_offset, link, 0x800B3F2Cu);
-    texture = ((uint16)geometry_state->scroll & 0x3F00u) + 64;
+    packet_offset = trail_emit_window(packet_offset, link, &trail_full_window);
+    texture = ((uint16)state->scroll & 0x3F00u) + 64;
     {
-        TRAIL_SPRAY *first = geometry_state->spray_order[0];
+        TRAIL_SPRAY *first = state->spray_order[0];
         sint32 height = (sint8)((uint16)first->fade >> 8);
         if (height < 40)
             texture -= height - 40;
@@ -684,7 +672,7 @@ uint32 trail_render_spray(BOAT *boat, uint32 *ot, sint32 bucket)
     texture += 8;
     for (index = 0; index < 5; ++index)
     {
-        TRAIL_SPRAY *record = geometry_state->spray_order[index];
+        TRAIL_SPRAY *record = state->spray_order[index];
         SVECTOR direction;
         SVECTOR points[3];
         VECTOR width;
@@ -702,22 +690,14 @@ uint32 trail_render_spray(BOAT *boat, uint32 *ot, sint32 bucket)
             POLY_FT4 *second = (POLY_FT4 *)render_packet_at(packet_offset, 2u * sizeof(*packet)) + 1;
 
             packet = second - 1;
-            packet->x0 = (sint16)(uint16)((uint32)previous_left);
-            packet->y0 = (sint16)(uint16)((uint32)((uint32)previous_left) >> 16);
-            packet->x1 = (sint16)(uint16)((uint32)previous_center);
-            packet->y1 = (sint16)(uint16)((uint32)((uint32)previous_center) >> 16);
-            second->x1 = (sint16)(uint16)((uint32)previous_center);
-            second->y1 = (sint16)(uint16)((uint32)((uint32)previous_center) >> 16);
-            second->x0 = (sint16)(uint16)((uint32)previous_right);
-            second->y0 = (sint16)(uint16)((uint32)((uint32)previous_right) >> 16);
-            packet->u0 = (uint8)((uint16)(texture | 0x7F));
-            packet->v0 = (uint8)((uint16)((uint16)(texture | 0x7F)) >> 8);
-            packet->u1 = (uint8)((uint16)texture);
-            packet->v1 = (uint8)((uint16)((uint16)texture) >> 8);
-            second->u1 = (uint8)((uint16)texture);
-            second->v1 = (uint8)((uint16)((uint16)texture) >> 8);
-            second->u0 = (uint8)((uint16)(texture | 0x7F));
-            second->v0 = (uint8)((uint16)((uint16)(texture | 0x7F)) >> 8);
+            packet->xy0 = (uint32)prev_left;
+            packet->xy1 = (uint32)prev_center;
+            second->xy1 = (uint32)prev_center;
+            second->xy0 = (uint32)prev_right;
+            packet->uv0 = (uint16)(texture | 0x7F);
+            packet->uv1 = (uint16)texture;
+            second->uv1 = (uint16)texture;
+            second->uv0 = (uint16)(texture | 0x7F);
         }
 
         fade = (sint16)(uint16)record->fade / 256;
@@ -768,30 +748,16 @@ uint32 trail_render_spray(BOAT *boat, uint32 *ot, sint32 bucket)
 
             packet = second - 1;
             (void)NormalClip(screens[0], screens[1], screens[2]);
-            packet->x2 = (sint16)(uint16)((uint32)screens[0]);
-            packet->y2 = (sint16)(uint16)((uint32)((uint32)screens[0]) >> 16);
-            packet->x3 = (sint16)(uint16)((uint32)screens[1]);
-            packet->y3 = (sint16)(uint16)((uint32)((uint32)screens[1]) >> 16);
-            second->x3 = (sint16)(uint16)((uint32)screens[1]);
-            second->y3 = (sint16)(uint16)((uint32)((uint32)screens[1]) >> 16);
-            second->x2 = (sint16)(uint16)((uint32)screens[2]);
-            second->y2 = (sint16)(uint16)((uint32)((uint32)screens[2]) >> 16);
-            packet->r0 = (uint8)((uint32)(color));
-            packet->g0 = (uint8)((uint32)(color) >> 8);
-            packet->b0 = (uint8)((uint32)(color) >> 16);
-            packet->code = (uint8)((uint32)(color) >> 24);
-            second->r0 = (uint8)((uint32)(color));
-            second->g0 = (uint8)((uint32)(color) >> 8);
-            second->b0 = (uint8)((uint32)(color) >> 16);
-            second->code = (uint8)((uint32)(color) >> 24);
-            packet->u2 = (uint8)((uint16)(next_texture | 0x7F));
-            packet->v2 = (uint8)((uint16)((uint16)(next_texture | 0x7F)) >> 8);
-            packet->u3 = (uint8)((uint16)next_texture);
-            packet->v3 = (uint8)((uint16)((uint16)next_texture) >> 8);
-            second->u3 = (uint8)((uint16)next_texture);
-            second->v3 = (uint8)((uint16)((uint16)next_texture) >> 8);
-            second->u2 = (uint8)((uint16)(next_texture | 0x7F));
-            second->v2 = (uint8)((uint16)((uint16)(next_texture | 0x7F)) >> 8);
+            packet->xy2 = (uint32)screens[0];
+            packet->xy3 = (uint32)screens[1];
+            second->xy3 = (uint32)screens[1];
+            second->xy2 = (uint32)screens[2];
+            packet->color0 = color;
+            second->color0 = color;
+            packet->uv2 = (uint16)(next_texture | 0x7F);
+            packet->uv3 = (uint16)next_texture;
+            second->uv3 = (uint16)next_texture;
+            second->uv2 = (uint16)(next_texture | 0x7F);
             second->tpage = 60u;
             packet->tpage = 60u;
             second->clut = 0x7FF1u;
@@ -803,11 +769,11 @@ uint32 trail_render_spray(BOAT *boat, uint32 *ot, sint32 bucket)
             texture = next_texture;
             packet_offset += 2u * sizeof(*packet);
         }
-        previous_left = screens[0];
-        previous_center = screens[1];
-        previous_right = screens[2];
+        prev_left = screens[0];
+        prev_center = screens[1];
+        prev_right = screens[2];
     }
-    packet_offset = trail_emit_window(packet_offset, link, 0x800B3F1Cu);
+    packet_offset = trail_emit_window(packet_offset, link, &trail_tex_window);
     render_packet_publish(packet_offset);
     return *link;
 }
@@ -859,7 +825,7 @@ sint32 trail_render_flare(BOAT *boat, uint32 *ot, uint32 depth_limit)
         height = (sint32)(80u - (((uint32)age - 20u) << 2u));
     else
         height = 60;
-    height = (sint32)((uint32)height + (global_fn_8006e9d8() & 3u));
+    height = (sint32)((uint32)height + (game_random_next() & 3u));
     width = age >= 74 ? (sint32)(90u - (uint32)age) / 2 : 8;
     side = 0;
     texture = &trail_flare_textures[(game_timing.ticks >> 2u) & 7u];

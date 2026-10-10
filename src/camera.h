@@ -3,6 +3,8 @@
 
 #include "psx.h"
 
+struct RACE_VIEW;
+
 struct ROUTE_SEGMENT;
 
 struct BOAT;
@@ -48,7 +50,7 @@ typedef struct
 extern CAMERA_ATTRACT camera_attract;
 extern CAMERA_STATE camera_views[2];
 extern const MATRIX camera_identity;
-CAMERA_STATE *camera_for_view(uint32 context);
+CAMERA_STATE *camera_for_view(const struct RACE_VIEW *context);
 sint32 camera_init(CAMERA_STATE *camera);
 
 sint32 camera_update_trans(const struct BOAT *boat, CAMERA_STATE *control, CAMERA_ATTRACT *state);

@@ -3,17 +3,14 @@
 
 #include "psx.h"
 
-sint32 mdec_stream_play(uint32 desc, sint32 (*callback)(void), sint32 mode);
-sint32 mdec_init_stream(uint32 desc);
-sint32 mdec_stop_stream(uint32 desc);
-sint32 mdec_poll_stream_request(void);
-sint32 mdec_decode_request(uint32 request);
-sint32 mdec_wait_output(void);
+typedef struct
+{
+    const char *path;
+    uint16 rgb24, screen_width, x, y, width, height;
+    uint32 frames;
+    uint16 volume;
+} MDEC_MOVIE;
 
-sint32 mdec_get_output_buf_size(void);
-
-sint32 mdec_scale_output_width(uint16 value);
-sint32 mdec_get_output_depth(void);
-void mdec_fn_8007361c(uint32 first, uint32 second, uint32 third);
+sint32 mdec_stream_play(const MDEC_MOVIE *movie, sint32 (*skip)(void), sint32 mode);
 
 #endif /* RR_MDEC_H */

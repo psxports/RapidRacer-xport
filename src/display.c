@@ -103,11 +103,11 @@ sint32 display_sync_swap_buf(void)
 
         render_select_prim_pool(buffer);
         buffer = (sint32)display_state.scene_buffer;
-        scene_render_player(0x800DE0F0u, buffer);
-        if (r_u32(0x80083478u) == 2u)
+        scene_render_player(&race_views[0], buffer);
+        if (race_cfg.players == 2u)
         {
             buffer = (sint32)display_state.scene_buffer;
-            scene_render_player(0x800DF098u, buffer);
+            scene_render_player(&race_views[1], buffer);
         }
         game_render_frame();
         buffer = (sint32)display_state.scene_buffer;
@@ -120,7 +120,7 @@ sint32 display_init_envs(void)
 {
     // Original page configurations from MAIN.EXE 80080AB4
     static const PSX_RECT pages[2][2] = {{{0, 0, 368, 512}, {0, 0, 368, 512}}, {{0, 0, 512, 256}, {0, 256, 512, 256}}};
-    uint32 mode = r_u32(0x80083478u);
+    uint32 mode = race_cfg.players;
     sint32 compact = mode == 2u || game_timing.base_rate == 25u;
     const PSX_RECT *page = pages[compact];
     sint32 width = page[0].w;
@@ -132,7 +132,7 @@ sint32 display_init_envs(void)
     FUNCTION_MARKER(0x80014D54u, "MAIN.EXE");
     if (mode == 2u)
     {
-        if (r_u32(0x80083488u) == mode)
+        if (race_cfg.layout == mode)
             half_width /= 2;
         else
             half_height /= 2;
@@ -156,7 +156,7 @@ sint32 display_init_envs(void)
             frame->viewport = *draw_page;
             if (player != 0)
             {
-                if (r_u32(0x80083488u) == 2u)
+                if (race_cfg.layout == 2u)
                     x += half_width;
                 else
                     y += half_height;
@@ -178,16 +178,16 @@ sint32 display_init_envs(void)
             line->code = 0x40u;
             if (player == 0)
             {
-                line->x0 = r_u32(0x80083488u) == 2u ? (sint16)(half_width - 1) : 0;
-                line->y0 = r_u32(0x80083488u) == 2u ? 0 : (sint16)(half_height - 1);
+                line->x0 = race_cfg.layout == 2u ? (sint16)(half_width - 1) : 0;
+                line->y0 = race_cfg.layout == 2u ? 0 : (sint16)(half_height - 1);
                 line->x1 = (sint16)(half_width - 1);
                 line->y1 = (sint16)(half_height - 1);
             }
             else
             {
                 line->x0 = line->y0 = 0;
-                line->x1 = r_u32(0x80083488u) == 2u ? 0 : (sint16)(half_width - 1);
-                line->y1 = r_u32(0x80083488u) == 2u ? (sint16)(half_height - 1) : 0;
+                line->x1 = race_cfg.layout == 2u ? 0 : (sint16)(half_width - 1);
+                line->y1 = race_cfg.layout == 2u ? (sint16)(half_height - 1) : 0;
             }
         }
     render_set_geom_offset(half_width / 2, half_height / 2);

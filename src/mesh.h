@@ -3,6 +3,8 @@
 
 #include "psx.h"
 
+struct RACE_VIEW;
+
 #include <stddef.h>
 
 struct BOAT;
@@ -63,12 +65,12 @@ void mesh_outline_model(uint32 *ot, uint32 depth_limit, const MESH_MODEL *model)
 void mesh_draw_lit_quads(uint32 *ot, const MESH_MODEL *model, const SVECTOR *normal);
 
 
-uint32 *mesh_prepare_player_ot_packet(uint32 state, sint32 player);
+uint32 *mesh_prepare_player_ot_packet(const struct RACE_VIEW *state, sint32 player);
 sint32 mesh_vis_vert_project(const struct BOAT *boat);
-uint32 *mesh_prepare_racer_ot_packet(uint32 state, uint32 bucket, sint32 player);
-sint32 route_segment_is_in_window(uint32 entry, sint32 offset);
-sint32 mesh_order_bucket(uint32 view, const sint32 position[3], sint16 *depth, sint32 *visible);
-void mesh_render_racer_model(uint32 view, sint32 player);
+uint32 *mesh_prepare_racer_ot_packet(const struct RACE_VIEW *state, uint32 bucket, sint32 player);
+sint32 route_segment_is_in_window(const struct RACE_VIEW *entry, sint32 offset);
+sint32 mesh_order_bucket(const struct RACE_VIEW *view, const sint32 position[3], sint16 *depth, sint32 *visible);
+void mesh_render_racer_model(const struct RACE_VIEW *view, sint32 player);
 sint32 mesh_init_tex_templates(void);
 void mesh_fn_80034180(void);
 

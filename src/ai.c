@@ -68,12 +68,12 @@ static const AI_ROUTE_TUNING ai_route_tuning[7] = {
 
 static sint32 ai_fn_8002fc28_random(void)
 {
-    return global_fn_8006e9d8();
+    return game_random_next();
 }
 
-sint32 ai_update_trailing_pool(uint32 entry)
+sint32 ai_update_trailing_pool(const RACE_VIEW *entry)
 {
-    uint32 config;
+    BOAT_MENU *menu;
     BOAT **list_slot;
     BOAT *state;
     BOAT *adjacent;
@@ -88,8 +88,8 @@ sint32 ai_update_trailing_pool(uint32 entry)
     sint32 remainder;
 
     FUNCTION_MARKER(0x8002D324u, "MAIN.EXE");
-    config = r_u32(entry + 100u);
-    rank = r_u8(config + 14u);
+    menu = vehicle_player_menu(entry);
+    rank = menu->rank;
     index = rank + 1;
     list_slot = vehicle_racers + (rank);
     state = *(list_slot);
@@ -167,12 +167,12 @@ sint32 ai_update_trailing_pool(uint32 entry)
             remainder = (sint32)((uint32)remainder + (uint32)divisor);
         ai_place(state, (sint16)remainder);
 
-        config = r_u32(entry + 100u);
-        value = (uint32)r_u8(config + 14u) - 1u;
-        w_u8(config + 14u, (uint8)value);
-        config = r_u32(entry + 100u);
-        result = (sint32)((uint32)r_u8(config + 15u) - 1u);
-        w_u8(config + 15u, (uint8)result);
+        menu = vehicle_player_menu(entry);
+        value = (uint32)menu->rank - 1u;
+        menu->rank = (uint8)value;
+        menu = vehicle_player_menu(entry);
+        result = (sint32)((uint32)menu->prev_rank - 1u);
+        menu->prev_rank = (uint8)result;
         goto done;
     }
 
@@ -229,12 +229,12 @@ sint32 ai_update_trailing_pool(uint32 entry)
     state = *(vehicle_racers);
     ai_place(state, (sint16)remainder);
 
-    config = r_u32(entry + 100u);
-    value = (uint32)r_u8(config + 14u) + 1u;
-    w_u8(config + 14u, (uint8)value);
-    config = r_u32(entry + 100u);
-    result = (sint32)((uint32)r_u8(config + 15u) + 1u);
-    w_u8(config + 15u, (uint8)result);
+    menu = vehicle_player_menu(entry);
+    value = (uint32)menu->rank + 1u;
+    menu->rank = (uint8)value;
+    menu = vehicle_player_menu(entry);
+    result = (sint32)((uint32)menu->prev_rank + 1u);
+    menu->prev_rank = (uint8)result;
 
 done:
     return result;
@@ -305,14 +305,14 @@ sint32 ai_place(BOAT *boat, sint16 segment)
     return 1;
 }
 
-sint32 ai_sort_racers_by_rank(uint32 first, uint32 second)
+void ai_sort_racers_by_rank(const RACE_VIEW *first, const RACE_VIEW *second)
 {
     sint16 index;
     sint32 count;
 
     FUNCTION_MARKER(0x8002D888u, "MAIN.EXE");
-    if (first == 0u)
-        return 1;
+    if (first == NULL)
+        return;
 
     count = (sint32)vehicle_racer_count;
     if (count > 1)
@@ -338,13 +338,13 @@ sint32 ai_sort_racers_by_rank(uint32 first, uint32 second)
         } while ((sint32)index < count);
     }
 
-    if (second == 0u)
+    if (second == NULL)
     {
         BOAT *target;
 
         count = (sint32)vehicle_racer_count;
         if (count <= 0)
-            return 0;
+            return;
         index = 0;
         target = vehicle_player(first);
         do
@@ -353,19 +353,19 @@ sint32 ai_sort_racers_by_rank(uint32 first, uint32 second)
 
             if (state == target)
             {
-                uint32 menu = r_u32(first + 100u);
+                BOAT_MENU *menu = vehicle_player_menu(first);
 
-                w_u8(menu + 14u, (uint8)index);
-                return (sint32)menu;
+                menu->rank = (uint8)index;
+                return;
             }
             ++index;
         } while ((sint32)index < count);
-        return (sint32)((uint32)(uint16)index << 16);
+        return;
     }
 
     count = (sint32)vehicle_racer_count;
     if (count <= 0)
-        return count;
+        return;
     index = 0;
     do
     {
@@ -373,27 +373,27 @@ sint32 ai_sort_racers_by_rank(uint32 first, uint32 second)
 
         if (state == vehicle_player(first))
         {
-            uint32 menu = r_u32(first + 100u);
+            BOAT_MENU *menu = vehicle_player_menu(first);
 
-            w_u8(menu + 14u, (uint8)index);
+            menu->rank = (uint8)index;
         }
         else if (state == vehicle_player(second))
         {
-            uint32 menu = r_u32(second + 100u);
+            BOAT_MENU *menu = vehicle_player_menu(second);
 
-            w_u8(menu + 14u, (uint8)index);
+            menu->rank = (uint8)index;
         }
         ++index;
         count = (sint32)vehicle_racer_count;
     } while ((sint32)index < count);
-    return (sint32)((uint32)(uint16)index << 16);
+    return;
 }
 
-sint32 ai_update_racer(uint32 entry)
+sint32 ai_update_racer(const RACE_VIEW *entry)
 {
     BOAT *candidates[2] = {NULL, NULL};
     uint8 bindings[2];
-    uint32 config;
+    BOAT_MENU *menu;
     BOAT **list_slot;
     BOAT *state;
     BOAT *adjacent;
@@ -428,8 +428,8 @@ sint32 ai_update_racer(uint32 entry)
     state = vehicle_player(entry);
     state->route.distance = (sint32)(0u);
     state->route.link_distance = (sint32)(0u);
-    config = r_u32(entry + 100u);
-    rank = (sint16)((sint32)r_u8(config + 14u) - 1);
+    menu = vehicle_player_menu(entry);
+    rank = (sint16)((sint32)menu->rank - 1);
     index = rank;
     candidate_index = 0;
     while (index >= 0)
@@ -469,8 +469,8 @@ sint32 ai_update_racer(uint32 entry)
         candidate_index = (sint16)(candidate_index + 1);
     }
 
-    config = r_u32(entry + 100u);
-    index = (sint16)((sint32)r_u8(config + 14u) + 1);
+    menu = vehicle_player_menu(entry);
+    index = (sint16)((sint32)menu->rank + 1);
     count = (sint32)vehicle_racer_count;
     candidate_index = 0;
     while (index < count)
@@ -587,8 +587,8 @@ sint32 ai_update_racer(uint32 entry)
         }
     }
 
-    config = r_u32(entry + 100u);
-    index = (sint16)((sint32)r_u8(config + 14u) - 1);
+    menu = vehicle_player_menu(entry);
+    index = (sint16)((sint32)menu->rank - 1);
     while (index >= 0)
     {
         sint32 mode;
@@ -618,8 +618,8 @@ sint32 ai_update_racer(uint32 entry)
         index = (sint16)(index - 1);
     }
 
-    config = r_u32(entry + 100u);
-    index = (sint16)((sint32)r_u8(config + 14u) + 1);
+    menu = vehicle_player_menu(entry);
+    index = (sint16)((sint32)menu->rank + 1);
     count = (sint32)vehicle_racer_count;
     candidate_index = 0;
     while (index < count)
@@ -788,11 +788,11 @@ sint32 ai_choose_route_target(BOAT *boat)
             }
             if (randomize != 0)
             {
-                sint32 random = global_fn_8006e9d8();
+                sint32 random = game_random_next();
 
                 weight = weights[weight_index];
                 weights[weight_index] = (sint32)((uint32)weight + ((uint32)random & 1u));
-                random = global_fn_8006e9d8();
+                random = game_random_next();
                 route->behavior = (uint16)((uint16)(((uint32)random & 1u) + 12u));
             }
             route->lane_timer = (uint16)(0u);
@@ -907,9 +907,9 @@ sint32 ai_config_template_desc(sint32 idx, uint32 variation)
     if ((uint32)idx >= 7u || profile >= 3u)
         abort();
     w_u32(0x800B6820u, 0u);
-    mode = r_u32(0x8008348Cu);
+    mode = race_cfg.variant;
     row = (mode == 1u ? 0 : mode == 2u ? 3 : 6) + profile;
-    if (r_u32(0x800834A0u) == 6u)
+    if (race_cfg.course == 6u)
     {
         selected = profile;
         row = selected;
@@ -923,14 +923,14 @@ sint32 ai_config_template_desc(sint32 idx, uint32 variation)
 
 sint32 ai_init_race(BOAT *boat, sint16 segment, sint32 cfg_idx)
 {
-    uint32 player_index = r_u32(0x800834A0u);
+    uint32 player_index = race_cfg.course;
     const AI_ROUTE_TUNING *tuning = &ai_route_tuning[player_index];
     AI_ROUTE_CFG *cfg;
     sint32 variant = player_index == 6u ? profile_selection.slot + 3 : race_selection.ai_variant;
     sint32 result;
 
     FUNCTION_MARKER(0x8002FA94u, "MAIN.EXE");
-    if (r_u32(0x80083478u) == 1u)
+    if (race_cfg.players == 1u)
     {
         sint32 product;
         uint16 value;
@@ -989,11 +989,11 @@ sint32 ai_init_race(BOAT *boat, sint16 segment, sint32 cfg_idx)
     return result;
 }
 
-sint32 ai_assign_ctrl_states(uint32 group, uint32 second_group)
+sint32 ai_assign_ctrl_states(const RACE_VIEW *group, const RACE_VIEW *second_group)
 {
     BOAT *nearest = NULL;
     BOAT *next_nearest = NULL;
-    uint32 mode = r_u32(0x80083478u);
+    uint32 mode = race_cfg.players;
     sint32 first_gap = 4096;
     sint32 second_gap = 4096;
     sint32 count;
@@ -1070,7 +1070,7 @@ sint32 ai_assign_ctrl_states(uint32 group, uint32 second_group)
             count = (sint32)vehicle_racer_count;
         }
         result = 2;
-        if (vehicle_menu(r_u32(group + 100u))->mode == 2u)
+        if (vehicle_player_menu(group)->mode == 2u)
         {
             count = (sint32)vehicle_racer_count;
             result = count;

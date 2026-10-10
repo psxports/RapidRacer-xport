@@ -3,6 +3,8 @@
 #define RR_RENDER_H
 
 #include "psx.h"
+
+struct RACE_VIEW;
 #include "camera.h"
 
 typedef struct
@@ -153,7 +155,7 @@ extern uint8 render_curve[16][512];
 sint32 render_build_curve_scaled_lut(void);
 sint32 render_init_materials(sint32 group);
 sint32 render_init_ui_prims(void);
-uint32 render_target_indicator(uint32 owner, uint32 *ot, sint32 alternate);
+uint32 render_target_indicator(const struct RACE_VIEW *owner, uint32 *ot, sint32 alternate);
 
 typedef struct
 {

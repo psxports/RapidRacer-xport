@@ -1,3 +1,4 @@
+#include "race_events.h"
 #include "scene.h"
 #include "vehicle.h"
 #include "game.h"
@@ -14,14 +15,11 @@ CAMERA_ATTRACT camera_attract;
 const MATRIX camera_identity = {{{4096, 0, 0}, {0, 4096, 0}, {0, 0, 4096}}, {0, 0, 0}};
 
 // Temporary context boundary until player views are native
-CAMERA_STATE *camera_for_view(uint32 context)
+CAMERA_STATE *camera_for_view(const RACE_VIEW *context)
 {
-    if (context == 0x800DE0F0u)
-        return &camera_views[0];
-    if (context == 0x800DF098u)
-        return &camera_views[1];
-    abort();
-    return NULL;
+    if (context == NULL || context->idx >= 2u)
+        abort();
+    return &camera_views[context->idx];
 }
 
 // Original camera presets from reviewed MAIN.EXE
@@ -164,7 +162,7 @@ sint32 camera_update_trans(const BOAT *boat, CAMERA_STATE *control, CAMERA_ATTRA
             const ROUTE_SEGMENT *desc;
             const ROUTE_VERTEX *vtx;
 
-            if (r_u32(0x800834A0u) == 1u)
+            if (race_cfg.course == 1u)
             {
                 offset = 4;
                 state->steps = 32u;
@@ -344,10 +342,10 @@ sint32 camera_update(CAMERA_STATE *camera, BOAT *boat)
     MATRIX *rotation = &camera->rotation;
 
     FUNCTION_MARKER(0x80029BB4u, "MAIN.EXE");
-    if (r_u32(0x80083484u) == 5u)
+    if (race_cfg.mode == 5u)
         camera_update_trans(boat, camera, &camera_attract);
     tilt.m[0][0] = 4096;
-    tilt.m[1][1] = r_u32(0x80083478u) == 2u && r_u32(0x80083488u) == 2u ? -1840 : -5120;
+    tilt.m[1][1] = race_cfg.players == 2u && race_cfg.layout == 2u ? -1840 : -5120;
     tilt.m[2][2] = 4096;
     rotation->m[0][0] = 4096;
     rotation->m[0][1] = 0;
@@ -377,8 +375,8 @@ sint32 camera_update(CAMERA_STATE *camera, BOAT *boat)
         RotMatrix(&angles, rotation);
         desc = archive->segments[(uint32)start->camera_seg];
         camera->route = desc;
-        if ((sint32)(uint32)boat->race.progress > 0 && r_u32(0x800B6B10u) == 0u)
-            w_u32(0x800B6B10u, 1u);
+        if ((sint32)(uint32)boat->race.progress > 0 && race_start_phase == 0u)
+            race_start_phase = 1u;
     }
     else if (mode == 7)
     {
@@ -419,7 +417,7 @@ sint32 camera_update(CAMERA_STATE *camera, BOAT *boat)
     else if (mode == 2)
     {
         settings = &camera_settings[1];
-        if (r_u32(0x80083478u) == 2u && r_u32(0x80083488u) == 2u)
+        if (race_cfg.players == 2u && race_cfg.layout == 2u)
             settings = &camera_settings[2];
         camera_build_xform(camera->position, rotation, settings, &boat->motion.transform.pose);
         distance = camera_avg_dist(boat);
@@ -437,7 +435,7 @@ sint32 camera_update(CAMERA_STATE *camera, BOAT *boat)
     {
         settings = &camera_settings[3];
         camera_smooth_target_state(camera->position, &camera->distance, settings, &boat->motion.transform.pose, ((sint32)boat->contacts.points[3].height), ((sint32)boat->contacts.points[4].height));
-        if (r_u32(0x80083484u) != 8u)
+        if (race_cfg.mode != 8u)
             camera_smooth_edges(camera->position, boat, camera->edge_offset);
         camera_build_target_rot(camera->position, boat->motion.transform.pose.t, rotation, settings);
     }
@@ -473,17 +471,17 @@ sint32 camera_update(CAMERA_STATE *camera, BOAT *boat)
             camera_attract.timer = 0u;
             if (camera == &camera_views[0])
             {
-                uint32 current_vehicle = r_u32(0x800DE154u);
+                BOAT_MENU *current_vehicle = vehicle_player_menu(&race_views[0]);
 
-                if (vehicle_menu(current_vehicle)->mode == 5u)
-                    vehicle_menu(current_vehicle)->mode = 7u;
+                if (current_vehicle->mode == 5u)
+                    current_vehicle->mode = 7u;
             }
             if (camera == &camera_views[1])
             {
-                uint32 current_vehicle = r_u32(0x800DF0FCu);
+                BOAT_MENU *current_vehicle = vehicle_player_menu(&race_views[1]);
 
-                if (vehicle_menu(current_vehicle)->mode == 5u)
-                    vehicle_menu(current_vehicle)->mode = 7u;
+                if (current_vehicle->mode == 5u)
+                    current_vehicle->mode = 7u;
             }
         }
         angle = ratan2((sint16)(uint16)boat->motion.transform.pose.m[0][2], (sint16)(uint16)boat->motion.transform.pose.m[2][2]);
@@ -767,7 +765,7 @@ MATRIX *camera_build_target_rot(const sint32 first[3], const sint32 second[3], M
 sint32 camera_classify_env_dir(CAMERA_STATE *state)
 {
     const SCENE_SECTION *sections = scene_sections.sections;
-    uint32 mode = r_u32(0x80083484u);
+    uint32 mode = race_cfg.mode;
     SVECTOR normal;
     sint32 direction;
     sint32 first_product;
@@ -937,14 +935,14 @@ sint32 camera_init(CAMERA_STATE *state)
 {
     const ROUTE_RESOURCES *archive = &route_resources;
     const SCENE_START *start = scene_start;
-    uint32 menu;
+    BOAT_MENU *menu;
     sint32 result;
 
     FUNCTION_MARKER(0x8002953Cu, "MAIN.EXE");
     state->edge_offset[1] = 0u;
     state->edge_offset[0] = 0u;
     state->orbit_phase = 0u;
-    if (r_u32(0x80083484u) == 5u)
+    if (race_cfg.mode == 5u)
     {
         camera_settings[5].min_segments = 4;
         state->mode = 4u;
@@ -952,19 +950,19 @@ sint32 camera_init(CAMERA_STATE *state)
         camera_attract.phase = 0u;
         return 4;
     }
-    menu = r_u32(0x800DE154u);
+    menu = vehicle_player_menu(&race_views[0]);
     camera_attract.timer = 0xFFFFu;
     camera_attract.scale = 600u;
     camera_settings[5].min_segments = 3;
     camera_attract.phase = 512u;
-    if (vehicle_menu(menu)->mode == 2u)
+    if (menu->mode == 2u)
     {
 
         state->mode = 6u;
         state->position[0] = (uint32)start->pos[0];
         state->position[1] = (uint32)start->pos[1];
         result = start->pos[2];
-        w_u32(0x800B6B10u, 0u);
+        race_start_phase = 0u;
         state->position[2] = (uint32)result;
     }
     else
@@ -981,7 +979,7 @@ sint32 camera_init(CAMERA_STATE *state)
 
         state->route = routes[route_index - 5u];
     }
-    if (r_u32(0x80083478u) == 1u)
+    if (race_cfg.players == 1u)
     {
         static const sint16 first[9] = {140, 136, 141, 140, 136, 142, 140, 136, 130};
         static const sint16 second[9] = {74, 74, 76, 60, 74, 78, 74, 74, 58};

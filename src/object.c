@@ -58,7 +58,7 @@ sint32 object_node_flags_update_linked(uint32 unused)
     sint32 index;
 
     FUNCTION_MARKER(0x80015370u, "MAIN.EXE");
-    if (r_u32(0x800834A0u) == 2u && r_u32(0x8008348Cu) != 1u)
+    if (race_cfg.course == 2u && race_cfg.variant != 1u)
     {
         node = route_resources.segments[0];
         node = node->prev.seg;
@@ -155,7 +155,7 @@ sint32 object_node_flags_update_linked(uint32 unused)
     if ((sint16)game_selection.mode == 6 && (sint16)game_selection.rules == 1)
         scene_clear_group_item_flags(5);
     {
-        uint32 mode = r_u32(0x80083484u);
+        uint32 mode = race_cfg.mode;
 
         if (mode == 9u || mode == 4u)
         {
@@ -164,7 +164,7 @@ sint32 object_node_flags_update_linked(uint32 unused)
             scene_clear_group_item_flags(6);
         }
     }
-    if (r_u32(0x80083478u) == 2u)
+    if (race_cfg.players == 2u)
     {
         scene_clear_group_item_flags(3);
         return scene_clear_group_item_flags(5);
@@ -225,7 +225,7 @@ sint32 render_reconcile_slots(OBJECT_GROUP_STATE *state, uint8 slot)
     return 0;
 }
 
-sint32 object_init_racer_object_groups(uint32 first, uint32 second, sint32 mode)
+sint32 object_init_racer_object_groups(const RACE_VIEW *first, const RACE_VIEW *second, sint32 mode)
 {
     OBJECT_GROUP_STATE *first_group = object_for_camera(camera_for_view(first));
     OBJECT_GROUP_STATE *second_group = object_for_camera(camera_for_view(second));
@@ -233,11 +233,11 @@ sint32 object_init_racer_object_groups(uint32 first, uint32 second, sint32 mode)
     FUNCTION_MARKER(0x8001E344u, "MAIN.EXE");
     object_init_groups(first_group, second_group, mode);
     object_groups_build_linked(vehicle_player(first)->contacts.points[0].seg, first_group, camera_for_view(first));
-    render_reconcile_slots(first_group, (uint8)r_u32(first + 4u));
+    render_reconcile_slots(first_group, (uint8)first->idx);
     if (mode == 2)
     {
         object_groups_build_linked(vehicle_player(second)->contacts.points[0].seg, second_group, camera_for_view(second));
-        return render_reconcile_slots(second_group, (uint8)r_u32(second + 4u));
+        return render_reconcile_slots(second_group, (uint8)second->idx);
     }
     return 2;
 }

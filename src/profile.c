@@ -594,7 +594,7 @@ static uint8 *profile_save_opaque_byte(uint32 offset)
     return NULL;
 }
 
-// Native save encoder used by mc_save_segments_gather (MAIN.EXE 0x8004B644)
+// Native save encoder used by mc_save_encode (MAIN.EXE 0x8004B644)
 uint8 profile_save_read_byte(uint32 offset)
 {
     uint8 *name = name_save_byte(offset);
@@ -738,7 +738,7 @@ uint8 profile_save_read_byte(uint32 offset)
     return (uint8)(value >> (8u * (field & 1u)));
 }
 
-// Native save decoder used by mc_save_segments_scatter (MAIN.EXE 0x8004B6BC)
+// Native save decoder used by mc_save_decode (MAIN.EXE 0x8004B6BC)
 void profile_save_write_byte(uint32 offset, uint8 value)
 {
     uint8 *name = name_save_byte(offset);
@@ -1006,23 +1006,23 @@ void profile_save_write_byte(uint32 offset, uint8 value)
 sint32 profile_fn_80052f30(void)
 {
     FUNCTION_MARKER(0x80052F30u, "MAIN.EXE");
-    w_u16(0x800B4232u, 0u);
-    w_u16(0x800B4234u, 0u);
+    input_calib.released = 0u;
+    input_calib.peak = 0u;
     return menu_fn_80052f58();
 }
 
 sint32 profile_fn_800531c0(void)
 {
     FUNCTION_MARKER(0x800531C0u, "MAIN.EXE");
-    w_u16(0x800B4232u, 0u);
-    w_u16(0x800B4234u, 0u);
+    input_calib.released = 0u;
+    input_calib.peak = 0u;
     return menu_fn_800531e8();
 }
 
 sint32 profile_fn_80053458(void)
 {
     FUNCTION_MARKER(0x80053458u, "MAIN.EXE");
-    w_u16(0x800B4232u, 0u);
+    input_calib.released = 0u;
     return profile_fn_8005347c();
 }
 
@@ -1055,8 +1055,8 @@ sint32 profile_fn_8005347c(void)
 sint32 profile_fn_80053588(void)
 {
     FUNCTION_MARKER(0x80053588u, "MAIN.EXE");
-    w_u16(0x800B4232u, 0u);
-    w_u16(0x800B4234u, 0u);
+    input_calib.released = 0u;
+    input_calib.peak = 0u;
     return profile_fn_800535b0();
 }
 
@@ -1094,14 +1094,14 @@ sint32 profile_fn_800535b0(void)
             value = (sint16)input_calibrations[selected].stick_range >> 6;
             if (value < 0)
                 value = -value;
-            w_u16(0x800B4234u, 0u);
+            input_calib.peak = 0u;
         }
-        else if ((sint16)r_u16(0x800B4234u) >= (sint16)value)
-            value = (sint16)r_u16(0x800B4234u);
+        else if ((sint16)input_calib.peak >= (sint16)value)
+            value = (sint16)input_calib.peak;
         else
         {
             sint32 magnitude = 127 - (sint32)raw;
-            w_u16(0x800B4234u, (uint16)value);
+            input_calib.peak = (uint16)value;
             if (magnitude < 0)
                 magnitude = -magnitude;
             input_calibrations[selected].stick_range = (uint16)((uint16)(32 * magnitude));
@@ -1139,6 +1139,7 @@ sint32 profile_format_parts(const uint16 parts[3], char *text)
     uint32 remainder;
     sint32 result = (sint32)last;
 
+    FUNCTION_MARKER(0x80053898u, "MAIN.EXE");
     text[0] = 48u;
     text[2u] = 48u;
     text[3u] = 48u;
@@ -1162,16 +1163,6 @@ sint32 profile_format_parts(const uint16 parts[3], char *text)
     return result;
 }
 
-sint32 profile_format_value_parts3(uint32 values, char *text)
-{
-    uint16 parts[3];
-
-    parts[1] = r_u16(values + 2u);
-    parts[2] = r_u16(values + 4u);
-    parts[0] = r_u16(values);
-    FUNCTION_MARKER(0x80053898u, "MAIN.EXE");
-    return profile_format_parts(parts, text);
-}
 
 sint32 time_equal(const uint16 first[3], const uint16 second[3])
 {
@@ -1186,24 +1177,17 @@ sint32 time_equal(const uint16 first[3], const uint16 second[3])
 // Native arithmetic from MAIN.EXE 80053A00
 uint32 profile_time_ticks(const uint16 parts[3])
 {
+    FUNCTION_MARKER(0x80053A00u, "MAIN.EXE");
     return 60000u * parts[0] + 100u * parts[1] + parts[2] / 10u;
 }
 
 // Native display arithmetic from MAIN.EXE 80059C70
 uint32 profile_time_tenths(const uint16 parts[3])
 {
+    FUNCTION_MARKER(0x80059C70u, "MAIN.EXE");
     return 6000u * parts[0] + 100u * parts[1] + parts[2] / 10u;
 }
 
-uint32 time_fields_convert(uint32 value)
-{
-    uint32 first = r_u16(value);
-    uint32 second = r_u16(value + 2u);
-    uint32 third = r_u16(value + 4u);
-
-    FUNCTION_MARKER(0x80053A00u, "MAIN.EXE");
-    return 60000u * first + 100u * second + third / 10u;
-}
 
 void profile_reset_grid_flags(void)
 {
@@ -1765,7 +1749,7 @@ sint32 vehicle_advance_carousel(sint16 action, CONTROLLER_STATE *input)
             result = menu_state.input_enabled;
             if (result != 0)
             {
-                result = (sint16)r_u16(0x800B6AA0u) == 0;
+                result = (sint16)menu_state.exit_wait == 0;
                 enabled = result;
             }
         }
@@ -1800,8 +1784,8 @@ sint32 vehicle_advance_carousel(sint16 action, CONTROLLER_STATE *input)
                     }
                     return 31;
                 }
-                voice_start_scaled((sint16)r_u16(0x800834B4u), 1);
-                sound_fn_8007741c(0, 128u);
+                voice_start_scaled((sint16)sound_banks.main, 1);
+                SpuSetKey(SPU_OFF, 128u);
                 return profile_commit_selection();
             }
         }
@@ -2221,7 +2205,7 @@ sint32 profile_level_is_available(sint32 requested, uint32 unused2, uint32 unuse
     uint32 value = (uint8)requested;
 
     FUNCTION_MARKER(0x80055F0Cu, "MAIN.EXE");
-    if ((sint16)r_u16(0x800B69CAu) != 0)
+    if ((sint16)menu_state.series_mode != 0)
         return 0;
     if ((sint16)game_selection.mode == 2)
     {
@@ -2230,7 +2214,7 @@ sint32 profile_level_is_available(sint32 requested, uint32 unused2, uint32 unuse
     }
     else if (value == 3u && (uint8)game_selection.players != 1u)
     {
-        if (name_player_name_matches(0, 0x800B4254u) != 0 && (uint8)game_selection.players == 2u)
+        if (name_matches(0, name_code_frac) != 0 && (uint8)game_selection.players == 2u)
             return (sint16)game_selection.mode != 6;
         return 0;
     }
@@ -2400,7 +2384,7 @@ sint32 profile_init_menu(sint32 initialize, uint32 unused2, uint32 unused3, uint
     sprite_records[6].layer = 12u;
     {
         uint8 visible = 0u;
-        if ((sint16)r_u16(0x800B69CAu) == 0)
+        if ((sint16)menu_state.series_mode == 0)
             visible = (uint8)((sint16)menu_course_select.level != 0);
         sprite_records[7].type = visible;
     }
@@ -2510,7 +2494,7 @@ sint32 profile_init_menu(sint32 initialize, uint32 unused2, uint32 unused3, uint
         text_menu[index + 22].visible = 0u;
     sprite_records[55].type = 0u;
     text_menu[32].visible = 0u;
-    if ((sint16)r_u16(0x800B69CAu) != 0)
+    if ((sint16)menu_state.series_mode != 0)
     {
         sint16 column;
 
@@ -2642,7 +2626,7 @@ sint32 profile_update_selection_vis_time(uint32 unused1, uint32 unused2, uint32 
     sprite_records[17].type = 0u;
     sprite_records[18].type = 0u;
     sprite_records[19].type = 0u;
-    if (r_s16(0x800B6AA0u) != 0 && (sint16)game_selection.mode != 4)
+    if ((sint16)menu_state.exit_wait != 0 && (sint16)game_selection.mode != 4)
     {
         if (selection == 0)
         {
@@ -2710,7 +2694,7 @@ sint32 profile_update_selection_vis_time(uint32 unused1, uint32 unused2, uint32 
         char *destination = menu[23].text;
         profile_format_parts(source->times[0], destination);
     }
-    if (r_s16(0x800B6AA0u) != 0)
+    if ((sint16)menu_state.exit_wait != 0)
     {
         TEXT_RECORD *menu;
 
@@ -2756,7 +2740,7 @@ sint32 race_capture_time_summaries(uint32 unused1, uint32 unused2, uint32 unused
     PLAYER_PROFILE *profile_data;
     uint32 profile_level;
     uint32 profile_row;
-    uint32 peer;
+    BOAT_MENU *peer;
     PROFILE_SUMMARY *record;
     uint32 peer_index;
     sint32 index;
@@ -2776,28 +2760,28 @@ sint32 race_capture_time_summaries(uint32 unused1, uint32 unused2, uint32 unused
     profile_data = profile_current();
     profile_level = profile_data->level;
     profile_row = profile_data->course;
-    peer = r_u32(0x800DE154u);
+    peer = vehicle_player_menu(&race_views[0]);
     record = &profile_summaries[profile_row + 6u * profile_level];
     record->rank = race_selection.ranks[0];
     record->profile = profile_selection.slot;
-    peer_index = r_u8(peer + 1u);
-    record->race_time[0] = (uint16)text_parse_signed_decimal(text_bind(peer + 516u));
-    record->race_time[1] = (uint16)text_parse_signed_decimal(text_bind(peer + 519u));
-    record->race_time[2] = (uint16)(10 * text_parse_signed_decimal(text_bind(peer + 522u)));
+    peer_index = peer->best_lap_idx;
+    record->race_time[0] = (uint16)text_parse_signed_decimal((char *)peer->total_time.text);
+    record->race_time[1] = (uint16)text_parse_signed_decimal((char *)peer->total_time.text + 3u);
+    record->race_time[2] = (uint16)(10 * text_parse_signed_decimal((char *)peer->total_time.text + 6u));
     if (peer_index < 10u)
     {
-        uint32 source = peer + 20u + 16u * peer_index;
-        record->lap_time[0] = (uint16)text_parse_signed_decimal(text_bind(source));
-        record->lap_time[1] = (uint16)text_parse_signed_decimal(text_bind(source + 3u));
-        record->lap_time[2] = (uint16)(10 * text_parse_signed_decimal(text_bind(source + 6u)));
+        char *src = (char *)vehicle_lap_time(peer, peer_index)->text;
+        record->lap_time[0] = (uint16)text_parse_signed_decimal(src);
+        record->lap_time[1] = (uint16)text_parse_signed_decimal(src + 3u);
+        record->lap_time[2] = (uint16)(10 * text_parse_signed_decimal(src + 6u));
     }
     for (index = 0; index < 3; ++index)
     {
-        uint32 source = peer + 20u + 16u * (uint32)index;
+        char *src = (char *)vehicle_lap_time(peer, (uint32)index)->text;
         uint16 *output = race_lap_times[index];
-        output[0] = (uint16)text_parse_signed_decimal(text_bind(source));
-        output[1] = (uint16)text_parse_signed_decimal(text_bind(source + 3u));
-        result = text_parse_signed_decimal(text_bind(source + 6u));
+        output[0] = (uint16)text_parse_signed_decimal(src);
+        output[1] = (uint16)text_parse_signed_decimal(src + 3u);
+        result = text_parse_signed_decimal(src + 6u);
         output[2] = (uint16)(10 * result);
     }
     return result;
@@ -2812,9 +2796,9 @@ uint32 profile_update_best_times(uint32 unused1, uint32 unused2, uint32 unused3,
     PLAYER_PROFILE *profile_data;
     uint32 profile_level;
     uint32 profile_row;
-    uint32 peer;
+    BOAT_MENU *peer;
     PROFILE_RECORD *record;
-    uint32 source;
+    char *src;
     uint32 candidate;
     uint32 current;
     sint32 checked;
@@ -2836,14 +2820,14 @@ uint32 profile_update_best_times(uint32 unused1, uint32 unused2, uint32 unused3,
         goto done;
     profile_data = profile_current();
     profile_level = profile_data->level;
-    peer = r_u32(0x800DE154u);
+    peer = vehicle_player_menu(&race_views[0]);
     profile_row = profile_data->course;
     record = &profile_records[profile_row + 6u * profile_level];
     if (mode == 2)
     {
-        parts[0] = (uint16)text_parse_signed_decimal(text_bind(peer + 532u));
-        parts[1] = (uint16)text_parse_signed_decimal(text_bind(peer + 535u));
-        parts[2] = (uint16)(10 * text_parse_signed_decimal(text_bind(peer + 538u)));
+        parts[0] = (uint16)text_parse_signed_decimal((char *)peer->best_time.text);
+        parts[1] = (uint16)text_parse_signed_decimal((char *)peer->best_time.text + 3u);
+        parts[2] = (uint16)(10 * text_parse_signed_decimal((char *)peer->best_time.text + 6u));
         candidate = profile_time_ticks(parts);
         current = profile_time_ticks(record->trial.time);
         if (candidate != 0u && (candidate < current || current == 0u))
@@ -2859,10 +2843,10 @@ uint32 profile_update_best_times(uint32 unused1, uint32 unused2, uint32 unused3,
         goto done;
     }
 
-    source = peer + 20u + 16u * r_u8(peer + 1u);
-    parts[0] = (uint16)text_parse_signed_decimal(text_bind(source));
-    parts[1] = (uint16)text_parse_signed_decimal(text_bind(source + 3u));
-    parts[2] = (uint16)(10 * text_parse_signed_decimal(text_bind(source + 6u)));
+    src = (char *)vehicle_lap_time(peer, peer->best_lap_idx)->text;
+    parts[0] = (uint16)text_parse_signed_decimal(src);
+    parts[1] = (uint16)text_parse_signed_decimal(src + 3u);
+    parts[2] = (uint16)(10 * text_parse_signed_decimal(src + 6u));
     candidate = profile_time_ticks(parts);
     current = profile_time_ticks(record->lap.time);
     if (candidate < current || current == 0u)
@@ -2874,9 +2858,9 @@ uint32 profile_update_best_times(uint32 unused1, uint32 unused2, uint32 unused3,
         name_copy_player_name_bytes(0u, record->lap.name);
     }
 
-    parts[0] = (uint16)text_parse_signed_decimal(text_bind(peer + 516u));
-    parts[1] = (uint16)text_parse_signed_decimal(text_bind(peer + 519u));
-    parts[2] = (uint16)(10 * text_parse_signed_decimal(text_bind(peer + 522u)));
+    parts[0] = (uint16)text_parse_signed_decimal((char *)peer->total_time.text);
+    parts[1] = (uint16)text_parse_signed_decimal((char *)peer->total_time.text + 3u);
+    parts[2] = (uint16)(10 * text_parse_signed_decimal((char *)peer->total_time.text + 6u));
     candidate = profile_time_ticks(parts);
     checked = 0;
     do
@@ -2916,8 +2900,8 @@ done:
 sint32 profile_fn_800579d4(sint32 name_index, uint32 unused2, uint32 unused3, uint32 unused4)
 {
     PLAYER_PROFILE *profile_data;
-    uint32 peer;
-    uint32 source;
+    BOAT_MENU *peer;
+    char *src;
     PROFILE_RECORD *record;
     uint32 first;
     uint32 second;
@@ -2933,12 +2917,12 @@ sint32 profile_fn_800579d4(sint32 name_index, uint32 unused2, uint32 unused3, ui
     if ((sint16)game_selection.mode == 3)
         return 3;
     profile_data = profile_current();
-    peer = r_u32(0x800DE154u);
-    source = peer + 20u + 16u * r_u8(peer + 1u);
+    peer = vehicle_player_menu(&race_views[0]);
+    src = (char *)vehicle_lap_time(peer, peer->best_lap_idx)->text;
     record = &profile_records[profile_data->course + 6u * profile_data->level];
-    first = (uint16)text_parse_signed_decimal(text_bind(source));
-    second = (uint16)text_parse_signed_decimal(text_bind(source + 3u));
-    third = (uint16)(10 * text_parse_signed_decimal(text_bind(source + 6u)));
+    first = (uint16)text_parse_signed_decimal(src);
+    second = (uint16)text_parse_signed_decimal(src + 3u);
+    third = (uint16)(10 * text_parse_signed_decimal(src + 6u));
     candidate = 60000u * first + 100u * second + third / 10u;
     current = profile_time_ticks(record->lap.time);
     if (candidate < current || current == 0u)
@@ -2980,7 +2964,7 @@ void profile_init_mode_rec(void)
     vehicle_racer_count = (uint32)(8u);
     profile_data = profile_current();
     selection = (sint16)menu_query_group_value(3, 0);
-    w_u16(0x800B69CAu, 0u);
+    menu_state.series_mode = 0u;
     result = selection < 2;
     if (selection == 1)
     {
@@ -2999,7 +2983,7 @@ void profile_init_mode_rec(void)
             sint32 index;
 
             game_selection.mode = 1u;
-            w_u16(0x800B69CAu, 1u);
+            menu_state.series_mode = 1u;
             profile_data->level = (uint8)((uint8)level);
             profile_at(profile_selection.slot)->course = 0u;
             series = profile_get_series();
@@ -3075,7 +3059,7 @@ void profile_restore_backup(void)
         return;
     profile_data->course = (uint8)(backup->course);
     menu_course_select.course = backup->course;
-    w_u16(0x800B6C04u, profile_data->level);
+    menu_state.saved_choice = profile_data->level;
     profile_data->level = (uint8)(backup->level);
     race_selection.boats[0] = backup->grid_row;
     menu_boat_select.boat = backup->grid_row;
@@ -3149,14 +3133,14 @@ sint32 profile_advance_menu_select(void)
     FUNCTION_MARKER(0x8005A3ECu, "MAIN.EXE");
     frame = guest_stack_push(0x28u);
     game_selection.players = (uint16)((game_selection.players & 0xFF00u) | (uint8)(1u));
-    if ((sint16)r_u16(0x800B4142u) == 1)
+    if ((sint16)menu_state.from_screen == 1)
     {
         game_selection.mode = 0u;
         game_selection.previous_mode = 0u;
     }
     else if ((sint16)game_selection.mode == 1)
     {
-        menu_update_group_desc_select(3, 0, (sint16)(uint16)(r_u16(0x800B6C04u) + 2u));
+        menu_update_group_desc_select(3, 0, (sint16)(uint16)(menu_state.saved_choice + 2u));
     }
     {
         CONTROLLER_STATE no_buttons = {0};
@@ -3196,7 +3180,7 @@ sint32 profile_update_menu_trans(CONTROLLER_STATE *input)
         menu_update_group_desc_select(3, 0, next);
         count = next;
     }
-    w_u16(0x800B6C04u, (uint16)(count - 2));
+    menu_state.saved_choice = (uint16)(count - 2);
     if (count == 2)
         record_index = 10;
     else if (count == 3)
@@ -3293,7 +3277,7 @@ void profile_dispatch_menu_state(void)
     }
     if (selection == -1)
     {
-        if (name_player_name_matches(0, 0x800B425Cu) == 0)
+        if (name_matches(0, name_code_winr) == 0)
         {
             profile_refresh_menu_ack();
             return;
@@ -3385,7 +3369,7 @@ void profile_confirm_row_select(void)
     if (cell->state == 4u)
     {
         cell->state = 6u;
-        w_u16(0x800B69E0u, 1u);
+        menu_state.course_cleared = 1u;
         if (row_data[3].state == 5u)
             row_data[3].state = 4u;
         else if (row_data[4].state == 5u)
@@ -3453,7 +3437,7 @@ sint32 profile_fn_8005ad20(void)
     UI_RECORD *records = sprite_records;
 
     FUNCTION_MARKER(0x8005AD20u, "MAIN.EXE");
-    if ((sint16)r_u16(0x800B6B0Cu) != 0)
+    if ((sint16)menu_state.series_confirm != 0)
     {
         menu[0].visible = 0u;
         menu[29].visible = 0u;
@@ -3588,7 +3572,7 @@ sint32 profile_fn_8005b350(CONTROLLER_STATE *input)
     sint32 index;
 
     FUNCTION_MARKER(0x8005B350u, "MAIN.EXE");
-    if ((sint16)r_u16(0x800B6B0Cu) == 0 && menu_state.input_enabled != 0u)
+    if ((sint16)menu_state.series_confirm == 0 && menu_state.input_enabled != 0u)
     {
         if ((input->current & 0x10u) != 0u)
         {
@@ -3608,20 +3592,20 @@ sint32 profile_fn_8005b350(CONTROLLER_STATE *input)
     {
         if ((input->current & 0x80u) != 0u)
         {
-            if ((sint16)r_u16(0x800B6B0Cu) == 0 && sprite_records[49].type == 1u && (input->current & 0x40u) == 0u)
+            if ((sint16)menu_state.series_confirm == 0 && sprite_records[49].type == 1u && (input->current & 0x40u) == 0u)
             {
                 menu_state.sound = 4u;
-                w_u16(0x800B6B0Cu, 1u);
+                menu_state.series_confirm = 1u;
             }
-            else if ((sint16)r_u16(0x800B6B0Cu) != 0)
+            else if ((sint16)menu_state.series_confirm != 0)
             {
                 menu_state.sound = 1u;
-                w_u16(0x800B6B0Cu, 0u);
+                menu_state.series_confirm = 0u;
             }
         }
-        if ((sint16)r_u16(0x800B6B0Cu) != 0 && (input->current & 0x20u) != 0u)
+        if ((sint16)menu_state.series_confirm != 0 && (input->current & 0x20u) != 0u)
         {
-            w_u16(0x800B6B0Cu, 0u);
+            menu_state.series_confirm = 0u;
             series->phase = (uint16)(1u);
             menu_state.phase = 5u;
             menu_state.sound = 1u;
@@ -3629,7 +3613,7 @@ sint32 profile_fn_8005b350(CONTROLLER_STATE *input)
             profile_data->course = (uint8)(0u);
             for (index = 0; index < 16; ++index)
                 series->points[(uint32)index] = (uint8)(0u);
-            w_u16(0x800B4140u, (uint16)-1);
+            menu_state.prev_screen = (uint16)-1;
         }
     }
     return profile_fn_8005ad20();
@@ -3705,8 +3689,8 @@ void profile_apply_action(sint16 action)
     FUNCTION_MARKER(0x800637F0u, "MAIN.EXE");
     if (action == 3)
     {
-        if ((sint16)r_u16(0x800B69E0u) != 0)
-            w_u16(0x800B6BF0u, 5u);
+        if ((sint16)menu_state.course_cleared != 0)
+            menu_state.cutscene = 5u;
         profile_data->reward_flags |= 0x88u;
         action = profile_selection.slot == 0u ? 7 : (profile_selection.slot == 1u ? 8 : 9);
     }
@@ -3720,18 +3704,18 @@ void profile_apply_action(sint16 action)
             return;
         case 4:
             profile_data->reward_flags |= 0x10u;
-            w_u16(0x800B6BF0u, 2u);
-            w_u32(0x800B6AE4u, 1u);
+            menu_state.cutscene = 2u;
+            menu_state.trophy = 1u;
             return;
         case 5:
             profile_data->reward_flags |= 0x20u;
-            w_u16(0x800B6BF0u, 3u);
-            w_u32(0x800B6AE4u, 2u);
+            menu_state.cutscene = 3u;
+            menu_state.trophy = 2u;
             return;
         case 6:
             profile_data->reward_flags |= 0x40u;
-            w_u16(0x800B6BF0u, 4u);
-            w_u32(0x800B6AE4u, 3u);
+            menu_state.cutscene = 4u;
+            menu_state.trophy = 3u;
             return;
         case 7:
             profile_data->reward_flags |= 1u;
@@ -3741,7 +3725,7 @@ void profile_apply_action(sint16 action)
             profile_data->reward_flags |= 1u;
             if (profile_unlock(7) != 0)
             {
-                w_u32(0x800B6A58u, 1u);
+                menu_state.reward_notice = 1u;
                 menu_notice.value = 7u;
                 menu_notice.boat = 7u;
                 menu_notice.type = 2u;
@@ -3750,7 +3734,7 @@ void profile_apply_action(sint16 action)
             return;
         case 12:
             result = (profile_data->level_result & 7u) + 6;
-            w_u16(0x800B6BF0u, (uint16)result);
+            menu_state.cutscene = (uint16)result;
             return;
         default:
             return;
@@ -3785,11 +3769,11 @@ sint32 profile_dispatch_mode_result_handler(uint32 first, uint32 second, uint32 
     return 2;
 }
 
-sint32 menu_save_select_state(void)
+sint32 profile_restore_grid(void)
 {
-    sint32 first = (sint16)r_u16(0x800B6AD6u);
-    uint16 second = r_u16(0x800B6BF2u);
-    uint16 third = r_u16(0x800B6B34u);
+    sint32 first = (sint16)profile_selection.saved.racers;
+    uint16 second = profile_selection.saved.leaders;
+    uint16 third = profile_selection.saved.trailers;
 
     FUNCTION_MARKER(0x80063B00u, "MAIN.EXE");
     game_selection.event = 1u;
@@ -3844,13 +3828,9 @@ sint32 profile_commit_selection(void)
     game_selection.event_arg = (uint8)menu_course_select.course;
     if (initial_state == 4)
     {
-        uint16 first = (uint16)vehicle_racer_count;
-        uint16 second = vehicle_leader_count;
-        uint16 third = vehicle_trailer_count;
-
-        w_u16(0x800B6AD6u, first);
-        w_u16(0x800B6BF2u, second);
-        w_u16(0x800B6B34u, third);
+        profile_selection.saved.racers = (uint16)vehicle_racer_count;
+        profile_selection.saved.leaders = vehicle_leader_count;
+        profile_selection.saved.trailers = vehicle_trailer_count;
     }
     gate = (sint16)menu_course_select.blocked;
     result_state.status = (uint8)(0u);
@@ -3871,15 +3851,13 @@ sint32 profile_commit_selection(void)
     if ((sint16)menu_course_select.level == 3)
     {
         uint16 selection;
-        uint16 saved;
 
         race_selection.special = 1u;
         selection = menu_course_select.course;
-        saved = profile_selection.menu_slot;
         race_selection.resource = (uint16)(selection - 1u);
-        w_u16(0x800B6BF6u, saved);
+        profile_selection.saved.menu_slot = profile_selection.menu_slot;
     }
-    w_u16(0x800B6AA0u, 5u);
+    menu_state.exit_wait = 5u;
     text_set_hud_visible(0, 1);
     state = (sint16)game_selection.mode;
     if (state != 3 && (sint16)race_selection.special == 0)

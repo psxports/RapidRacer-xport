@@ -2,6 +2,8 @@
 #define RR_ROUTE_H
 
 #include "psx.h"
+
+struct RACE_CFG;
 #include <stddef.h>
 
 enum {ROUTE_SEGMENT_CAPACITY = 65535, ROUTE_VERTEX_CAPACITY = 14};
@@ -184,6 +186,6 @@ void route_gen_geom(ROUTE_SEGMENT *records, sint32 count);
 sint32 route_gen_vertices(ROUTE_SEGMENT *record, sint32 count);
 sint32 route_update_speed_ctrl(const struct BOAT *src, struct BOAT *boat, uint32 race_mode);
 
-sint32 route_gen_init(uint32 state);
+sint32 route_gen_init(const struct RACE_CFG *cfg);
 
 #endif

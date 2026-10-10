@@ -39,6 +39,5 @@ sint32 cb_init_vblank_timer(void);
 sint32 cb_wait_vblank(void);
 sint32 cb_sync_video_field(void);
 
-void cd_handle_ready_cb(uint8 status, uint32 response);
 
 #endif /* RR_CALLBACKS_H */

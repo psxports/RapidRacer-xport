@@ -16,6 +16,7 @@
 
 static PROFILE_GRID vehicle_custom_grid;
 static PROFILE_GRID vehicle_preview_grid;
+static uint16 vehicle_grid_rows[3];
 
 static const PROFILE_GRID profile_grid_defaults[10] = {
     {{2u, 1u, 1u, 2u}, {3u, 2u, 2u, 2u}, {0u, 0u, 0u, 0u}}, {{1u, 1u, 2u, 2u}, {2u, 2u, 3u, 2u}, {0u, 0u, 0u, 0u}}, {{1u, 2u, 1u, 2u}, {2u, 3u, 2u, 2u}, {0u, 0u, 0u, 0u}}, {{2u, 2u, 2u, 4u}, {5u, 4u, 4u, 4u}, {0u, 0u, 0u, 0u}}, {{2u, 2u, 2u, 4u}, {4u, 4u, 5u, 4u}, {0u, 0u, 0u, 0u}}, {{2u, 2u, 2u, 4u}, {4u, 5u, 4u, 4u}, {0u, 0u, 0u, 0u}}, {{5u, 4u, 4u, 5u}, {5u, 5u, 5u, 5u}, {2u, 0u, 0u, 2u}}, {{4u, 4u, 5u, 4u}, {5u, 5u, 5u, 4u}, {0u, 0u, 2u, 2u}}, {{5u, 5u, 5u, 5u}, {5u, 5u, 5u, 5u}, {0u, 0u, 0u, 0u}}, {{0u, 0u, 0u, 0u}, {0u, 0u, 0u, 0u}, {0u, 0u, 0u, 0u}},
@@ -310,6 +311,26 @@ sint32 vehicle_draw_grid_lines(sint16 color, sint16 left, sint16 top, sint32 row
     return display_queue_beveled_rect_outline(left, top, right, bottom);
 }
 
+static void vehicle_select_grid_column(const PROFILE_GRID *row, sint32 col)
+{
+    sint16 selection;
+    sint16 count;
+
+    vehicle_select_clear_grid(&vehicle_preview_grid);
+    vehicle_preview_grid.choice[col] = row->choice[col];
+    selection = (sint16)menu_boat_select.boat;
+    vehicle_preview_grid.limit[col] = row->limit[col];
+    vehicle_select_render((sint16)(37 + 28 * col), selection, (sint16)(50 + 140 * col), 500, &vehicle_preview_grid);
+    count = (sint16)((sint32)row->choice[col] - 1);
+    vehicle_grid_rows[col] = (uint16)count;
+    count = (sint16)vehicle_grid_rows[col];
+    vehicle_draw_grid_lines((sint16)col, (sint16)(65 + 140 * col), 135, count);
+    sprite_records[count + 124 + 5 * col].type = 1u;
+    text_menu[count + 20 + 5 * col].visible = 1u;
+    text_menu[2 * count + 47 + 10 * col].visible = 1u;
+    text_menu[2 * count + 48 + 10 * col].visible = 1u;
+}
+
 sint32 vehicle_select_update_grid(void)
 {
     sint16 track = (sint16)menu_state.screen;
@@ -318,18 +339,16 @@ sint32 vehicle_select_update_grid(void)
     PROFILE_GRID *row;
     sint32 index;
     sint32 available;
-    sint16 count;
 
     FUNCTION_MARKER(0x8005F06Cu, "MAIN.EXE");
     selection = (sint16)menu_boat_select.boat;
     table = menu_configurations[track].descs;
-    table->record = (uint16)(r_u16(0x80098F80u + 2u * (uint32)selection));
+    table->record = (uint16)selection;
     selection = (sint16)menu_boat_select.boat;
     row = &profile_current()->grid[selection];
     for (index = 0; index < 9; ++index)
     {
-        sint16 mapped = (sint16)r_u16(0x80098F80u + 2u * (uint32)index);
-        sprite_records[(sint32)mapped].type = 0u;
+        sprite_records[index].type = 0u;
         text_menu[index + 1].visible = 0u;
     }
     for (index = 0; index < 5; ++index)
@@ -363,47 +382,11 @@ sint32 vehicle_select_update_grid(void)
     text_menu[row->choice[3] + 14].visible = 1u;
     text_menu[row->choice[3] + 34].visible = 1u;
 
-    vehicle_select_clear_grid(&vehicle_preview_grid);
-    vehicle_preview_grid.choice[0] = (uint8)(row->choice[0]);
-    selection = (sint16)menu_boat_select.boat;
-    vehicle_preview_grid.limit[0] = (uint8)(row->limit[0]);
-    vehicle_select_render(37, selection, 50, 500, &vehicle_preview_grid);
-    count = (sint16)((sint32)row->choice[0] - 1);
-    w_u16(0x800B6B60u, (uint16)count);
-    count = (sint16)r_u16(0x800B6B60u);
-    vehicle_draw_grid_lines(0, 65, 135, count);
-    sprite_records[(sint32)count + 124].type = 1u;
-    text_menu[count + 20].visible = 1u;
-    text_menu[(2 * (count)) + 47].visible = 1u;
-    text_menu[(2 * (count)) + 48].visible = 1u;
+    vehicle_select_grid_column(row, 0);
 
-    vehicle_select_clear_grid(&vehicle_preview_grid);
-    vehicle_preview_grid.choice[1] = (uint8)(row->choice[1]);
-    selection = (sint16)menu_boat_select.boat;
-    vehicle_preview_grid.limit[1] = (uint8)(row->limit[1]);
-    vehicle_select_render(65, selection, 190, 500, &vehicle_preview_grid);
-    count = (sint16)((sint32)row->choice[1] - 1);
-    w_u16(0x800B6B62u, (uint16)count);
-    count = (sint16)r_u16(0x800B6B62u);
-    vehicle_draw_grid_lines(1, 205, 135, count);
-    sprite_records[(sint32)count + 129].type = 1u;
-    text_menu[count + 25].visible = 1u;
-    text_menu[(2 * (count)) + 57].visible = 1u;
-    text_menu[(2 * (count)) + 58].visible = 1u;
+    vehicle_select_grid_column(row, 1);
 
-    vehicle_select_clear_grid(&vehicle_preview_grid);
-    vehicle_preview_grid.choice[2] = (uint8)(row->choice[2]);
-    selection = (sint16)menu_boat_select.boat;
-    vehicle_preview_grid.limit[2] = (uint8)(row->limit[2]);
-    vehicle_select_render(93, selection, 330, 500, &vehicle_preview_grid);
-    count = (sint16)((sint32)row->choice[2] - 1);
-    w_u16(0x800B6B64u, (uint16)count);
-    count = (sint16)r_u16(0x800B6B64u);
-    vehicle_draw_grid_lines(2, 345, 135, count);
-    sprite_records[(sint32)count + 134].type = 1u;
-    text_menu[count + 30].visible = 1u;
-    text_menu[(2 * (count)) + 67].visible = 1u;
-    text_menu[(2 * (count)) + 68].visible = 1u;
+    vehicle_select_grid_column(row, 2);
 
     available = (uint8)profile_is_unlocked((sint16)((sint16)menu_boat_select.boat)) != 0u;
     text_menu[42].visible = (uint8)available;
@@ -411,16 +394,16 @@ sint32 vehicle_select_update_grid(void)
     if (available != 0)
     {
         sint32 conflict = 0;
-        if ((sint16)r_u16(0x800B6B60u) >= 2 || (sint16)r_u16(0x800B6B62u) >= 2 || (sint16)r_u16(0x800B6B64u) >= 2)
+        if ((sint16)vehicle_grid_rows[0] >= 2 || (sint16)vehicle_grid_rows[1] >= 2 || (sint16)vehicle_grid_rows[2] >= 2)
             conflict = 1;
-        if ((sint16)r_u16(0x800B6B60u) > 0)
+        if ((sint16)vehicle_grid_rows[0] > 0)
         {
-            if ((sint16)r_u16(0x800B6B62u) > 0)
+            if ((sint16)vehicle_grid_rows[1] > 0)
                 conflict = 1;
-            if ((sint16)r_u16(0x800B6B64u) > 0)
+            if ((sint16)vehicle_grid_rows[2] > 0)
                 conflict = 1;
         }
-        if ((sint16)r_u16(0x800B6B62u) > 0 && (sint16)r_u16(0x800B6B64u) > 0)
+        if ((sint16)vehicle_grid_rows[1] > 0 && (sint16)vehicle_grid_rows[2] > 0)
             conflict = 1;
         if (conflict == 0)
             available = 0;
@@ -441,9 +424,9 @@ sint32 vehicle_process_grid_input(CONTROLLER_STATE *input)
     FUNCTION_MARKER(0x8005F71Cu, "MAIN.EXE");
     if (suppress_grid == 0)
     {
-        vehicle_draw_grid_lines(0, 65, 135, (sint16)r_u16(0x800B6B60u));
-        vehicle_draw_grid_lines(1, 205, 135, (sint16)r_u16(0x800B6B62u));
-        vehicle_draw_grid_lines(2, 345, 135, (sint16)r_u16(0x800B6B64u));
+        vehicle_draw_grid_lines(0, 65, 135, (sint16)vehicle_grid_rows[0]);
+        vehicle_draw_grid_lines(1, 205, 135, (sint16)vehicle_grid_rows[1]);
+        vehicle_draw_grid_lines(2, 345, 135, (sint16)vehicle_grid_rows[2]);
     }
     result = menu_state.input_enabled;
     if (result != 0)
@@ -1076,7 +1059,7 @@ sint32 vehicle_select_fn_800618d0(CONTROLLER_STATE *input)
             menu_move_sprite_rec(record, 1, 8, 6, 1, 1, 0, 0, 0, 0);
         result = sprite_disable_semitransparency(record);
     }
-    if (menu_state.input_enabled != 0u && (sint16)r_u16(0x800B6AA0u) == 0)
+    if (menu_state.input_enabled != 0u && (sint16)menu_state.exit_wait == 0)
     {
         PLAYER_PROFILE *profile_data = profile_current();
         PROFILE_COURSE *state = &profile_data->progress.courses[profile_data->level][profile_data->course];
@@ -1189,10 +1172,10 @@ sint32 vehicle_select_fn_80061de4(CONTROLLER_STATE *input)
     {
         menu_state.sound = 1u;
         result = 11;
-        if ((sint16)r_u16(0x800B6A58u) == 0)
+        if ((sint16)menu_state.reward_notice == 0)
         {
             result = 3;
-            if ((sint16)r_u16(0x800B6A80u) == 0)
+            if ((sint16)menu_state.level_notice == 0)
                 result = 5;
         }
         menu_state.phase = (uint16)result;
@@ -1290,7 +1273,7 @@ sint32 vehicle_select_fn_80062144(CONTROLLER_STATE *input)
     }
     if (menu_state.input_enabled != 0u)
     {
-        result = (sint16)r_u16(0x800B6AA0u);
+        result = (sint16)menu_state.exit_wait;
         if (result == 0)
         {
             PLAYER_PROFILE *profile_data = profile_current();
@@ -1428,18 +1411,4 @@ sint32 vehicle_select_init_player_profile(uint32 slot)
     return 10 << 16;
 }
 
-sint32 vehicle_select_fn_800630f8(void)
-{
-    PSX_RECT rectangle;
-    sint32 result;
 
-    FUNCTION_MARKER(0x800630F8u, "MAIN.EXE");
-    rectangle.x = 0;
-    rectangle.y = 0;
-    rectangle.w = (sint16)mdec_scale_output_width(r_u16(0x800CD56Au));
-    rectangle.h = 256;
-    ClearImage(&rectangle, 0u, 0u, 0u);
-    rectangle.y = 256;
-    result = ClearImage(&rectangle, 0u, 0u, 0u);
-    return result;
-}

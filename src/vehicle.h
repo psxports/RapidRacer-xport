@@ -2,8 +2,12 @@
 #define RR_VEHICLE_H
 
 #include "psx.h"
+
+struct RACE_VIEW;
 #include "motion.h"
 #include "route.h"
+#include "pickup.h"
+#include "timer.h"
 #include <stddef.h>
 
 typedef struct
@@ -120,10 +124,25 @@ typedef struct
     uint32 phase;
 } BOAT_TRAIL;
 
-typedef struct
+typedef struct BOAT_MENU
 {
     uint32 mode;
+    uint32 delta_timer;
+    uint32 checkpoint_total;
+    uint32 start_ready;
+    uint32 finish_state;
     uint8 racer_num;
+    uint8 lap_idx;
+    uint8 best_lap_idx;
+    uint8 checkpoint_idx;
+    uint8 rank;
+    uint8 prev_rank;
+    TIME_REC start_time;
+    TIME_REC total_time;
+    TIME_REC best_time;
+    TIME_REC lap_times[5];
+    TIME_REC checkpoint_times[5][5];
+    PICKUP_SLOT pickups[6];
 } BOAT_MENU;
 
 typedef struct BOAT
@@ -142,7 +161,9 @@ typedef struct BOAT
     uint32 model_slot;
 } BOAT;
 
-BOAT_MENU *vehicle_menu(uint32 menu);
+BOAT_MENU *vehicle_player_menu(const struct RACE_VIEW *context);
+TIME_REC *vehicle_lap_time(BOAT_MENU *menu, uint32 idx);
+TIME_REC *vehicle_checkpoint_time(BOAT_MENU *menu, uint32 lap, uint32 idx);
 extern const uint8 vehicle_base_levels[9];
 extern BOAT vehicle_boats[16];
 extern uint32 vehicle_racer_count;
@@ -153,8 +174,8 @@ extern BOAT *vehicle_leaders[16];
 extern BOAT *vehicle_trailers[16];
 extern BOAT *vehicle_players[2];
 extern BOAT *vehicle_tracked[2][16];
-BOAT **vehicle_tracks(uint32 context);
-BOAT *vehicle_player(uint32 context);
+BOAT **vehicle_tracks(const struct RACE_VIEW *context);
+BOAT *vehicle_player(const struct RACE_VIEW *context);
 uint32 vehicle_legacy(const BOAT *boat);
 
 enum
@@ -167,7 +188,7 @@ sint32 vehicle_config_feature_desc(BOAT_SETUP *output, sint32 index, sint32 mode
 sint32 vehicle_init(BOAT *boat, sint16 segment, sint16 entry, sint32 driver, sint32 cfg_idx);
 sint32 vehicle_init_slots(void);
 sint32 vehicle_damp_vel(BOAT *boat);
-sint32 vehicle_input(BOAT *boat, uint32 context);
+sint32 vehicle_input(BOAT *boat, const struct RACE_VIEW *context);
 sint32 vehicle_resolve_collision(BOAT *first, BOAT *second, const SVECTOR *normal, const VECTOR *point, sint32 penetration);
 void vehicle_collide_boats(BOAT *boat);
 sint32 vehicle_control_force(BOAT *boat);

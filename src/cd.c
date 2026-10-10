@@ -22,12 +22,48 @@
 #include <stdlib.h>
 #include <string.h>
 
+typedef struct CD_AUDIO
+{
+    CdlLOC toc[100];
+    sint32 tracks;
+    sint32 state;
+    sint32 mode;
+    sint32 pos;
+    sint32 end;
+} CD_AUDIO;
+
+static CD_AUDIO cd_audio;
+char cd_dir[128];
+
+void cd_init_audio_toc(void)
+{
+    static const CdlLOC original_toc[10] =
+    {
+        {0x51u, 0x15u, 0x00u, 0x00u},
+        {0x00u, 0x02u, 0x00u, 0x00u},
+        {0x16u, 0x52u, 0x00u, 0x00u},
+        {0x21u, 0x52u, 0x00u, 0x00u},
+        {0x26u, 0x40u, 0x00u, 0x00u},
+        {0x31u, 0x41u, 0x00u, 0x00u},
+        {0x37u, 0x14u, 0x00u, 0x00u},
+        {0x42u, 0x34u, 0x00u, 0x00u},
+        {0x47u, 0x35u, 0x00u, 0x00u},
+        {0x50u, 0x44u, 0x00u, 0x00u},
+    };
+
+    CdSetToc(original_toc, 9);
+    cd_audio.tracks = CdGetToc(cd_audio.toc);
+}
+
 static uint32 cd_read_file_alloc_span(uint32 path, size_t *span_size);
 
-static uint32 rr_cd_search_parent_lba;
-static uint32 rr_cd_search_parent_index;
-static uint32 rr_cd_search_cached_directory_lba;
-static sint32 rr_cd_search_refreshed_directory;
+typedef struct
+{
+    uint32 parent_lba;
+    sint32 refreshed;
+} CD_SEARCH;
+
+static CD_SEARCH cd_search;
 
 static uint32 cd_bswap_u32(uint32 value)
 {
@@ -70,7 +106,7 @@ sint32 cd_decompress_backrefs(uint32 input, uint32 output)
     }
 }
 
-sint32 cd_load_course_assets(uint32 context)
+sint32 cd_load_course_assets(const RACE_CFG *cfg)
 {
     uint32 frame = guest_stack_push(0x48u);
     uint32 directory = frame + 0x10u;
@@ -83,26 +119,26 @@ sint32 cd_load_course_assets(uint32 context)
     sint32 result;
 
     FUNCTION_MARKER(0x8002B664u, "MAIN.EXE");
-    runtime_copy_guest_8(0x800D6958u, 0x800B3E74u);
+    strcpy(cd_dir, "\\BOATS\\");
     if (!cd_load_model_archive())
     {
         result = 0;
         goto finish;
     }
-    if (r_u32(context + 12u) == 8u)
+    if (cfg->mode == 8u)
     {
-        runtime_copy_guest_8(0x800D6958u, 0x800B3E7Cu);
-        result = cd_load_archive_assets(r_u32(0x8008348Cu) == 2u ? 0x80080D68u : 0x80080D74u);
+        strcpy(cd_dir, "\\BONUS\\");
+        result = cd_load_archive_assets(race_cfg.variant == 2u ? 0x80080D68u : 0x80080D74u);
         goto finish;
     }
-    mode = (sint32)r_u32(0x8008348Cu);
+    mode = (sint32)race_cfg.variant;
     if (mode == 1)
         runtime_copy_guest_5(suffix, 0x800B3E84u);
     else if (mode == 2)
         runtime_copy_guest_7(suffix, 0x800B3E8Cu);
     else
         runtime_copy_guest_8(suffix, 0x800B3E94u);
-    course = (sint32)r_u32(context + 40u);
+    course = (sint32)cfg->course;
     w_u32(0x800B3D90u, 1u);
     switch (course)
     {
@@ -130,22 +166,25 @@ sint32 cd_load_course_assets(uint32 context)
         default:
             exit(1);
     }
-    course = (sint32)r_u32(context + 40u);
+    course = (sint32)cfg->course;
     if (course == 6)
-        runtime_copy_guest_text(0x800D6958u, directory);
+        strcpy(cd_dir, (const char *)psx_addr(directory, 1u));
     else
-        runtime_join_guest_text(0x800D6958u, directory, suffix);
-    course = (sint32)r_u32(context + 40u);
+    {
+        strcpy(cd_dir, (const char *)psx_addr(directory, 1u));
+        strcat(cd_dir, (const char *)psx_addr(suffix, 1u));
+    }
+    course = (sint32)cfg->course;
     if (course == 6)
     {
-        mode = (sint32)r_u32(0x80083478u);
+        mode = (sint32)race_cfg.players;
         runtime_format_vram_filename(directory, (sint16)race_selection.resource, mode != 1);
         cd_load_archive_assets(directory);
-        route_gen_init(context);
+        route_gen_init(cfg);
     }
     else
     {
-        cd_load_archive_assets(r_u32(0x80083478u) == 1u ? 0x80080DB4u : 0x80080DC0u);
+        cd_load_archive_assets(race_cfg.players == 1u ? 0x80080DB4u : 0x80080DC0u);
         data = cd_read_file_alloc_span(runtime_build_cd_path(0x80080DCCu), &geometry_size);
         if (data == 0u)
         {
@@ -158,7 +197,7 @@ sint32 cd_load_course_assets(uint32 context)
         {
             size_t route_size;
             uint32 route_data = cd_read_file_alloc_span(runtime_build_cd_path(path), &route_size);
-            if (route_data == 0u || !cd_load_versioned_rec_archive((const uint8 *)psx_addr(route_data, route_size), route_size, r_u32(0x8008348Cu) == 2u))
+            if (route_data == 0u || !cd_load_versioned_rec_archive((const uint8 *)psx_addr(route_data, route_size), route_size, race_cfg.variant == 2u))
             {
                 result = 0;
                 goto finish;
@@ -166,7 +205,7 @@ sint32 cd_load_course_assets(uint32 context)
         }
     }
     scene_process_published_rec_flags();
-    course = (sint32)r_u32(context + 40u);
+    course = (sint32)cfg->course;
     if (course == 6)
         result = pickup_update_racer_flags();
     else
@@ -186,6 +225,26 @@ uint32 cd_load_file_alloc(uint32 path)
 {
     FUNCTION_MARKER(0x8002BA60u, "MAIN.EXE");
     return cd_read_file_alloc(runtime_build_cd_path(path));
+}
+
+// Byte-span boundary for consumers of the legacy arena loader
+const uint8 *cd_load_file_bytes(const char *path, size_t *size)
+{
+    char full_path[128];
+    uint32 frame;
+    uint32 addr;
+    size_t idx;
+
+    if (!size)
+        return NULL;
+    runtime_build_cd_path_native(full_path, path);
+    frame = guest_stack_push(sizeof(full_path));
+    for (idx = 0; idx <= strlen(full_path); ++idx)
+        w_u8(frame + (uint32)idx, (uint8)full_path[idx]);
+    addr = cd_read_file_alloc_span(frame, size);
+    guest_stack_pop(sizeof(full_path));
+
+    return addr ? (const uint8 *)psx_addr(addr, *size) : NULL;
 }
 
 uint32 cd_load_file_buf(uint32 path, uint32 buffer)
@@ -298,10 +357,10 @@ sint32 cd_load_archive_assets(uint32 path)
     cd_upload_image_clut(request);
     if (menu_state.language == 2u)
     {
-        request = r_u32(0x80083478u) == 2u ? 0x80089F6Cu : 0x80089E54u;
+        request = race_cfg.players == 2u ? 0x80089F6Cu : 0x80089E54u;
         cd_upload_image_clut(request);
     }
-    if (r_u32(0x80083484u) == 5u)
+    if (race_cfg.mode == 5u)
     {
         cd_upload_image_clut(cd_find_tima_chunk(data, 13));
         cd_upload_image_clut(cd_find_tima_chunk(data, 14));
@@ -381,6 +440,7 @@ sint32 cd_search_file(uint32 path, uint32 location, uint32 size)
     uint32 extent = 0u;
     uint32 data_size = 0u;
     uint32 parent_directory_size = 0u;
+    uint32 parent_idx = 0u;
     uint32 path_table_extent = 0u;
     uint32 path_table_size = 0u;
     uint32 stride = 2048u;
@@ -390,7 +450,7 @@ sint32 cd_search_file(uint32 path, uint32 location, uint32 size)
     sint32 found = 0;
 
     FUNCTION_MARKER(0x8002C450u, "MAIN.EXE");
-    rr_cd_search_refreshed_directory = 0;
+    cd_search.refreshed = 0;
     disc_path = getenv("XPORT_DISC_IMAGE");
     if (!disc_path)
         return 0;
@@ -481,9 +541,9 @@ sint32 cd_search_file(uint32 path, uint32 location, uint32 size)
             uint32 directory_index = 1u;
             uint32 path_table_cursor = 0u;
 
-            rr_cd_search_parent_lba = extent;
+            cd_search.parent_lba = extent;
             parent_directory_size = data_size;
-            rr_cd_search_parent_index = 0u;
+            parent_idx = 0u;
             while (path_table_cursor + 8u <= path_table_size)
             {
                 uint32 name_length = path_table[path_table_cursor];
@@ -494,13 +554,13 @@ sint32 cd_search_file(uint32 path, uint32 location, uint32 size)
                 path_extent = (uint32)path_table[path_table_cursor + 2u] | ((uint32)path_table[path_table_cursor + 3u] << 8) | ((uint32)path_table[path_table_cursor + 4u] << 16) | ((uint32)path_table[path_table_cursor + 5u] << 24);
                 if (path_extent == extent)
                 {
-                    rr_cd_search_parent_index = directory_index;
+                    parent_idx = directory_index;
                     break;
                 }
                 path_table_cursor += 8u + name_length + (name_length & 1u);
                 ++directory_index;
             }
-            if (rr_cd_search_parent_index == 0u)
+            if (parent_idx == 0u)
                 goto finish;
         }
         free(directory);
@@ -702,12 +762,12 @@ sint32 cd_copy_sector_bytes(uint32 destination, uint32 source, sint32 size)
 
 uint32 cd_search_parent_location(void)
 {
-    return rr_cd_search_parent_lba;
+    return cd_search.parent_lba;
 }
 
 sint32 cd_search_refreshed(void)
 {
-    return rr_cd_search_refreshed_directory;
+    return cd_search.refreshed;
 }
 
 sint32 cd_process_sector_cb(void)
@@ -720,7 +780,7 @@ sint32 cd_process_sector_cb(void)
     if (r_u8(0x800B3F01u) != 0u || r_u8(0x800B3F02u) != 0u)
     {
         menu_fn_8006776c();
-        cd_set_data_cb(0u);
+        CdDataCallback(NULL);
         CdReadyCallback(0);
         global_fn_8006777c();
         if (r_u8(0x800B3F02u) != 0u)
@@ -797,7 +857,7 @@ sint32 cd_stop_read(void)
     FUNCTION_MARKER(0x8002CB38u, "MAIN.EXE");
     CdControl(9u, 0, 0);
     menu_fn_8006776c();
-    cd_set_data_cb(0u);
+    CdDataCallback(NULL);
     CdReadyCallback(0);
     global_fn_8006777c();
     return 0;
@@ -820,7 +880,7 @@ static uint32 cd_read_file_alloc_span(uint32 path, size_t *span_size)
         return 0u;
     w_u32(0x800B67F8u, (uint32)size);
     destination = game_alloc_arena_bytes((sint32)size);
-    if ((destination & 0x1FFFFFFFu) > sizeof(DRAM) || size > sizeof(DRAM) - (destination & 0x1FFFFFFFu) || !cd_read_host_file(path, destination, size, &read_size, refreshed_directory ? 6u : 4u, 3u, refreshed_directory ? 3u : 1u, 3u, 0u, 0u, 0u) || read_size != size)
+    if (!psx_addr(destination, size) || !cd_read_host_file(path, destination, size, &read_size, refreshed_directory ? 6u : 4u, 3u, refreshed_directory ? 3u : 1u, 3u, 0u, 0u, 0u) || read_size != size)
         return 0u;
     w_u32(0x800B67F0u, (uint32)size);
     // MAIN.EXE:0x8002C5E4 and CD callbacks keep pointers separate from sector counts
@@ -851,7 +911,7 @@ uint32 cd_read_file_buf(uint32 path, uint32 buffer)
     cd_search_file(path, 0x800B6818u, 0x800B6814u);
     refreshed_directory = cd_search_refreshed();
     w_u32(0x800B6814u, 0u);
-    if (!cd_host_file_size(path, &size) || (buffer & 0x1FFFFFFFu) > sizeof(DRAM) || size > sizeof(DRAM) - (buffer & 0x1FFFFFFFu) || !cd_read_host_file(path, buffer, size, &read_size, refreshed_directory ? 3u : 6u, 3u, refreshed_directory ? 1u : 3u, 3u, refreshed_directory ? 0u : 3u, refreshed_directory ? 2u : 0u, 1u) || read_size != size)
+    if (!cd_host_file_size(path, &size) || !psx_addr(buffer, size) || !cd_read_host_file(path, buffer, size, &read_size, refreshed_directory ? 3u : 6u, 3u, refreshed_directory ? 1u : 3u, 3u, refreshed_directory ? 0u : 3u, refreshed_directory ? 2u : 0u, 1u) || read_size != size)
         return 0u;
     w_u32(0x800B67F0u, (uint32)size);
     // MAIN.EXE:0x8002C698 stores the caller buffer at GP+2A68, not GP+2A78
@@ -880,43 +940,93 @@ sint32 cd_upload_vram_image(uint32 path, sint16 x, sint16 y, sint32 width, sint3
     return cd_stop_read();
 }
 
-sint32 cd_update_audio(sint32 trigger)
+void cd_reset_audio(void)
+{
+    cd_audio.mode = 2;
+    cd_audio.state = 0;
+}
+
+void cd_pause_audio(void)
+{
+    cd_audio.state = 1;
+}
+
+void cd_stop_audio(void)
+{
+    CdControl(8u, NULL, NULL);
+    cd_audio.state = 0;
+}
+
+void cd_set_audio_vol(uint16 vol)
 {
     SpuCommonAttr attr = {0};
-    sint32 state = (sint32)r_u32(0x800B6B28u);
-    sint32 mode = (sint32)r_u32(0x800B6B30u);
-    sint32 index;
-    sint32 result;
-    uint16 volume;
 
-    FUNCTION_MARKER(0x800362ACu, "MAIN.EXE");
-    if (state == 2)
-        return 2;
-    if (mode != 2 || trigger != 1)
-        return 1;
-    if (state != 0)
-    {
-        if (state != 1)
-            return 5;
-        result = CdControl(3u, 0, 0);
-        if (result != 0)
-            w_u32(0x800B6B28u, (uint32)mode);
-        return result;
-    }
-    index = r_u32(0x80083484u) == 5u ? 2 : (sint16)sound_options.tracks[sound_options.track_slot];
-    if (index < 2 || index >= (sint32)r_u32(0x800B6B88u))
-        return index < 2;
-    if (CdControl(3u, (uint8 *)psx_addr(0x800E1BD8u + 4u * (uint32)index, 4u), 0) == 0)
-        return 0;
-    w_u32(0x800B6B28u, 2u);
-    w_u32(0x800B6AE8u, (uint32)(race_decode_time_bcd(0x800E1BDCu + 4u * (uint32)index) - 150));
-    w_u32(0x800B6C08u, (uint32)race_decode_time_bcd(0x800E1BD8u + 4u * (uint32)index));
-    attr.mask = 0xC0u;
-    volume = r_u16(0x80083494u);
-    attr.cd.volume.left = (sint16)(uint16)(volume << 9);
+    attr.mask = SPU_COMMON_CDVOLL | SPU_COMMON_CDVOLR;
+    attr.cd.volume.left = (sint16)(uint16)(vol << 9);
     attr.cd.volume.right = attr.cd.volume.left;
     SpuSetCommonAttr(&attr);
-    return 0;
+}
+
+void cd_handle_ready_cb(uint8 status, uint8 *response)
+{
+    FUNCTION_MARKER(0x80038950u, "MAIN.EXE");
+    if (status != CdlDataReady)
+    {
+        cd_audio.state = 0;
+        return;
+    }
+    if ((response[4] & 0x80u) == 0u)
+    {
+        CdlLOC pos = {response[3], response[4], 0, 0};
+
+        cd_audio.pos = CdPosToInt(&pos);
+    }
+    if (cd_audio.end < cd_audio.pos)
+    {
+        cd_set_audio_vol(0);
+        cd_audio.state = 0;
+    }
+}
+
+sint32 cd_update_audio(sint32 trigger)
+{
+    sint32 state;
+    sint32 mode;
+    sint32 index;
+    sint32 result;
+
+    FUNCTION_MARKER(0x800362ACu, "MAIN.EXE");
+    state = cd_audio.state;
+    mode = cd_audio.mode;
+    result = 2;
+    if (state == 2)
+        goto done;
+    result = 1;
+    if (mode != 2 || trigger != 1)
+        goto done;
+    if (state != 0)
+    {
+        result = 5;
+        if (state != 1)
+            goto done;
+        result = CdControl(3u, NULL, NULL);
+        if (result != 0)
+            cd_audio.state = mode;
+        goto done;
+    }
+    index = race_cfg.mode == 5u ? 2 : (sint16)sound_options.tracks[sound_options.track_slot];
+    result = index < 2;
+    if (index < 2 || index >= cd_audio.tracks)
+        goto done;
+    result = 0;
+    if (CdControl(3u, (uint8 *)&cd_audio.toc[index], NULL) == 0)
+        goto done;
+    cd_audio.state = 2;
+    cd_audio.end = CdPosToInt(&cd_audio.toc[index + 1]) - 150;
+    cd_audio.pos = CdPosToInt(&cd_audio.toc[index]);
+    cd_set_audio_vol(sound_mix.music);
+done:
+    return result;
 }
 
 sint32 cd_load_model_archive(void)
@@ -924,7 +1034,7 @@ sint32 cd_load_model_archive(void)
     uint8 *src = NULL;
     const PLAYER_PROFILE *table;
     size_t archive_size, read_size;
-    sint32 players = (sint32)r_u32(0x80083478u);
+    sint32 players = (sint32)race_cfg.players;
     MESH_ARCHIVE decoded = {0};
     MESH_BOAT_MODELS models[2][16] = {0};
     MESH_MODEL event_models[4] = {0};
@@ -971,7 +1081,7 @@ sint32 cd_load_model_archive(void)
                 goto fail;
         }
     }
-    if (r_u32(0x80083484u) == 8u)
+    if (race_cfg.mode == 8u)
     {
         if (decoded.count < 4u)
             goto fail;
@@ -1002,42 +1112,6 @@ fail:
         for (record = 0; record < 16; ++record)
             mesh_clear_boat_models(&models[player][record]);
     return 0;
-}
-
-uint32 cd_load_selected_asset(uint32 path)
-{
-    uint32 result;
-
-    FUNCTION_MARKER(0x8004AEB4u, "MAIN.EXE");
-    w_u8(0x800D6958u, r_u8(0x800B40F0u));
-    w_u8(0x800D6959u, r_u8(0x800B40F1u));
-    result = cd_load_file_alloc(path);
-    w_u32(0x800B6A38u, result);
-    return result;
-}
-
-sint32 cd_retry_read_sequence(uint32 request)
-{
-    sint16 control_attempt = 0;
-    sint16 read_attempt = 0;
-
-    FUNCTION_MARKER(0x80063168u, "MAIN.EXE");
-    for (;;)
-    {
-        if (CdControl(0x15u, (uint8 *)psx_addr(request, 4u), 0) == 0)
-        {
-            ++control_attempt;
-            if (control_attempt == 5)
-                return 0;
-            continue;
-        }
-        ++read_attempt;
-        control_attempt = 0;
-        if (read_attempt == 6)
-            return 0;
-        if (CdRead2(448) != 0)
-            return 1;
-    }
 }
 
 sint32 cd_adjust_audio_volume(uint32 enabled)

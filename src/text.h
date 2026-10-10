@@ -62,6 +62,7 @@ typedef struct
 
 extern TEXT_FONT text_fonts[TEXT_FONT_COUNT];
 void text_init_fonts(void);
+uint16 text_char_width(uint32 font_idx, uint8 ch);
 void text_load_kerning(size_t font, const uint8 *data, size_t count);
 
 sint32 text_parse_signed_decimal(char *text);
@@ -75,17 +76,9 @@ sint32 text_emit_clipped(uint8 character, sint16 x, sint16 y, sint8 adjustment);
 sint32 text_render_clipped(char *text, sint32 x, sint16 y, sint8 adjustment);
 sint32 text_render_recs(void);
 
-typedef struct
-{
-    char *status;
-    char *time;
-    char *paused;
-    char *names[10];
-    char *boats[3][9];
-} TEXT_HUD_STRINGS;
-
-void text_init_hud(const TEXT_HUD_STRINGS *strings);
-void text_show_pause(char *message, uint8 font);
+const char *text_boat_name(uint32 idx);
+void text_init_hud(void);
+void text_show_pause(uint8 language);
 uint32 text_set_menu_visible(sint32 index, sint8 value);
 uint32 text_set_hud_visible(sint32 index, sint8 value);
 sint32 text_clear_hud(void);

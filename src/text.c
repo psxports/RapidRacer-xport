@@ -107,12 +107,24 @@ sint32 text_format_decimal_digits(sint32 value, char *output, sint16 digits)
 TEXT_FONT text_fonts[TEXT_FONT_COUNT];
 static size_t text_font_index;
 
+static const uint8 *const text_alphabets[TEXT_FONT_COUNT] = {text_alphabet_0, text_alphabet_1, text_alphabet_2};
+static const TEXT_METRIC *const text_metrics[TEXT_FONT_COUNT] = {text_metrics_0, text_metrics_1, text_metrics_2};
+static const size_t text_counts[TEXT_FONT_COUNT] = {sizeof(text_alphabet_0), sizeof(text_alphabet_1), sizeof(text_alphabet_2)};
+
+uint16 text_char_width(uint32 font_idx, uint8 ch)
+{
+    size_t idx = 0u;
+
+    if (font_idx >= TEXT_FONT_COUNT)
+        abort();
+    while (idx + 1u < text_counts[font_idx] && text_alphabets[font_idx][idx] != ch)
+        ++idx;
+    return text_metrics[font_idx][idx].width;
+}
+
 void text_init_fonts(void)
 {
     FUNCTION_MARKER(0x80050E98u, "MAIN.EXE");
-    static const uint8 *alphabets[3] = {text_alphabet_0, text_alphabet_1, text_alphabet_2};
-    static const TEXT_METRIC *metrics[3] = {text_metrics_0, text_metrics_1, text_metrics_2};
-    static const size_t counts[3] = {sizeof(text_alphabet_0), sizeof(text_alphabet_1), sizeof(text_alphabet_2)};
     static const uint16 texture_x[3] = {960, 910, 922};
     static const uint16 texture_y[3] = {256, 256, 352};
     static const uint16 clut_y[3] = {450, 445, 444};
@@ -123,7 +135,7 @@ void text_init_fonts(void)
     for (group = 0; group < TEXT_FONT_COUNT; ++group)
     {
         TEXT_FONT *font = &text_fonts[group];
-        font->count = counts[group];
+        font->count = text_counts[group];
         font->texture_x = texture_x[group];
         font->texture_y = texture_y[group];
         font->clut_y = clut_y[group];
@@ -131,10 +143,10 @@ void text_init_fonts(void)
         for (row = 0; row < 256; ++row)
             font->map[row] = -1;
         for (row = 0; row < font->count; ++row)
-            font->map[alphabets[group][row]] = (sint16)row;
+            font->map[text_alphabets[group][row]] = (sint16)row;
         for (row = 0; row < 26; ++row)
             font->map['A' + row] = font->map['a' + row];
-        memcpy(font->metrics, metrics[group], font->count * sizeof(TEXT_METRIC));
+        memcpy(font->metrics, text_metrics[group], font->count * sizeof(TEXT_METRIC));
         for (row = 0; row < font->count; ++row)
             for (column = 0; column < font->count; ++column)
                 font->kerning[row * font->count + column] = (uint8)(font->metrics[row].width - adjustment[group]);
@@ -254,7 +266,73 @@ sint32 text_render_recs(void)
     return 0;
 }
 
-void text_init_hud(const TEXT_HUD_STRINGS *strings)
+// HUD labels use writable storage for the existing text-record interface
+static char text_hud_status[] = "loading";
+static char text_hud_time[] = "beta 008";
+static char text_hud_paused[] = "Sep 22 1997";
+static char text_hud_names[10][8] = {
+    "aaaa",
+    "aaaa",
+    "aaaa",
+    "aaaa",
+    "aaaa",
+    "aaaa",
+    "aaaa",
+    "aaaa",
+    "aaaa",
+    "aaaa",
+};
+static char text_boats[3][9][14] = {
+    {
+        "WATERHAWK",
+        "WAVEHAMMER",
+        "AKULA",
+        "AMERICANA",
+        "MARLIN",
+        "T550",
+        "RADIOACTIVE",
+        "BLACK WIDOW",
+        "HURRICANE",
+    },
+    {
+        "WATERHAWK A",
+        "WAVEHAMMER A",
+        "AKULA A",
+        "AMERICANA A",
+        "MARLIN A",
+        "T550 A",
+        "RADIOACTIVE A",
+        "BLACK WIDOW A",
+        "HURRICANE A",
+    },
+    {
+        "WATERHAWK A",
+        "WAVEHAMMER A",
+        "AKULA A",
+        "AMERICANA A",
+        "MARLIN A",
+        "T550 A",
+        "RADIOACTIVE A",
+        "BLACK WIDOW A",
+        "HURRICANE A",
+    },
+};
+static char text_pause_msgs[5][45] = {
+    "game paused. controller removed",
+    "jeu stopp\351 car manette retir\351e",
+    "spiel unterbrochen. controller entfernt",
+    "gioco in pausa. controller eliminato",
+    "juego detenido porque se ha quitado el mando",
+};
+
+const char *text_boat_name(uint32 idx)
+{
+    if (idx >= 9u)
+        abort();
+    return text_boats[0][idx];
+}
+
+void text_init_hud(void)
 {
     TEXT_RECORD *records;
     sint32 row;
@@ -266,18 +344,18 @@ void text_init_hud(const TEXT_HUD_STRINGS *strings)
     records[0].font = 0u;
     records[0].centered = 0u;
     records[0].visible = 0u;
-    records[0].text = strings->status;
+    records[0].text = text_hud_status;
     records[0].x = 190u;
     records[0].y = 100u;
     records = text_hud;
-    records[1].text = strings->time;
+    records[1].text = text_hud_time;
     records[1].x = 300u;
     records[1].font = 1u;
     records[1].centered = 0u;
     records[1].visible = 0u;
     records[1].y = 168u;
     records = text_hud;
-    records[2].text = strings->paused;
+    records[2].text = text_hud_paused;
     records[2].font = 1u;
     records[2].centered = 0u;
     records[2].visible = 0u;
@@ -286,7 +364,7 @@ void text_init_hud(const TEXT_HUD_STRINGS *strings)
     for (row = 0; row < 10; ++row)
     {
         TEXT_RECORD *record = &text_hud[row + 3];
-        record[0].text = strings->names[row];
+        record[0].text = text_hud_names[row];
         record[0].font = 1u;
         record[0].centered = 0u;
         record[0].x = 124u;
@@ -301,7 +379,7 @@ void text_init_hud(const TEXT_HUD_STRINGS *strings)
             record[0].font = 1u;
             record[0].x = 124u;
             record[0].y = (uint16)(12 * column + 50);
-            record[0].text = strings->boats[0][row];
+            record[0].text = text_boats[0][row];
             record[0].centered = 0u;
             record[0].visible = 0u;
         }
@@ -309,7 +387,7 @@ void text_init_hud(const TEXT_HUD_STRINGS *strings)
     for (row = 0; row < 9; ++row)
     {
         TEXT_RECORD *record = &text_hud[row + 13];
-        record[0].text = strings->boats[1][row];
+        record[0].text = text_boats[1][row];
         record[0].font = 1u;
         record[0].centered = 0u;
         record[0].x = 124u;
@@ -319,7 +397,7 @@ void text_init_hud(const TEXT_HUD_STRINGS *strings)
     for (row = 0; row < 9; ++row)
     {
         TEXT_RECORD *record = &text_hud[row + 22];
-        record[0].text = strings->boats[2][row];
+        record[0].text = text_boats[2][row];
         record[0].font = 1u;
         record[0].centered = 0u;
         record[0].x = 124u;
@@ -328,8 +406,10 @@ void text_init_hud(const TEXT_HUD_STRINGS *strings)
     }
 }
 
-void text_show_pause(char *message, uint8 font)
+void text_show_pause(uint8 language)
 {
+    char *message = language < 5u ? text_pause_msgs[language] : NULL;
+    uint8 font = language < 5u ? (language == 0u ? 1u : 2u) : 0u;
     TEXT_RECORD *record = &text_hud[2];
     FUNCTION_MARKER(0x80052418u, "MAIN.EXE");
     if (message)

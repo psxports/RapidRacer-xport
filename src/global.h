@@ -24,14 +24,9 @@ sint32 math_trunc_shift12_s32(sint32 value);
 sint32 vec_dist_sq(const sint32 first[3], const sint32 second[3]);
 
 sint32 vec_normalize(const VECTOR *input, SVECTOR *output);
-sint32 vec_norm(uint32 input, uint32 output);
-sint32 math_hsv_to_rgb(uint32 output, uint32 hsv);
 
 void global_fn_8006777c(void);
 
 uint32 guest_swap_stack_ptr(uint32 new_stack);
-uint32 global_fn_80068900(uint32 callback);
-uint32 global_fn_80068918(void);
-sint32 global_fn_8006e9d8(void);
 
 #endif /* RR_GLOBAL_H */

@@ -13,6 +13,10 @@
 NAME_EDITOR name_editor;
 NAME_REELS name_reels;
 
+const char name_code_frac[5] = "frac";
+const char name_code_winr[5] = "winr";
+const char name_code_hurr[5] = "hurr";
+
 typedef struct
 {
     uint32 angle;
@@ -106,7 +110,11 @@ static void name_fill_ring(sint32 start)
 
 void name_apply_player_name_cheats(void)
 {
-    static const uint32 mode_strings[3][6] = {{0x800B4150u, 0x800B4158u, 0x800B4160u, 0x800B4168u, 0x800B4170u, 0x800B4178u}, {0x800B4180u, 0x800B4188u, 0x800B4190u, 0x800B4198u, 0x800B41A0u, 0x800B41A8u}, {0x800B41B0u, 0x800B41B8u, 0x800B41C0u, 0x800B41C8u, 0x800B41D0u, 0x800B41D8u}};
+    static const char mode_codes[3][6][5] = {
+        {"d  1", "d  2", "d  3", "d  4", "d  5", "d  6"},
+        {"n  1", "n  2", "n  3", "n  4", "n  5", "n  6"},
+        {"m  1", "m  2", "m  3", "m  4", "m  5", "m  6"}
+    };
     sint32 result = (sint16)game_selection.mode;
 
     FUNCTION_MARKER(0x8005056Cu, "MAIN.EXE");
@@ -123,7 +131,7 @@ void name_apply_player_name_cheats(void)
 
         for (mode = 0; mode < 3; ++mode)
             for (count = 0; count < 6; ++count)
-                if (name_player_name_matches(0, mode_strings[mode][count]) != 0)
+                if (name_matches(0, mode_codes[mode][count]) != 0)
                 {
                     selected_mode = mode;
                     selected_count = count + 1;
@@ -138,7 +146,7 @@ void name_apply_player_name_cheats(void)
                 profile_data->progress.courses[(uint32)selected_mode][(uint32)count].state = (uint8)(6u);
             profile_data->progress.courses[(uint32)selected_mode][(uint32)count].state = (uint8)(4u);
         }
-        if (name_player_name_matches(0, 0x800B41E0u) != 0)
+        if (name_matches(0, " day") != 0)
         {
             menu_state.sound = 3u;
             profile_data->course = (uint8)(5u);
@@ -147,7 +155,7 @@ void name_apply_player_name_cheats(void)
             for (count = 0; count < 6; ++count)
                 profile_data->progress.courses[0u][(uint32)count].state = (uint8)(6u);
         }
-        if (name_player_name_matches(0, 0x800B41E8u) != 0)
+        if (name_matches(0, " nit") != 0)
         {
             menu_state.sound = 3u;
             profile_data->course = (uint8)(5u);
@@ -156,7 +164,7 @@ void name_apply_player_name_cheats(void)
             for (count = 0; count < 6; ++count)
                 profile_data->progress.courses[1u][(uint32)count].state = (uint8)(6u);
         }
-        if (name_player_name_matches(0, 0x800B41F0u) != 0)
+        if (name_matches(0, "rrim") != 0)
         {
             menu_state.sound = 3u;
             profile_data->course = (uint8)(5u);
@@ -165,14 +173,14 @@ void name_apply_player_name_cheats(void)
             for (count = 0; count < 6; ++count)
                 profile_data->progress.courses[2u][(uint32)count].state = (uint8)(6u);
         }
-        if (name_player_name_matches(0, 0x800B41F8u) != 0)
+        if (name_matches(0, name_code_frac) != 0)
         {
             menu_state.sound = 3u;
             profile_data->course = (uint8)(1u);
             profile_data->level = (uint8)(3u);
             profile_data->max_level = 3u;
         }
-        if (name_player_name_matches(0, 0x800B4200u) != 0)
+        if (name_matches(0, " boa") != 0)
         {
             menu_state.sound = 3u;
             for (count = 0; count < 10; ++count)
@@ -183,7 +191,7 @@ void name_apply_player_name_cheats(void)
             if ((flags & 4u) != 0u)
                 game_selection.flags = (uint16)(flags - 4u);
         }
-        if (name_player_name_matches(0, 0x800B4208u) != 0)
+        if (name_matches(0, " qak") != 0)
         {
             uint16 flags = game_selection.flags;
             menu_state.sound = 3u;
@@ -194,14 +202,14 @@ void name_apply_player_name_cheats(void)
             if ((flags & 16u) != 0u)
                 game_selection.flags = (uint16)(flags - 16u);
         }
-        if (name_player_name_matches(0, 0x800B4210u) != 0)
+        if (name_matches(0, " str") != 0)
         {
             uint16 flags;
 
             menu_state.sound = 3u;
             flags = game_selection.flags;
-            w_u16(0x800B6B86u, 0u);
-            w_u16(0x800B6AA0u, 5u);
+            menu_state.movie_idx = 0u;
+            menu_state.exit_wait = 5u;
             game_selection.flags = (uint16)(flags + 16u);
             text_set_hud_visible(0, 1);
             menu_state.phase = 25u;
@@ -211,21 +219,21 @@ void name_apply_player_name_cheats(void)
             if ((flags & 8u) != 0u)
                 game_selection.flags = (uint16)(flags - 8u);
         }
-        if (name_player_name_matches(0, 0x800B4218u) != 0)
+        if (name_matches(0, "bxtr") != 0)
         {
             uint16 flags = game_selection.flags;
             menu_state.sound = 3u;
             if ((flags & 0x20u) != 0u)
                 game_selection.flags = (uint16)(flags + 8u);
         }
-        if (name_player_name_matches(0, 0x800B4220u) != 0)
+        if (name_matches(0, name_code_hurr) != 0)
             menu_state.sound = 3u;
         {
             uint16 flags = game_selection.flags;
             if ((flags & 64u) != 0u)
                 game_selection.flags = (uint16)(flags - 64u);
         }
-        if (name_player_name_matches(0, 0x800B4228u) != 0)
+        if (name_matches(0, "rush") != 0)
         {
             uint16 flags = game_selection.flags;
             menu_state.sound = 3u;
@@ -256,15 +264,15 @@ sint32 name_refresh_menu_text(void)
     return (sint32)value;
 }
 
-sint32 name_player_name_matches(sint16 index, uint32 value)
+sint32 name_matches(sint16 idx, const char *code)
 {
-    const char *source = name_player_text((uint32)(sint32)index);
-    sint32 offset;
+    const char *src = name_player_text((uint32)(sint32)idx);
+    sint32 i;
 
     FUNCTION_MARKER(0x80057BC8u, "MAIN.EXE");
-    for (offset = 0; offset < 4; ++offset)
+    for (i = 0; i < 4; ++i)
     {
-        if ((uint8)source[offset] != r_u8(value + (uint32)offset))
+        if ((uint8)src[i] != (uint8)code[i])
             return 0;
     }
     return 1;
@@ -317,7 +325,7 @@ sint32 name_reset_wheel(void)
     menu_pulse.brightness = 0u;
     menu_pulse.falling = 0u;
     name_editor.pending_glyph = (uint16)((uint16)-1);
-    w_u16(0x800B4142u, configuration);
+    menu_state.from_screen = configuration;
     name_build_glyphs();
     records = sprite_records;
     for (index = 0; index < 37; ++index)
@@ -812,7 +820,7 @@ sint32 name_update_wheel(CONTROLLER_STATE *input, uint32 unused2, uint32 unused3
                 page_count = (uint8)game_selection.players;
                 if (page + 1 == page_count)
                 {
-                    sint32 gate = (sint16)r_u16(0x800B69CAu);
+                    sint32 gate = (sint16)menu_state.series_mode;
 
                     menu_state.phase = 5u;
                     if (gate == 1)
@@ -850,7 +858,7 @@ sint32 name_update_wheel(CONTROLLER_STATE *input, uint32 unused2, uint32 unused3
 
 sint32 name_draw_entry(void)
 {
-    uint32 frame = guest_stack_push(0x30u);
+    uint16 widths[4];
     TEXT_RECORD *records;
     sint16 selected;
     sint32 total = 6;
@@ -868,24 +876,13 @@ sint32 name_draw_entry(void)
     result = selected < 4;
     if (selected >= 4)
     {
-        guest_stack_pop(0x30u);
         return result;
     }
     records = text_menu;
     for (index = 0; index < 4; ++index)
     {
-        char *text = records[index + 5].text;
-        uint8 sentinel = r_u8(0x800984B0u);
-        uint32 character = (uint8)text[0];
-        sint32 alphabet_index = 0;
-
-        if (sentinel != 64u)
-        {
-            while (r_u8(0x800984B0u + (uint32)alphabet_index) != character && r_u8(0x800984B0u + (uint32)(alphabet_index + 1)) != 64u)
-                ++alphabet_index;
-        }
-        w_u16(frame + 16u + 2u * (uint32)index, r_u16(0x800985B0u + 8u * (uint32)alphabet_index));
-        total += r_u16(0x800985B0u + 8u * (uint32)alphabet_index);
+        widths[index] = text_char_width(0u, (uint8)records[index + 5].text[0]);
+        total += widths[index];
     }
     x = 266 - (sint16)total / 2;
     records = text_menu;
@@ -896,9 +893,9 @@ sint32 name_draw_entry(void)
         if (index == selected)
         {
             left = (sint16)x;
-            right = (sint16)(x + r_u16(frame + 16u + 2u * (uint32)index) - 2);
+            right = (sint16)(x + widths[index] - 2);
         }
-        x = (sint16)(x + r_u16(frame + 16u + 2u * (uint32)index) - 2);
+        x = (sint16)(x + widths[index] - 2);
     }
     {
         uint8 color = menu_pulse.brightness;
@@ -925,7 +922,6 @@ sint32 name_draw_entry(void)
         if (menu_pulse.brightness >= 225u)
             menu_pulse.falling = 1u;
     }
-    guest_stack_pop(0x30u);
     return result;
 }
 
@@ -1147,7 +1143,7 @@ sint32 name_update_reels(CONTROLLER_STATE *input)
             reel->mode = NAME_REEL_STOPPING;
             reel->counter = 6u;
             reel->previous = (uint16)(selection - 1);
-            name_reels.slots[index].target = (uint16)(global_fn_8006e9d8() & 15);
+            name_reels.slots[index].target = (uint16)(game_random_next() & 15);
             if ((sint16)reel->previous < 0)
                 reel->previous = (uint16)(selection + 15);
             reel->selection = (uint16)(selection - 1);
@@ -1248,12 +1244,3 @@ sint32 name_bytes_copy8(char *source, char *destination)
     return (sint32)result;
 }
 
-uint32 time_parts_to_tenths(uint32 value)
-{
-    uint32 third = r_u16(value + 4u);
-    uint32 first = r_u16(value);
-    uint32 second = r_u16(value + 2u);
-
-    FUNCTION_MARKER(0x80059C70u, "MAIN.EXE");
-    return 6000u * first + 100u * second + third / 10u;
-}

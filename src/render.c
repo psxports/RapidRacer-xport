@@ -953,7 +953,7 @@ sint32 render_init_ui_prims(void)
     return 0;
 }
 
-uint32 render_target_indicator(uint32 owner, uint32 *ot, sint32 alternate)
+uint32 render_target_indicator(const RACE_VIEW *owner, uint32 *ot, sint32 alternate)
 {
     const SVECTOR *vertices = render_indicator_vertices;
     MATRIX matrix = render_indicator_matrix;
@@ -975,11 +975,11 @@ uint32 render_target_indicator(uint32 owner, uint32 *ot, sint32 alternate)
         abort();
     primitive = render_indicator_polylines[alternate];
     final_primitive = &render_indicator_lines[alternate];
-    if (r_u32(0x80083484u) == 5u)
+    if (race_cfg.mode == 5u)
         return 2;
-    if (r_u32(0x80083478u) == 2u)
+    if (race_cfg.players == 2u)
         return 4;
-    menu = vehicle_menu(r_u32(owner + 0x64u));
+    menu = vehicle_player_menu(owner);
     if (menu->mode != 4u)
         return 4;
     for (index = (uint32)menu->racer_num + 1u; index < vehicle_racer_count; ++index)
@@ -1212,7 +1212,7 @@ void render_packet_publish(uint32 offset)
 
 void render_init_packet_pools(void)
 {
-    uint32 size = race_selection.special != 0u ? 0x20000u : (r_u32(0x80083478u) == 2u ? 0x16000u : 0x10000u);
+    uint32 size = race_selection.special != 0u ? 0x20000u : (race_cfg.players == 2u ? 0x16000u : 0x10000u);
 
     FUNCTION_MARKER(0x80016340u, "MAIN.EXE");
     render_packet_pool_init(size);
@@ -1338,7 +1338,7 @@ void render_billboard(uint32 *ot, const RENDER_BILLBOARD *entries, sint32 count,
     sint32 index;
 
     FUNCTION_MARKER(0x80019340u, "MAIN.EXE");
-    if (r_u32(0x80083484u) == 8u)
+    if (race_cfg.mode == 8u)
     {
         uint32 phase = game_timing.ticks & 0x7Fu;
 
@@ -1403,7 +1403,7 @@ void render_billboard(uint32 *ot, const RENDER_BILLBOARD *entries, sint32 count,
             half_width = 64;
             height = 84;
         }
-        if (r_u32(0x80083478u) == 2u)
+        if (race_cfg.players == 2u)
             height /= 2;
         center.vx = entries[index].x;
         center.vy = entries[index].y;
@@ -1513,7 +1513,7 @@ uint32 render_horizon(RENDER_FRAME *buffer, const CAMERA_STATE *view)
         angle += 4096;
     {
         sint32 projection = (sint16)gte_read_h();
-        uint32 mode = r_u32(0x80083478u);
+        uint32 mode = race_cfg.players;
         sint32 numerator;
 
         if (mode == 1u)
@@ -1523,7 +1523,7 @@ uint32 render_horizon(RENDER_FRAME *buffer, const CAMERA_STATE *view)
         }
         else
         {
-            mode = r_u32(0x80083488u);
+            mode = race_cfg.layout;
             if (mode == 1u)
             {
                 numerator = 256;
@@ -1586,7 +1586,7 @@ uint32 render_horizon(RENDER_FRAME *buffer, const CAMERA_STATE *view)
     if (height_count > 9 || ring_count * cfg->strips > 40 || ring_count * (1 + (cfg->edge != 0u)) > 20 || ring_count > 10)
         abort();
     group_count = (height_count + 2) / 3;
-    radius_scale = r_u32(0x80083484u) == 8u ? 1 : 2;
+    radius_scale = race_cfg.mode == 8u ? 1 : 2;
     for (group = 0; group < group_count; ++group)
     {
         sint16 group_heights[3] = {heights[group * 3], heights[group * 3 + 1], heights[group * 3 + 2]};

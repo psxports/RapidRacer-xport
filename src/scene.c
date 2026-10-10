@@ -17,6 +17,13 @@
 #include "polygon.h"
 #include <stdlib.h>
 
+// Immutable light angles in degrees from MAIN.EXE 800935E0..80093617
+const SCENE_LIGHT_ANGLES scene_light_angles[7] =
+{
+    {-20, 275}, {-15, -120}, {-15, -120}, {-15, -120},
+    {-15, -120}, {-25, 225}, {-15, -120}
+};
+
 // Native control reference selected with the scene descriptor
 const struct AI_CONTROL_CFG *scene_control;
 
@@ -254,7 +261,7 @@ void scene_select(uint32 course, uint32 mode)
     scene_race = &scene_race_bank[course == 1u && mode == 2u ? 7u : course];
 }
 
-sint32 scene_render_player(uint32 context, sint32 buffer)
+sint32 scene_render_player(const RACE_VIEW *context, sint32 buffer)
 {
     CAMERA_STATE *view = camera_for_view(context);
     RENDER_FRAME *frame = render_frame(view, buffer);
@@ -288,7 +295,7 @@ sint32 scene_render_player(uint32 context, sint32 buffer)
         // Original root uses the link in entry 250, which points to entry 249
         AddPrims(chain, &route_ot[249], route_ot);
     }
-    if (r_u32(0x80083484u) != 8u)
+    if (race_cfg.mode != 8u)
     {
         uint32 *chain = &scene_ot[4];
         ClearOTagR(object_ot, 101);
@@ -306,11 +313,11 @@ sint32 scene_render_player(uint32 context, sint32 buffer)
     if (speed > 130)
         speed = 130;
     render_proj_speed[view - camera_views] = speed;
-    render_set_proj_dist(r_u32(0x80083478u) == 2u ? 200u : game_timing.base_rate == game_timing.frame_rate ? 290u - (uint32)speed : 290u);
+    render_set_proj_dist(race_cfg.players == 2u ? 200u : game_timing.base_rate == game_timing.frame_rate ? 290u - (uint32)speed : 290u);
     mesh_render_racer_model(context, buffer);
-    if (r_u32(0x80083484u) == 8u)
+    if (race_cfg.mode == 8u)
     {
-        race_events_select_frame(buffer, (sint32)r_u32(context + 4u));
+        race_events_select_frame(buffer, (sint32)context->idx);
         camera_bias_matrix(view, &camera_identity, 1);
         rotation = view->rotation;
         rotation.t[0] = rotation.t[1] = rotation.t[2] = 0;
@@ -318,7 +325,7 @@ sint32 scene_render_player(uint32 context, sint32 buffer)
         SetTransMatrix(&rotation);
         render_horizon(frame, view);
         race_events_render_horizon(&scene_ot[4], view,
-                                   r_u32(0x8008348Cu), r_u32(0x80083488u), r_u32(0x80083478u));
+                                   race_cfg.variant, race_cfg.layout, race_cfg.players);
         race_events_render(context, &scene_ot[13], buffer);
     }
     else
@@ -334,16 +341,16 @@ sint32 scene_render_player(uint32 context, sint32 buffer)
         object_groups_build_linked(view->route, group, view);
         render_horizon(frame, view);
         camera_bias_matrix(view, &camera_identity, 1);
-        render_reconcile_slots(group, (uint8)r_u32(context + 4u));
-        render_dispatch_prim_groups(group, r_u32(context + 4u), buffer, object_ot);
+        render_reconcile_slots(group, (uint8)context->idx);
+        render_dispatch_prim_groups(group, context->idx, buffer, object_ot);
         render_target_indicator(context, &scene_ot[1], buffer);
     }
     effects_render(context, buffer);
-    if (r_u32(0x80083478u) == 1u)
+    if (race_cfg.players == 1u)
     {
         uint32 *first = &scene_ot[1];
 
-        if (r_u32(0x8008373Cu) != 0u)
+        if (race_paused != 0u)
             menu_dispatch_state_render_mode(context, first, 0);
         else
         {
@@ -353,12 +360,12 @@ sint32 scene_render_player(uint32 context, sint32 buffer)
             AddPrim(first, &ui_modes[0]);
         }
     }
-    else if (r_u32(0x8008373Cu) != 0u)
+    else if (race_paused != 0u)
     {
-        if (context == 0x800DF098u)
+        if (context == &race_views[1])
         {
             render_publish_hud(render_frame_hud(frame));
-            menu_submit_recs_refresh(context, &scene_ot[1]);
+            menu_submit_recs_refresh(&scene_ot[1]);
         }
     }
     else
@@ -371,7 +378,7 @@ sint32 scene_render_player(uint32 context, sint32 buffer)
     }
     if (render_capture_enabled != 0u)
         effects_render_quad_proj_fade(context, buffer);
-    if (r_u32(0x80083478u) == 2u)
+    if (race_cfg.players == 2u)
     {
         AddPrim(&scene_ot[1], &environment->divider);
     }
@@ -406,9 +413,9 @@ sint32 scene_clear_group_item_flags(sint16 group)
     return 0;
 }
 
-void scene_render_player_sequence(const ROUTE_SEGMENT *sequence, uint32 state_base, sint32 state_index)
+void scene_render_player_sequence(const ROUTE_SEGMENT *sequence, const RACE_VIEW *state_base, sint32 state_index)
 {
-    uint32 state = state_base;
+    const RACE_VIEW *state = state_base;
     const ROUTE_SEGMENT *selected = sequence;
     const ROUTE_SEGMENT *supplemental = NULL;
     sint32 available = -1;
@@ -466,7 +473,7 @@ void scene_render_player_sequence(const ROUTE_SEGMENT *sequence, uint32 state_ba
         }
     }
     {
-        uint32 mode = r_u32(0x800834A0u);
+        uint32 mode = race_cfg.course;
         sint32 width = (sint16)camera_for_view(state)->visible[0];
 
         if (mode == 6u)

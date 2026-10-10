@@ -1949,7 +1949,7 @@ void route_gen_geom(ROUTE_SEGMENT *records, sint32 count)
         last->origin[1] = 0u;
         last->origin[2] = 0u;
         for (point = 0; point < 14; ++point)
-            last->vertices[point].texture_phase = (uint8)global_fn_8006e9d8();
+            last->vertices[point].texture_phase = (uint8)game_random_next();
     }
     for (index = 0; index < count; ++index)
     {
@@ -1985,10 +1985,10 @@ void route_gen_geom(ROUTE_SEGMENT *records, sint32 count)
             {
                 sint32 bounded = remaining >= 129 ? 128 : remaining;
                 sint32 half = bounded / 2;
-                sint32 length = half + global_fn_8006e9d8() % half;
+                sint32 length = half + game_random_next() % half;
                 sint32 quarter = length / 4;
                 sint32 eighth = length / 8;
-                sint32 v0 = eighth + global_fn_8006e9d8() % quarter;
+                sint32 v0 = eighth + game_random_next() % quarter;
                 sint32 first_divisor = 2048 / v0;
                 sint32 first_duration = 2048 / first_divisor;
                 sint32 second_divisor = 2048 / (length - first_duration);
@@ -2023,9 +2023,9 @@ void route_gen_geom(ROUTE_SEGMENT *records, sint32 count)
             {
                 sint32 bounded = remaining >= 129 ? 128 : remaining;
                 sint32 half = bounded / 2;
-                sint32 length = bounded / 4 + global_fn_8006e9d8() % half;
+                sint32 length = bounded / 4 + game_random_next() % half;
                 sint32 quarter = length / 4;
-                sint32 v0 = quarter + global_fn_8006e9d8() % quarter;
+                sint32 v0 = quarter + game_random_next() % quarter;
                 sint32 first_divisor = 2048 / v0;
                 sint32 first_duration = 2048 / first_divisor;
                 sint32 second_divisor = 2048 / (length - first_duration);
@@ -2033,10 +2033,10 @@ void route_gen_geom(ROUTE_SEGMENT *records, sint32 count)
                 sint32 phase_divisor;
 
                 slope_step = (uint32)(uint16)first_divisor | ((uint32)(uint16)second_divisor << 16);
-                slope_amount = route_geometry_set_lo_u16(slope_amount, 32 * (first_duration + global_fn_8006e9d8() % first_duration));
-                phase_divisor = second_duration + global_fn_8006e9d8() % second_duration;
+                slope_amount = route_geometry_set_lo_u16(slope_amount, 32 * (first_duration + game_random_next() % first_duration));
+                phase_divisor = second_duration + game_random_next() % second_duration;
                 slope_amount = (slope_amount & 0x0000FFFFu) | ((uint32)(uint16)(32 * phase_divisor) << 16);
-                phase_divisor = global_fn_8006e9d8();
+                phase_divisor = game_random_next();
                 phase_divisor = phase_divisor - 8 * (phase_divisor / 8) + 24;
                 slope_phase = ((uint32)(uint16)phase_divisor << 16);
             }
@@ -2070,9 +2070,9 @@ void route_gen_geom(ROUTE_SEGMENT *records, sint32 count)
         else if (width_delta == 0u)
             width_delta = 1u;
         if (width >= 301u)
-            width_delta = (uint16) - (global_fn_8006e9d8() & 3);
+            width_delta = (uint16) - (game_random_next() & 3);
         else if (width < 140u)
-            width_delta = (uint16)(global_fn_8006e9d8() & 3);
+            width_delta = (uint16)(game_random_next() & 3);
         width = (uint16)(width + width_delta);
 
         radius[0] = slope + 21500;
@@ -2087,7 +2087,7 @@ void route_gen_geom(ROUTE_SEGMENT *records, sint32 count)
         }
         else if (rise == 1)
         {
-            sint32 random = global_fn_8006e9d8() % (sint8)(random_ranges >> 16);
+            sint32 random = game_random_next() % (sint8)(random_ranges >> 16);
 
             radius[2] -= route_geometry_hi_s16(left_offsets);
             radius[1] = radius[2];
@@ -2095,9 +2095,9 @@ void route_gen_geom(ROUTE_SEGMENT *records, sint32 count)
         }
         else
         {
-            radius[0] -= route_geometry_hi_s16(outer_offsets) + ((global_fn_8006e9d8() % (sint8)(random_ranges >> 24)) << 6);
-            radius[1] -= route_geometry_lo_s16(outer_offsets) + ((global_fn_8006e9d8() % (sint8)(random_ranges >> 16)) << 6);
-            radius[2] -= route_geometry_hi_s16(left_offsets) + ((global_fn_8006e9d8() % (sint8)(random_ranges >> 8)) << 6);
+            radius[0] -= route_geometry_hi_s16(outer_offsets) + ((game_random_next() % (sint8)(random_ranges >> 24)) << 6);
+            radius[1] -= route_geometry_lo_s16(outer_offsets) + ((game_random_next() % (sint8)(random_ranges >> 16)) << 6);
+            radius[2] -= route_geometry_hi_s16(left_offsets) + ((game_random_next() % (sint8)(random_ranges >> 8)) << 6);
         }
         if (straight)
         {
@@ -2108,7 +2108,7 @@ void route_gen_geom(ROUTE_SEGMENT *records, sint32 count)
         }
         else if (fall == 1)
         {
-            sint32 random = global_fn_8006e9d8() % (sint8)(right_random_ranges >> 16);
+            sint32 random = game_random_next() % (sint8)(right_random_ranges >> 16);
 
             radius[10] += route_geometry_hi_s16(right_offsets);
             radius[11] = radius[10];
@@ -2116,9 +2116,9 @@ void route_gen_geom(ROUTE_SEGMENT *records, sint32 count)
         }
         else
         {
-            radius[10] += route_geometry_hi_s16(right_offsets) + ((global_fn_8006e9d8() % (sint8)(right_random_ranges >> 8)) << 6);
-            radius[11] += route_geometry_lo_s16(right_outer_offsets) + ((global_fn_8006e9d8() % (sint8)(right_random_ranges >> 16)) << 6);
-            radius[12] += route_geometry_hi_s16(right_outer_offsets) + ((global_fn_8006e9d8() % (sint8)(right_random_ranges >> 24)) << 6);
+            radius[10] += route_geometry_hi_s16(right_offsets) + ((game_random_next() % (sint8)(right_random_ranges >> 8)) << 6);
+            radius[11] += route_geometry_lo_s16(right_outer_offsets) + ((game_random_next() % (sint8)(right_random_ranges >> 16)) << 6);
+            radius[12] += route_geometry_hi_s16(right_outer_offsets) + ((game_random_next() % (sint8)(right_random_ranges >> 24)) << 6);
         }
 
         angle = (index << 12) / count;
@@ -2192,11 +2192,11 @@ void route_gen_geom(ROUTE_SEGMENT *records, sint32 count)
         current_record->section = 1u;
         current_record->vertices[12].position[1] = 0u;
 
-        current_record->vertices[1].position[1] = (uint8)(current_record->vertices[1].position[1] + (uint8)(color_bases >> 16) + global_fn_8006e9d8() % (sint8)(color_ranges >> 16));
+        current_record->vertices[1].position[1] = (uint8)(current_record->vertices[1].position[1] + (uint8)(color_bases >> 16) + game_random_next() % (sint8)(color_ranges >> 16));
         if (straight)
         {
             current_record->vertices[2].position[1] = (uint8)(current_record->vertices[2].position[1] + 20u + current_record->vertices[3].position[1]);
-            current_record->vertices[0].position[1] = (uint8)(current_record->vertices[0].position[1] + (uint8)(color_bases >> 24) + global_fn_8006e9d8() % (sint8)(color_ranges >> 24));
+            current_record->vertices[0].position[1] = (uint8)(current_record->vertices[0].position[1] + (uint8)(color_bases >> 24) + game_random_next() % (sint8)(color_ranges >> 24));
         }
         else if (rise == 1)
         {
@@ -2209,15 +2209,15 @@ void route_gen_geom(ROUTE_SEGMENT *records, sint32 count)
         }
         else
         {
-            current_record->vertices[2].position[1] = (uint8)(current_record->vertices[2].position[1] + (uint8)(color_bases >> 8) + global_fn_8006e9d8() % (sint8)(color_ranges >> 8));
-            current_record->vertices[0].position[1] = (uint8)(current_record->vertices[0].position[1] + (uint8)(color_bases >> 24) + global_fn_8006e9d8() % (sint8)(color_ranges >> 24));
+            current_record->vertices[2].position[1] = (uint8)(current_record->vertices[2].position[1] + (uint8)(color_bases >> 8) + game_random_next() % (sint8)(color_ranges >> 8));
+            current_record->vertices[0].position[1] = (uint8)(current_record->vertices[0].position[1] + (uint8)(color_bases >> 24) + game_random_next() % (sint8)(color_ranges >> 24));
         }
 
-        current_record->vertices[11].position[1] = (uint8)(current_record->vertices[11].position[1] + (uint8)(right_color_bases >> 16) + global_fn_8006e9d8() % (sint8)(right_color_ranges >> 16));
+        current_record->vertices[11].position[1] = (uint8)(current_record->vertices[11].position[1] + (uint8)(right_color_bases >> 16) + game_random_next() % (sint8)(right_color_ranges >> 16));
         if (straight)
         {
             current_record->vertices[10].position[1] = (uint8)(current_record->vertices[9].position[1] + 20u);
-            current_record->vertices[12].position[1] = (uint8)(current_record->vertices[12].position[1] + (uint8)(right_color_bases >> 24) + global_fn_8006e9d8() % (sint8)(right_color_ranges >> 24));
+            current_record->vertices[12].position[1] = (uint8)(current_record->vertices[12].position[1] + (uint8)(right_color_bases >> 24) + game_random_next() % (sint8)(right_color_ranges >> 24));
         }
         else if (fall == 1)
         {
@@ -2230,11 +2230,11 @@ void route_gen_geom(ROUTE_SEGMENT *records, sint32 count)
         }
         else
         {
-            current_record->vertices[10].position[1] = (uint8)(current_record->vertices[10].position[1] + (uint8)(right_color_bases >> 8) + global_fn_8006e9d8() % (sint8)(right_color_ranges >> 8));
-            current_record->vertices[12].position[1] = (uint8)(current_record->vertices[12].position[1] + (uint8)(right_color_bases >> 24) + global_fn_8006e9d8() % (sint8)(right_color_ranges >> 24));
+            current_record->vertices[10].position[1] = (uint8)(current_record->vertices[10].position[1] + (uint8)(right_color_bases >> 8) + game_random_next() % (sint8)(right_color_ranges >> 8));
+            current_record->vertices[12].position[1] = (uint8)(current_record->vertices[12].position[1] + (uint8)(right_color_bases >> 24) + game_random_next() % (sint8)(right_color_ranges >> 24));
         }
 
-        pattern = route_gen_patterns[pattern][(uint32)global_fn_8006e9d8() & 3u];
+        pattern = route_gen_patterns[pattern][(uint32)game_random_next() & 3u];
         for (point = 0; point < 14; ++point)
         {
             uint8 src = route_gen_sources[point + 1];
@@ -2312,8 +2312,8 @@ sint32 route_gen_vertices(ROUTE_SEGMENT *record, sint32 count)
         {
             sint32 value;
 
-            delta = route_vertices_set_hi_s16(delta, (global_fn_8006e9d8() & 3) + 10);
-            value = global_fn_8006e9d8() % 64 - route_vertices_hi_s16(control) / 2;
+            delta = route_vertices_set_hi_s16(delta, (game_random_next() & 3) + 10);
+            value = game_random_next() % 64 - route_vertices_hi_s16(control) / 2;
             if ((sint16)value < 0)
             {
                 control = route_vertices_set_lo_s16(control, -(sint16)value);
@@ -2374,23 +2374,23 @@ sint32 route_gen_vertices(ROUTE_SEGMENT *record, sint32 count)
         }
 
         previous = record;
-        if (decoration_gap >= 31 && (global_fn_8006e9d8() & 0xEu) != 0)
+        if (decoration_gap >= 31 && (game_random_next() & 0xEu) != 0)
         {
             sint32 placed = 0;
-            sint16 position = (sint16)((global_fn_8006e9d8() & 3) | 4);
+            sint16 position = (sint16)((game_random_next() & 3) | 4);
 
             while (position < 9 && placed < 3)
             {
-                sint32 random = global_fn_8006e9d8() & 3;
+                sint32 random = game_random_next() & 3;
                 sint32 kind = random + 2;
 
                 if (random == 1)
                     kind = 4;
                 else if (random == 3)
                 {
-                    if ((global_fn_8006e9d8() & 7) == 0)
+                    if ((game_random_next() & 7) == 0)
                     {
-                        if ((global_fn_8006e9d8() & 1) != 0)
+                        if ((game_random_next() & 1) != 0)
                             break;
                         decoration_gap = 0;
                     }
@@ -2501,15 +2501,15 @@ sint32 route_update_speed_ctrl(const BOAT *src, BOAT *boat, uint32 race_mode)
     return result;
 }
 
-sint32 route_gen_init(uint32 state)
+sint32 route_gen_init(const RACE_CFG *cfg)
 {
     sint32 count;
     ROUTE_SEGMENT *records = route_resources.storage;
     sint32 index;
 
     FUNCTION_MARKER(0x8003D8DCu, "MAIN.EXE");
-    w_u32(0x800D2498u, name_reels.code);
-    count = 600 + 8 * (global_fn_8006e9d8() & 0x31);
+    game_random_seed(name_reels.code);
+    count = 600 + 8 * (game_random_next() & 0x31);
     memset(records, 0, (size_t)count * sizeof(*records));
     route_resources.owned_count = (uint32)count;
     route_resources.count = (uint32)count;
@@ -2517,7 +2517,7 @@ sint32 route_gen_init(uint32 state)
         route_resources.segments[index] = &records[index];
     route_gen_geom(records, count);
     route_gen_vertices(records, count);
-    race_events_init_fractal_light(state, count);
+    race_events_init_fractal_light(cfg, count);
     render_select_lighting(RENDER_LIGHT_NORMAL);
     w_u32(0x800CB5B4u, 0u);
     w_u32(0x800CB5A0u, 0u);
@@ -2542,6 +2542,5 @@ sint32 route_gen_init(uint32 state)
     w_u32(0x800CB618u, 0u);
     w_u8(0x800CB5F9u, 1u);
     w_u8(0x800CB5FAu, 192u);
-    w_u32(state + 32u, 0x800CB5F8u);
     return 192;
 }

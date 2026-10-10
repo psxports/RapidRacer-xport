@@ -40,6 +40,5 @@ sint32 vehicle_select_fn_80062394(void);
 sint32 profile_cell_dispatch_complete(void);
 sint32 profile_index_map(void);
 sint32 vehicle_select_init_player_profile(uint32 slot);
-sint32 vehicle_select_fn_800630f8(void);
 
 #endif /* RR_VEHICLE_SELECT_H */

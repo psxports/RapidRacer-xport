@@ -3,10 +3,15 @@
 
 #include "psx.h"
 
+struct RACE_CFG;
+
+extern char cd_dir[128];
+
 sint32 cd_decompress_backrefs(uint32 input, uint32 output);
-sint32 cd_load_course_assets(uint32 context);
+sint32 cd_load_course_assets(const struct RACE_CFG *cfg);
 sint32 cd_init_drive(void);
 uint32 cd_load_file_alloc(uint32 path);
+const uint8 *cd_load_file_bytes(const char *path, size_t *size);
 uint32 cd_load_file_buf(uint32 path, uint32 buffer);
 sint32 cd_upload_image_clut(uint32 request);
 uint32 cd_find_tima_chunk(uint32 input, sint32 requested_index);
@@ -31,10 +36,14 @@ sint32 cd_stop_read(void);
 uint32 cd_read_file_alloc(uint32 path);
 uint32 cd_read_file_buf(uint32 path, uint32 buffer);
 sint32 cd_upload_vram_image(uint32 path, sint16 x, sint16 y, sint32 width, sint32 height);
+void cd_init_audio_toc(void);
+void cd_reset_audio(void);
+void cd_pause_audio(void);
+void cd_stop_audio(void);
+void cd_set_audio_vol(uint16 vol);
+void cd_handle_ready_cb(uint8 status, uint8 *response);
 sint32 cd_update_audio(sint32 trigger);
 sint32 cd_load_model_archive(void);
-uint32 cd_load_selected_asset(uint32 path);
-sint32 cd_retry_read_sequence(uint32 request);
 sint32 cd_adjust_audio_volume(uint32 enabled);
 
 void cd_clear_data_cbs(void);

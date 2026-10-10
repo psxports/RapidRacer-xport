@@ -107,7 +107,7 @@ void poly_dispatch_prim_groups(const SCENE_PRIM_GROUP *src, uint32 slot, uint32 
         }
         else
         {
-            uint32 mode = r_u32(0x800834A0u);
+            uint32 mode = race_cfg.course;
 
             count = src->sets[3].count;
             vertices = src->sets[3].faces;
@@ -157,7 +157,7 @@ void poly_dispatch_prim_groups(const SCENE_PRIM_GROUP *src, uint32 slot, uint32 
     }
     else
     {
-        uint32 mode = r_u32(0x800834A0u);
+        uint32 mode = race_cfg.course;
 
         vertices = src->sets[3].faces;
         prims = src->prims[slot][3].ft4;

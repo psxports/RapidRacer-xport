@@ -3,6 +3,7 @@
 #include "xport_trace.h"
 
 static uint32 rr_guest_stack_pointer = 0x801FFFD0u;
+static uint32 game_rand_seed;
 
 uint32 guest_stack_push(uint32 size)
 {
@@ -17,13 +18,13 @@ void guest_stack_pop(uint32 size)
 
 void game_random_seed(uint32 seed)
 {
-    w_u32(0x800D2498u, seed);
+    game_rand_seed = seed;
 }
 
 sint32 game_random_next(void)
 {
-    w_u32(0x800D2498u, 1103515245u * r_u32(0x800D2498u) + 12345u);
-    return (sint32)((r_u32(0x800D2498u) >> 16) & 0x7FFFu);
+    FUNCTION_MARKER(0x8006E9D8u, "MAIN.EXE");
+    return psyq_rand_next(&game_rand_seed);
 }
 
 sint32 math_mul_lo_s32(sint32 left, sint32 right)
@@ -144,87 +145,6 @@ sint32 vec_normalize(const VECTOR *input, SVECTOR *output)
     return VectorNormalS(&source, output);
 }
 
-sint32 vec_norm(uint32 input, uint32 output)
-{
-    VECTOR source;
-    SVECTOR normalized;
-    sint32 result;
-
-    source.vx = (sint32)r_u32(input);
-    source.vy = (sint32)r_u32(input + 4u);
-    source.vz = (sint32)r_u32(input + 8u);
-    source.pad = 0;
-    result = vec_normalize(&source, &normalized);
-    w_u16(output, (uint16)normalized.vx);
-    w_u16(output + 2u, (uint16)normalized.vy);
-    w_u16(output + 4u, (uint16)normalized.vz);
-    return result;
-}
-
-sint32 math_hsv_to_rgb(uint32 output, uint32 hsv)
-{
-    sint32 hue = (sint16)r_u16(hsv);
-    sint32 saturation = (sint16)r_u16(hsv + 2u);
-    sint32 value = (sint16)r_u16(hsv + 4u);
-    sint32 sector;
-    sint32 fraction;
-    sint32 low;
-    sint32 falling;
-    sint32 rising;
-
-    FUNCTION_MARKER(0x800408B4u, "MAIN.EXE");
-    if (hue == 1536)
-        hue = 0;
-    sector = hue / 256;
-    fraction = hue % 256;
-    low = value * (256 - saturation) / 256;
-    falling = value * (256 - saturation * fraction / 256) / 256;
-    rising = value * (256 - saturation * (256 - fraction) / 256) / 256;
-    value = value < 0 ? 0 : value > 255 ? 255 : value;
-    low = low < 0 ? 0 : low > 255 ? 255 : low;
-    falling = falling < 0 ? 0 : falling > 255 ? 255 : falling;
-    rising = rising < 0 ? 0 : rising > 255 ? 255 : rising;
-    if (sector == 0)
-    {
-        w_u8(output, (uint8)value);
-        w_u8(output + 1u, (uint8)rising);
-        w_u8(output + 2u, (uint8)low);
-        return 1;
-    }
-    if (sector == 1)
-    {
-        w_u8(output, (uint8)falling);
-        w_u8(output + 1u, (uint8)value);
-        w_u8(output + 2u, (uint8)low);
-        return 2;
-    }
-    if (sector == 2)
-    {
-        w_u8(output, (uint8)low);
-        w_u8(output + 1u, (uint8)value);
-        w_u8(output + 2u, (uint8)rising);
-        return 3;
-    }
-    if (sector == 3)
-    {
-        w_u8(output, (uint8)low);
-        w_u8(output + 1u, (uint8)falling);
-        w_u8(output + 2u, (uint8)value);
-        return 4;
-    }
-    if (sector == 4)
-    {
-        w_u8(output, (uint8)rising);
-        w_u8(output + 1u, (uint8)low);
-        w_u8(output + 2u, (uint8)value);
-        return 4;
-    }
-    w_u8(output, (uint8)value);
-    w_u8(output + 1u, (uint8)low);
-    w_u8(output + 2u, (uint8)falling);
-    return 4;
-}
-
 void global_fn_8006777c(void)
 {
     FUNCTION_MARKER(0x8006777Cu, "MAIN.EXE");
@@ -239,27 +159,3 @@ uint32 guest_swap_stack_ptr(uint32 new_stack)
     return old_stack;
 }
 
-uint32 global_fn_80068900(uint32 callback)
-{
-    uint32 previous = r_u32(0x8009AA0Cu);
-
-    FUNCTION_MARKER(0x80068900u, "MAIN.EXE");
-    w_u32(0x8009AA0Cu, callback);
-    return previous;
-}
-
-uint32 global_fn_80068918(void)
-{
-    FUNCTION_MARKER(0x80068918u, "MAIN.EXE");
-    return r_u32(0x8009AA0Cu);
-}
-
-sint32 global_fn_8006e9d8(void)
-{
-    uint32 value;
-
-    FUNCTION_MARKER(0x8006E9D8u, "MAIN.EXE");
-    value = r_u32(0x800D2498u) * 0x41C64E6Du + 0x3039u;
-    w_u32(0x800D2498u, value);
-    return (sint32)((value >> 16) & 0x7FFFu);
-}

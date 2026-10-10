@@ -1,3 +1,4 @@
+#include "game.h"
 #include "route.h"
 #include "name.h"
 #include "arena.h"
@@ -24,6 +25,8 @@ typedef struct
 } PICKUP_RESTORE_BUF;
 static PICKUP_RESTORE_BUF pickup_restore_bufs[2];
 static uint8 pickup_restore_idx;
+
+PICKUP_HUD pickup_hud[4];
 
 void pickup_reset(void)
 {
@@ -158,7 +161,7 @@ uint32 pickup_scan(const BOAT *boat)
     return 0;
 }
 
-sint32 pickup_apply_command(uint32 state, uint32 menu, sint16 command, uint32 argument)
+sint32 pickup_apply_command(const RACE_VIEW *state, struct BOAT_MENU *menu, sint16 command)
 {
     BOAT *boat = vehicle_player(state);
     uint8 first;
@@ -170,41 +173,41 @@ sint32 pickup_apply_command(uint32 state, uint32 menu, sint16 command, uint32 ar
         return 0;
     if (command == 2)
     {
-        first = r_u8(menu + 582u);
-        if ((sint32)first >= (sint16)r_u16(0x800D6A10u))
+        first = menu->pickups[2].count;
+        if ((sint32)first >= (sint16)pickup_hud[2].limit)
             return 0;
-        first = r_u8(menu + 582u);
-        w_u8(menu + 582u, (uint8)(first + 1u));
-        sound_queue_command(state, 1, 1, argument);
-        return sound_queue_command(state, 30, 2, argument);
+        first = menu->pickups[2].count;
+        menu->pickups[2].count = (uint8)(first + 1u);
+        sound_queue_command(sound_for_context(state), 1, 1);
+        return sound_queue_command(sound_for_context(state), 30, 2);
     }
     if (command == 3)
     {
-        first = r_u8(menu + 572u);
+        first = menu->pickups[1].count;
         if (first != 0u)
         {
-            first = r_u8(menu + 572u);
-            w_u8(menu + 572u, (uint8)(first - 1u));
-            return sound_queue_command(state, 7, 1, argument);
+            first = menu->pickups[1].count;
+            menu->pickups[1].count = (uint8)(first - 1u);
+            return sound_queue_command(sound_for_context(state), 7, 1);
         }
-        first = r_u8(menu + 592u);
+        first = menu->pickups[3].count;
         if (first >= 3u)
             return 0;
-        first = r_u8(menu + 592u);
-        second = r_u8(menu + 572u);
+        first = menu->pickups[3].count;
+        second = menu->pickups[1].count;
         updated = (uint8)(first + 1u);
-        w_u8(menu + 592u, updated);
-        first = r_u8(menu + 592u);
+        menu->pickups[3].count = updated;
+        first = menu->pickups[3].count;
         if ((uint32)first + second >= 4u)
-            w_u8(menu + 572u, (uint8)(3u - updated));
-        sound_queue_command(state, 1, 1, argument);
-        return sound_queue_command(state, 30, 2, argument);
+            menu->pickups[1].count = (uint8)(3u - updated);
+        sound_queue_command(sound_for_context(state), 1, 1);
+        return sound_queue_command(sound_for_context(state), 30, 2);
     }
     if (command == 4)
     {
-        race_format_time(0x800DCFC8u, 300);
-        sound_queue_command(state, 10, 1, argument);
-        return sound_queue_command(state, 30, 2, argument);
+        time_format(&race_freeze_time, 300);
+        sound_queue_command(sound_for_context(state), 10, 1);
+        return sound_queue_command(sound_for_context(state), 30, 2);
     }
     if (command == 1)
     {
@@ -212,81 +215,84 @@ sint32 pickup_apply_command(uint32 state, uint32 menu, sint16 command, uint32 ar
         {
             boat->control.mode = (uint32)(0u);
             boat->control.boost_tick = (sint32)(0u);
-            sound_queue_command(state, 0, 6, argument);
+            sound_queue_command(sound_for_context(state), 0, 6);
         }
-        first = r_u8(menu + 572u);
+        first = menu->pickups[1].count;
         if (first >= 3u)
             return 0;
-        first = r_u8(menu + 572u);
-        second = r_u8(menu + 592u);
+        first = menu->pickups[1].count;
+        second = menu->pickups[3].count;
         updated = (uint8)(first + 1u);
-        w_u8(menu + 572u, updated);
-        first = r_u8(menu + 572u);
+        menu->pickups[1].count = updated;
+        first = menu->pickups[1].count;
         if ((uint32)first + second >= 4u)
-            w_u8(menu + 592u, (uint8)(3u - updated));
-        first = r_u8(menu + 572u);
+            menu->pickups[3].count = (uint8)(3u - updated);
+        first = menu->pickups[1].count;
         if (first == 3u)
         {
             vehicle_damp_vel(boat);
-            w_u8(menu + 572u, 0u);
-            return sound_queue_command(state, 6, 1, argument);
+            menu->pickups[1].count = 0u;
+            return sound_queue_command(sound_for_context(state), 6, 1);
         }
-        sound_queue_command(state, 2, 1, argument);
-        return sound_queue_command(state, -30, 2, argument);
+        sound_queue_command(sound_for_context(state), 2, 1);
+        return sound_queue_command(sound_for_context(state), -30, 2);
     }
     return 4;
 }
 
-sint32 pickup_update_slot_countdown(uint32 state, sint16 slot)
+sint32 pickup_update_slot_countdown(BOAT_MENU *menu, sint16 slot)
 {
-    uint32 record = state + 562u + (uint32)((sint32)slot * 10);
+    PICKUP_SLOT *record;
     uint8 active;
     sint32 result;
 
     FUNCTION_MARKER(0x8003D668u, "MAIN.EXE");
-    active = r_u8(record);
-    result = (sint16)r_u16(0x800D69D8u + (uint32)((sint32)slot * 28)) < active;
+    if ((uint16)slot >= 4u)
+        abort();
+    record = &menu->pickups[slot];
+    active = record->count;
+    result = (sint16)pickup_hud[slot].limit < active;
     if (result != 0)
         return result;
-    result = (sint16)r_u16(record + 4u);
+    result = (sint16)record->ticks;
     if (result == 0)
         return result;
     result -= 1;
-    w_u16(record + 4u, (uint16)result);
+    record->ticks = (uint16)result;
     result = (sint32)((uint32)(uint16)result << 16);
     if (result != 0)
         return result;
-    if (r_u8(record + 1u) != 0u)
+    if (record->pending != 0u)
     {
-        result = (sint16)r_u16(record + 2u);
+        result = (sint16)record->delta;
         if (result > 0)
             return result;
-        w_u8(record, 0u);
-        w_u8(record + 1u, 0u);
-        w_u16(record + 2u, 0u);
+        record->count = 0u;
+        record->pending = 0u;
+        record->delta = 0u;
     }
-    result = (sint16)r_u16(record + 2u);
+    result = (sint16)record->delta;
     if (result < 0)
     {
-        result = (sint32)r_u8(record) - 1;
-        w_u8(record, (uint8)result);
+        result = (sint32)record->count - 1;
+        record->count = (uint8)result;
     }
     return result;
 }
 
-sint32 pickup_update_slots(uint32 state, uint32 *ot, const BOAT *boat)
+sint32 pickup_update_slots(const RACE_VIEW *state, uint32 *ot, const BOAT *boat)
 {
-    uint32 mode = r_u32(0x80083484u);
-    uint32 menu = r_u32(state + 100u);
+    uint32 mode = race_cfg.mode;
+    BOAT_MENU *menu = vehicle_player_menu(state);
     sint16 command;
 
     FUNCTION_MARKER(0x8003D72Cu, "MAIN.EXE");
     render_order.ot = ot;
     command = mode == 8u ? (sint16)race_events_nearby_event_check(boat) : (sint16)pickup_scan(boat);
-    mode = r_u32(0x80083484u);
+    mode = race_cfg.mode;
     if (mode == 5u)
         return 5;
-    pickup_apply_command(state, menu, (sint16)(command - 1), vehicle_legacy(boat));
+    pickup_apply_command(state, menu, (sint16)(command - 1));
     pickup_update_slot_countdown(menu, 2);
     pickup_update_slot_countdown(menu, 3);
     return pickup_update_slot_countdown(menu, 1);

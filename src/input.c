@@ -1,3 +1,4 @@
+#include "game.h"
 #include "input.h"
 #include "xport_trace.h"
 #include "psx.h"
@@ -6,6 +7,7 @@
 
 CONTROLLER_STATE input_controllers[2];
 CONTROLLER_CALIBRATION input_calibrations[2];
+INPUT_CALIB_STATE input_calib;
 
 void input_init(void)
 {
@@ -15,13 +17,11 @@ void input_init(void)
     PadInitDirect(input_controllers[0].packet, input_controllers[1].packet);
 }
 
-CONTROLLER_STATE *input_for_context(uint32 context)
+CONTROLLER_STATE *input_for_context(const RACE_VIEW *context)
 {
-    // Player contexts remain legacy until the boat migration in stage 3
-    uint32 player = r_u32(context + 4u);
-    if (player >= 2u)
+    if (context == NULL || context->idx >= 2u)
         abort();
-    return &input_controllers[player];
+    return &input_controllers[context->idx];
 }
 
 static uint16 input_invert_swap16(uint16 value)
