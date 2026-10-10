@@ -3,8 +3,7 @@
 
 #include "psx.h"
 
-sint32 title_init_cb(uint32 state);
-sint32 title_relocate_palette_lut(void);
-sint32 title_dispatch_state_cb(uint32 node);
+sint32 title_init(void);
+sint32 title_show_finish(void);
 
 #endif /* RR_TITLE_H */

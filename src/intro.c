@@ -1,3 +1,4 @@
+#include "game.h"
 #include "input.h"
 #include "psx_gpu.h"
 #include "menu.h"
@@ -10,11 +11,14 @@
 #include "xport_trace.h"
 #include <stdlib.h>
 
+// Intro descriptor from MAIN.EXE 80099148
+static SPRITE_IMAGE intro_image = {.path = "INTRO.TIM"};
+
 sint32 intro_config_cutscene(sint16 selection)
 {
     SpuCommonAttr attr = {0};
     sint32 index = selection - 1;
-    uint32 descriptor;
+    uint32 desc;
 
     FUNCTION_MARKER(0x80062718u, "MAIN.EXE");
     input_controllers[0].pressed = 0u;
@@ -25,8 +29,8 @@ sint32 intro_config_cutscene(sint16 selection)
     if ((uint32)index >= 14u)
         return 0;
     w_u32(0x800B4268u, 0u);
-    descriptor = r_u32(0x80099114u + 4u * (uint32)index);
-    mdec_stream_play(descriptor, intro_skip_is_requested, index);
+    desc = r_u32(0x80099114u + 4u * (uint32)index);
+    mdec_stream_play(desc, intro_skip_is_requested, index);
     if (index >= 5)
         sound_fn_8007741c(0, 0x1000u);
     attr.mask = 0xC0u;
@@ -52,9 +56,9 @@ sint32 intro_run_skippable(void)
 
     FUNCTION_MARKER(0x80063694u, "MAIN.EXE");
     w_u16(0x800B6BF0u, 0u);
-    if (r_u8(0x800E058Au) != 0u)
-        return r_u8(0x800E058Au);
-    intro_show_image(0x80099148u);
+    if (game_selection.ready != 0u)
+        return game_selection.ready;
+    intro_show_image(&intro_image);
     counter = 150;
     while (counter != 0)
     {
@@ -70,7 +74,7 @@ sint32 intro_run_skippable(void)
     return 1;
 }
 
-sint32 intro_show_image(uint32 state)
+sint32 intro_show_image(SPRITE_IMAGE *state)
 {
     PSX_RECT rectangle;
 

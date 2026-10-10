@@ -2,9 +2,40 @@
 #define RR_PROFILE_H
 
 #include "input.h"
+#include "sprite.h"
 
 #include "psx.h"
 #include <stddef.h>
+
+typedef struct
+{
+    uint8 rank;
+    uint8 profile;
+    uint16 lap_time[3];
+    uint16 race_time[3];
+} PROFILE_SUMMARY;
+
+extern PROFILE_SUMMARY profile_summaries[18];
+
+typedef struct
+{
+    uint16 boat;
+    uint16 time[3];
+    char name[5];
+} PROFILE_BEST;
+
+typedef struct
+{
+    PROFILE_BEST lap;
+    PROFILE_BEST trial;
+    uint16 boats[11];
+    uint16 times[11][3];
+    char names[11][5];
+    uint8 reserved[3];
+} PROFILE_RECORD;
+
+extern PROFILE_RECORD profile_records[18];
+extern uint16 race_lap_times[3][3];
 
 typedef struct
 {
@@ -47,6 +78,17 @@ typedef struct
     PROFILE_GRID grid[10];
 } PLAYER_PROFILE;
 
+typedef struct
+{
+    uint16 rules_slot;
+    uint16 menu_slot;
+    uint8 mode_choice;
+    uint8 controller;
+    uint8 slot;
+} PROFILE_SELECTION;
+
+extern PROFILE_SELECTION profile_selection;
+
 sint32 profile_fn_80052f30(void);
 sint32 profile_fn_800531c0(void);
 sint32 profile_fn_80053458(void);
@@ -54,19 +96,22 @@ sint32 profile_fn_8005347c(void);
 sint32 profile_fn_80053588(void);
 sint32 profile_fn_800535b0(void);
 sint32 profile_format_value_parts3(uint32 values, char *text);
-sint32 time_fields3_compare(uint32 first, uint32 second);
+sint32 profile_format_parts(const uint16 parts[3], char *text);
+uint32 profile_time_ticks(const uint16 parts[3]);
+uint32 profile_time_tenths(const uint16 parts[3]);
+sint32 time_equal(const uint16 first[3], const uint16 second[3]);
 uint32 time_fields_convert(uint32 value);
-sint32 profile_reset_grid_flags(void);
-sint32 profile_update_trans(void);
+void profile_reset_grid_flags(void);
+void profile_update_trans(void);
 sint32 profile_update_mode_select_vis(void);
-sint32 profile_update_carousel(sint16 direction, CONTROLLER_STATE *input);
+void profile_update_carousel(sint16 direction, CONTROLLER_STATE *input);
 sint32 vehicle_update_carousel(void);
 sint32 vehicle_select_assign_palettes(uint32 unused1, uint32 unused2, uint32 unused3, uint32 unused4);
 sint32 vehicle_advance_carousel(sint16 action, CONTROLLER_STATE *input);
 sint32 profile_populate_select_recs(uint32 unused1, uint32 unused2, uint32 unused3, uint32 unused4);
 sint32 profile_sort_recs_desc(uint32 unused1, uint32 unused2);
 sint32 profile_sort_recs_asc(uint32 unused1, uint32 unused2, uint32 unused3);
-sint32 profile_fn_80055cfc(sint16 direction, sint16 index, uint32 state);
+sint32 profile_fn_80055cfc(sint16 direction, sint16 index, UI_RECORD *state);
 sint32 menu_start_dir_trans(sint16 direction);
 sint32 profile_is_unlocked(sint16 index);
 sint32 profile_level_is_available(sint32 requested, uint32 unused2, uint32 unused3, uint32 unused4);
@@ -84,23 +129,22 @@ sint32 race_capture_time_summaries(uint32 unused1, uint32 unused2, uint32 unused
 uint32 profile_update_best_times(uint32 unused1, uint32 unused2, uint32 unused3, uint32 unused4);
 sint32 profile_fn_800579d4(sint32 name_index, uint32 unused2, uint32 unused3, uint32 unused4);
 
-uint32 profile_get_active(void);
 PLAYER_PROFILE *profile_at(uint32 slot);
 PLAYER_PROFILE *profile_current(void);
 PROFILE_SERIES *profile_get_series(void);
 void profile_reset_series(uint32 slot);
 uint8 profile_save_read_byte(uint32 offset);
 void profile_save_write_byte(uint32 offset, uint8 value);
-sint32 profile_init_mode_rec(void);
+void profile_init_mode_rec(void);
 sint32 profile_backup_selection(void);
-sint32 profile_restore_backup(void);
+void profile_restore_backup(void);
 sint32 profile_reset_recs(void);
 sint32 profile_advance_menu_select(void);
 sint32 profile_update_menu_trans(CONTROLLER_STATE *input);
-sint32 profile_dispatch_menu_state(void);
-sint32 profile_update_row_completion(void);
+void profile_dispatch_menu_state(void);
+void profile_update_row_completion(void);
 sint32 profile_row_is_complete(sint16 row);
-sint32 profile_confirm_row_select(void);
+void profile_confirm_row_select(void);
 sint32 profile_fn_8005aca8(void);
 sint32 profile_refresh_menu_ack(void);
 
@@ -109,17 +153,17 @@ sint32 profile_fn_8005afa0(void);
 sint32 profile_fn_8005b350(CONTROLLER_STATE *input);
 sint32 profile_fn_8005b570(void);
 sint32 profile_restore_selection(sint16 selection);
-sint32 profile_complete_selection(void);
-sint32 profile_apply_action(sint16 action);
+void profile_complete_selection(void);
+void profile_apply_action(sint16 action);
 sint32 profile_reset_menu_state(void);
 sint32 profile_dispatch_mode_result_handler(uint32 first, uint32 second, uint32 third, uint32 fourth);
 sint32 menu_save_select_state(void);
 
-sint32 profile_process_select_results(void);
+void profile_process_select_results(void);
 
-sint32 results_handle_2p(void);
+void results_handle_2p(void);
 sint32 profile_commit_selection(void);
-sint32 profile_update_limits(void);
+void profile_update_limits(void);
 sint32 profile_unlock(sint16 index);
 sint32 profile_generate_opponents(void);
 sint32 profile_merge_unlocks(PLAYER_PROFILE *profile);

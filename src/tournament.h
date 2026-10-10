@@ -5,9 +5,61 @@
 
 #include "psx.h"
 
+typedef struct
+{
+    uint8 round;
+    uint8 match;
+    uint8 winners[5];
+    uint8 opponents[5];
+    uint8 points[5];
+    uint16 leader;
+    uint16 match_count;
+} TOURNAMENT_MATCH_STATE;
+
+extern TOURNAMENT_MATCH_STATE tournament_matches;
+
+enum
+{
+    TOURNAMENT_GRID_ROUNDS = 256,
+    TOURNAMENT_GRID_PLAYERS = 5,
+    TOURNAMENT_GRID_EMPTY = 0,
+    TOURNAMENT_GRID_PASSED = 1,
+    TOURNAMENT_GRID_FAILED = 2
+};
+
+typedef struct
+{
+    uint8 round;
+    uint8 player;
+    uint8 status[TOURNAMENT_GRID_ROUNDS][TOURNAMENT_GRID_PLAYERS];
+    uint16 seconds[TOURNAMENT_GRID_ROUNDS][TOURNAMENT_GRID_PLAYERS];
+} TOURNAMENT_GRID_STATE;
+
+extern TOURNAMENT_GRID_STATE tournament_grid;
+
+typedef struct
+{
+    uint16 parts[3];
+    uint16 parameter;
+} TOURNAMENT_TIME;
+
+extern TOURNAMENT_TIME tournament_times[5];
+
+typedef struct
+{
+    uint8 course;
+    uint8 player;
+    uint8 races[16];
+    uint8 points[16];
+} TOURNAMENT_CHAMP_STATE;
+
+extern TOURNAMENT_CHAMP_STATE tournament_champ;
+
+void tournament_clear_extra_rounds(void);
+
 sint32 tournament_draw_grid(void);
 sint32 tournament_reset_grid(void);
-sint32 tournament_calc_target_time(uint32 value, sint16 index);
+sint32 tournament_target_time(uint16 course, sint16 index);
 sint32 tournament_refresh_grid(void);
 sint32 tournament_update_grid_input(CONTROLLER_STATE *input);
 sint32 tournament_sync_grid(void);

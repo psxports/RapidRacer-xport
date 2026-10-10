@@ -1,3 +1,5 @@
+#include "route.h"
+#include "game.h"
 #include "camera.h"
 #include "vehicle.h"
 #include "arena.h"
@@ -5,226 +7,386 @@
 #include "name.h"
 #include "pickup.h"
 #include "render.h"
+#include "scene.h"
 #include "replay.h"
 #include "sound.h"
 #include "text.h"
 #include "profile.h"
 #include "results.h"
+#include "race_events.h"
+#include "title.h"
+#include "tournament.h"
 #include "global.h"
 #include "menu.h"
 #include "timer.h"
 #include "xport_trace.h"
+#include "cd.h"
+#include "runtime.h"
+#include "game_main.h"
 #include <stdlib.h>
+
+// Checkpoint inputs from MAIN.EXE 800F5B68/800FF708/800DCC40
+typedef struct
+{
+    uint16 parameters[30];
+    uint16 laps[30];
+    uint16 times[150][3];
+} RESULTS_CHECKPOINTS;
+
+static RESULTS_CHECKPOINTS results_checkpoints;
+
+// Native course catalog from MAIN.EXE 80091B04/80091C6C/80091DD4/80091F3C/80091F8C
+typedef struct
+{
+    uint16 course;
+    uint16 counts[3];
+    uint8 ai_variant;
+    uint16 parameter;
+    uint16 variant;
+    uint16 laps;
+    TOURNAMENT_TIME *times;
+} RESULTS_COURSE;
+
+// Shared banks preserve aliases between course variants
+static TOURNAMENT_TIME results_times[33][5] = {
+    {{{0, 30, 0}, 0}, {{0, 0, 0}, 2000}, {{0, 30, 0}, 0}, {{0, 30, 0}, 200}, {{0, 32, 0}, 400}}, {{{0, 30, 0}, 0}, {{0, 30, 0}, 200}, {{0, 32, 0}, 400}, {{0, 26, 0}, 0}, {{0, 30, 0}, 0}},   {{{0, 30, 0}, 0}, {{0, 30, 0}, 200}, {{0, 32, 0}, 400}, {{0, 26, 0}, 0}, {{0, 30, 0}, 0}},   {{{1, 0, 0}, 0}, {{0, 50, 0}, 210}, {{0, 50, 0}, 422}, {{0, 50, 0}, 634}, {{0, 50, 0}, 0}},  {{{1, 0, 0}, 0}, {{0, 50, 0}, 210}, {{0, 50, 0}, 422}, {{0, 50, 0}, 634}, {{0, 50, 0}, 0}},  {{{1, 0, 0}, 0}, {{0, 50, 0}, 210}, {{0, 50, 0}, 422}, {{0, 50, 0}, 634}, {{0, 50, 0}, 0}},  {{{1, 0, 0}, 0}, {{0, 50, 0}, 210}, {{0, 50, 0}, 422}, {{0, 50, 0}, 634}, {{0, 50, 0}, 0}},  {{{1, 0, 0}, 0}, {{0, 50, 0}, 210}, {{0, 50, 0}, 422}, {{0, 50, 0}, 634}, {{0, 50, 0}, 0}},  {{{0, 50, 0}, 0}, {{0, 50, 0}, 130}, {{0, 50, 0}, 260}, {{0, 50, 0}, 0}, {{0, 0, 0}, 0}},
+    {{{0, 50, 0}, 0}, {{0, 50, 0}, 130}, {{0, 50, 0}, 260}, {{0, 50, 0}, 0}, {{0, 0, 0}, 0}},    {{{0, 50, 0}, 0}, {{0, 50, 0}, 130}, {{0, 50, 0}, 260}, {{0, 50, 0}, 0}, {{0, 0, 0}, 0}},    {{{0, 50, 0}, 0}, {{0, 50, 0}, 130}, {{0, 50, 0}, 260}, {{0, 50, 0}, 0}, {{0, 0, 0}, 0}},    {{{0, 50, 0}, 0}, {{0, 50, 0}, 130}, {{0, 50, 0}, 260}, {{0, 50, 0}, 0}, {{0, 0, 0}, 0}},    {{{0, 50, 0}, 0}, {{0, 50, 0}, 240}, {{0, 50, 0}, 480}, {{0, 50, 0}, 720}, {{0, 50, 0}, 0}}, {{{0, 50, 0}, 0}, {{0, 50, 0}, 240}, {{0, 50, 0}, 480}, {{0, 50, 0}, 720}, {{0, 50, 0}, 0}}, {{{0, 50, 0}, 0}, {{0, 50, 0}, 240}, {{0, 50, 0}, 480}, {{0, 50, 0}, 720}, {{0, 50, 0}, 0}}, {{{0, 50, 0}, 0}, {{0, 50, 0}, 240}, {{0, 50, 0}, 480}, {{0, 50, 0}, 720}, {{0, 50, 0}, 0}}, {{{0, 50, 0}, 0}, {{0, 50, 0}, 240}, {{0, 50, 0}, 480}, {{0, 50, 0}, 720}, {{0, 50, 0}, 0}},
+    {{{0, 50, 0}, 0}, {{0, 50, 0}, 260}, {{0, 50, 0}, 520}, {{0, 50, 0}, 780}, {{0, 50, 0}, 0}}, {{{0, 50, 0}, 0}, {{0, 50, 0}, 260}, {{0, 50, 0}, 520}, {{0, 50, 0}, 780}, {{0, 50, 0}, 0}}, {{{0, 50, 0}, 0}, {{0, 50, 0}, 260}, {{0, 50, 0}, 520}, {{0, 50, 0}, 780}, {{0, 50, 0}, 0}}, {{{0, 50, 0}, 0}, {{0, 50, 0}, 260}, {{0, 50, 0}, 520}, {{0, 50, 0}, 780}, {{0, 50, 0}, 0}}, {{{0, 50, 0}, 0}, {{0, 50, 0}, 260}, {{0, 50, 0}, 520}, {{0, 50, 0}, 780}, {{0, 50, 0}, 0}}, {{{1, 0, 0}, 0}, {{0, 50, 0}, 250}, {{0, 50, 0}, 500}, {{0, 50, 0}, 750}, {{0, 50, 0}, 0}},  {{{1, 0, 0}, 0}, {{0, 50, 0}, 250}, {{0, 50, 0}, 500}, {{0, 50, 0}, 750}, {{0, 50, 0}, 0}},  {{{1, 0, 0}, 0}, {{0, 50, 0}, 250}, {{0, 50, 0}, 500}, {{0, 50, 0}, 750}, {{0, 50, 0}, 0}},  {{{1, 0, 0}, 0}, {{0, 50, 0}, 250}, {{0, 50, 0}, 500}, {{0, 50, 0}, 750}, {{0, 50, 0}, 0}},
+    {{{1, 0, 0}, 0}, {{0, 50, 0}, 250}, {{0, 50, 0}, 500}, {{0, 50, 0}, 750}, {{0, 50, 0}, 0}},  {{{1, 0, 0}, 0}, {{0, 50, 0}, 245}, {{0, 50, 0}, 490}, {{0, 50, 0}, 735}, {{0, 50, 0}, 0}},  {{{1, 0, 0}, 0}, {{0, 50, 0}, 245}, {{0, 50, 0}, 490}, {{0, 50, 0}, 735}, {{0, 50, 0}, 0}},  {{{1, 0, 0}, 0}, {{0, 50, 0}, 245}, {{0, 50, 0}, 490}, {{0, 50, 0}, 735}, {{0, 50, 0}, 0}},  {{{1, 0, 0}, 0}, {{0, 50, 0}, 245}, {{0, 50, 0}, 490}, {{0, 50, 0}, 735}, {{0, 50, 0}, 0}},  {{{1, 0, 0}, 0}, {{0, 50, 0}, 245}, {{0, 50, 0}, 490}, {{0, 50, 0}, 735}, {{0, 50, 0}, 0}},
+};
+
+static RESULTS_COURSE results_courses[61] = {
+    {1, {3, 5, 3}, 0, 3, 1, 3, results_times[8]},  {0, {3, 5, 3}, 0, 3, 1, 4, results_times[18]}, {2, {3, 5, 3}, 0, 3, 1, 4, results_times[13]}, {3, {3, 5, 3}, 0, 3, 1, 4, results_times[3]},  {4, {3, 5, 3}, 0, 3, 1, 4, results_times[23]}, {5, {3, 5, 3}, 0, 3, 1, 4, results_times[28]}, {1, {3, 5, 3}, 1, 3, 2, 3, results_times[9]},  {0, {3, 5, 3}, 1, 3, 2, 4, results_times[19]}, {2, {3, 5, 3}, 1, 3, 2, 4, results_times[14]}, {3, {3, 5, 3}, 1, 3, 2, 4, results_times[4]},  {4, {3, 5, 3}, 1, 3, 2, 4, results_times[24]}, {5, {3, 5, 3}, 1, 3, 2, 4, results_times[29]}, {1, {3, 5, 3}, 2, 3, 0, 3, results_times[10]}, {0, {3, 5, 3}, 2, 3, 0, 4, results_times[20]}, {2, {3, 5, 3}, 2, 3, 0, 4, results_times[15]}, {3, {3, 5, 3}, 2, 3, 0, 4, results_times[5]},  {4, {3, 5, 3}, 2, 3, 0, 4, results_times[25]}, {5, {3, 5, 3}, 2, 3, 0, 4, results_times[30]}, {1, {3, 5, 3}, 1, 3, 1, 3, results_times[9]},  {0, {3, 5, 3}, 1, 3, 1, 4, results_times[19]}, {2, {3, 5, 3}, 1, 3, 1, 4, results_times[14]},
+    {3, {3, 5, 3}, 1, 3, 1, 4, results_times[4]},  {4, {3, 5, 3}, 1, 3, 1, 4, results_times[24]}, {5, {3, 5, 3}, 1, 3, 1, 4, results_times[29]}, {1, {3, 5, 3}, 2, 3, 2, 3, results_times[10]}, {0, {3, 5, 3}, 2, 3, 2, 4, results_times[20]}, {2, {3, 5, 3}, 2, 3, 2, 4, results_times[15]}, {3, {3, 5, 3}, 2, 3, 2, 4, results_times[5]},  {4, {3, 5, 3}, 2, 3, 2, 4, results_times[25]}, {5, {3, 5, 3}, 2, 3, 2, 4, results_times[30]}, {1, {3, 5, 3}, 3, 3, 0, 3, results_times[11]}, {0, {3, 5, 3}, 3, 3, 0, 4, results_times[21]}, {2, {3, 5, 3}, 3, 3, 0, 4, results_times[16]}, {3, {3, 5, 3}, 3, 3, 0, 4, results_times[6]},  {4, {3, 5, 3}, 3, 3, 0, 4, results_times[26]}, {5, {3, 5, 3}, 3, 3, 0, 4, results_times[31]}, {1, {3, 5, 3}, 2, 3, 1, 3, results_times[10]}, {0, {3, 5, 3}, 2, 3, 1, 4, results_times[20]}, {2, {3, 5, 3}, 2, 3, 1, 4, results_times[15]}, {3, {3, 5, 3}, 2, 3, 1, 4, results_times[5]},  {4, {3, 5, 3}, 2, 3, 1, 4, results_times[25]}, {5, {3, 5, 3}, 2, 3, 1, 4, results_times[30]},
+    {1, {3, 5, 3}, 3, 3, 2, 3, results_times[11]}, {0, {3, 5, 3}, 3, 3, 2, 4, results_times[21]}, {2, {3, 5, 3}, 3, 3, 2, 4, results_times[16]}, {3, {3, 5, 3}, 3, 3, 2, 4, results_times[6]},  {4, {3, 5, 3}, 3, 3, 2, 4, results_times[26]}, {5, {3, 5, 3}, 3, 3, 2, 4, results_times[31]}, {1, {3, 5, 3}, 4, 3, 0, 3, results_times[12]}, {0, {3, 5, 3}, 4, 3, 0, 4, results_times[22]}, {2, {3, 5, 3}, 4, 3, 0, 4, results_times[17]}, {3, {3, 5, 3}, 4, 3, 0, 4, results_times[7]},  {4, {3, 5, 3}, 4, 3, 0, 4, results_times[27]}, {5, {3, 5, 3}, 4, 3, 0, 4, results_times[32]}, {6, {3, 5, 3}, 2, 3, 1, 3, results_times[1]},  {6, {3, 5, 3}, 3, 3, 1, 3, results_times[2]},  {6, {3, 5, 3}, 2, 3, 2, 3, results_times[1]},  {6, {3, 5, 3}, 3, 3, 2, 3, results_times[2]},  {4, {3, 5, 3}, 2, 3, 1, 4, results_times[25]}, {2, {3, 5, 3}, 3, 3, 1, 3, results_times[11]}, {1, {3, 5, 3}, 2, 3, 2, 4, results_times[15]},
+};
+
+// Result screen point banks from MAIN.EXE 80092010/80092028
+static const sint16 results_points[2][5][2] = {
+    {{40, 40}, {30, 34}, {16, 24}, {6, 10}, {0, 0}},
+    {{38, 38}, {24, 29}, {9, 14}},
+};
+
+static sint32 results_build_checkpoints(void)
+{
+    uint32 group;
+
+    FUNCTION_MARKER(0x80048B30u, "MAIN.EXE");
+    for (group = 0u; group < 3u; ++group)
+    {
+        sint32 outer;
+        uint32 desc_index = 0u;
+        for (outer = (sint32)group; outer < (sint32)group + 3; ++outer)
+        {
+            sint32 row;
+            for (row = 0; row < 6; ++row, ++desc_index)
+            {
+                RESULTS_COURSE *desc = &results_courses[group * 18u + desc_index];
+                TOURNAMENT_TIME *output = desc->times;
+                sint32 column;
+                desc->laps = (uint16)(results_checkpoints.laps[outer + 5 * row] + 1u);
+                for (column = 0; column < 5; ++column)
+                {
+                    const uint16 *source = results_checkpoints.times[25 * row + 5 * outer + column];
+                    output->parts[0] = source[0];
+                    output->parts[1] = source[1];
+                    output->parts[2] = source[2];
+                    output->parameter = results_checkpoints.parameters[5 * row + column];
+                    ++output;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+sint32 results_load_checkpoints(void)
+{
+    uint32 cursor;
+    sint16 section = 0;
+    sint16 index = 0;
+    sint32 stop = 0;
+
+    FUNCTION_MARKER(0x800487F0u, "MAIN.EXE");
+    game_push_checkpoint();
+    w_u32(0x800D6958u, r_u32(0x800B40C0u));
+    w_u8(0x800D695Cu, r_u8(0x800B40C4u));
+    w_u8(0x800D695Du, r_u8(0x800B40C5u));
+    cursor = cd_load_file_alloc(0x8008184Cu);
+    do
+    {
+        sint16 length = 0;
+        sint32 value;
+
+        while ((r_u8(0x800A0D59u + r_u8(cursor)) & 8u) != 0u)
+            ++cursor;
+        if (r_u8(cursor) == ';')
+        {
+            ++cursor;
+            while (r_u8(cursor++) != 10u)
+            {
+            }
+        }
+        if ((r_u8(0x800A0D59u + r_u8(cursor)) & 8u) == 0u)
+        {
+            do
+            {
+                w_u8(0x800F2788u + (uint32)(sint32)length, r_u8(cursor++));
+                ++length;
+            } while ((r_u8(0x800A0D59u + r_u8(cursor)) & 8u) == 0u);
+        }
+        w_u8(0x800F2788u + (uint32)(sint32)length, 0u);
+        if (r_u8(0x800F2788u) == '!')
+        {
+            ++section;
+            index = 0;
+        }
+        else if (r_u8(0x800F2788u) == '*')
+            stop = 1;
+        else if (r_u8(0x800F2788u) != ';')
+        {
+            ++cursor;
+            value = runtime_parse_decimal(0x800F2788u, length);
+            if (section == 0)
+            {
+                if (index < 0 || index >= 30)
+                    abort();
+                results_checkpoints.parameters[index] = (uint16)value;
+            }
+            else if (section == 1)
+            {
+                if (index < 0 || index >= 30)
+                    abort();
+                results_checkpoints.laps[index] = (uint16)value;
+            }
+            else if (section == 2)
+            {
+                if (index < 0 || index >= 450)
+                    abort();
+                results_checkpoints.times[index / 3][index % 3] = (uint16)value;
+            }
+            ++index;
+        }
+    } while (stop == 0 && section < 9);
+    game_pop_checkpoint();
+    return results_build_checkpoints();
+}
+
+// Result bytes from MAIN.EXE 800E05B3/05B4/05B8
+RESULT_STATE result_state;
+
+// Grid columns from MAIN.EXE 80091480
+const uint32 results_grid_columns[3] = {2u, 1u, 0u};
 
 sint32 results_layout_populate(uint32 state)
 {
-    uint32 source;
-    uint32 ui;
-    uint32 record;
-    uint32 text;
-    uint32 first;
-    uint32 second;
-    uint32 third;
+    uint32 src;
+    HUD_DESC *descs;
+    HUD_DESC *desc;
+    char *text;
+    const TIME_REC *time_rec;
+    uint32 racer_count;
+    uint32 leader_count;
+    uint32 trailer_count;
     sint32 result;
-    sint32 index;
+    sint32 idx;
     sint32 alternate;
     sint32 position;
     sint32 language_is_six;
     sint32 total;
 
     FUNCTION_MARKER(0x8001FA38u, "MAIN.EXE");
-    source = r_u32(state + 100u);
+    src = r_u32(state + 100u);
     menu_select_result_clut(state);
     if (r_u32(0x80083484u) == 9u)
     {
         menu_update_result_rec_palettes(state);
-        ui = r_u32(0x800B69F4u);
-        result = time_copy_chars7(text_bind(0x800D6B48u), text_bind(r_u32(ui + 24u)));
-        w_u8(0x80083908u, 0u);
+        descs = render_hud.descs;
+        result = time_copy_chars7((char *)race_time.text, descs[0].text);
+        hud_text.time[4] = 0;
         return result;
     }
 
-    ui = r_u32(0x800B69F4u);
-    w_u8(ui + 652u, 0u);
-    ui = r_u32(0x800B69F4u);
-    record = ui;
-    for (index = 0; index < 8; ++index)
+    descs = render_hud.descs;
+    descs[16].visible = 0u;
+    descs = render_hud.descs;
+    desc = descs;
+    for (idx = 0; idx < 8; ++idx)
     {
-        w_u8(record + 12u, 1u);
-        record += 40u;
+        desc->visible = 1u;
+        ++desc;
     }
-    ui = r_u32(0x800B69F4u);
-    record = ui + 680u;
-    for (index = 0; index < 4; ++index)
+    descs = render_hud.descs;
+    desc = descs + 17;
+    for (idx = 0; idx < 4; ++idx)
     {
-        w_u8(record + 12u, 0u);
-        record += 40u;
+        desc->visible = 0u;
+        ++desc;
     }
-    language_is_six = (sint16)r_u16(0x800E0582u) == 6;
-    ui = r_u32(0x800B69F4u);
-    w_u8(ui + 452u, (uint8)language_is_six);
+    language_is_six = (sint16)game_selection.mode == 6;
+    descs = render_hud.descs;
+    descs[11].visible = (uint8)language_is_six;
 
-    alternate = (sint32)r_u32(0x800B69ECu) > 0 && vehicle_menu(source)->mode == 4u;
-    text = alternate ? 0x800D6948u : 0x800D6B48u;
+    alternate = (sint32)r_u32(0x800B69ECu) > 0 && vehicle_menu(src)->mode == 4u;
+    time_rec = alternate ? &race_bonus_time : &race_time;
     if ((sint32)r_u32(0x800DCFD4u) > 0 && !alternate)
     {
-        ui = r_u32(0x800B69F4u);
-        w_u16(ui + 28u, 27508u);
+        descs = render_hud.descs;
+        descs[0].clut = 27508u;
     }
     else
     {
-        sint32 row = (sint32)r_u32(text + 12u) / 500;
+        sint32 row = (sint32)time_rec->ticks / 500;
         uint16 clut;
 
         if ((sint16)row >= 10)
             row = 9;
         clut = getClut(832, 449 - (sint16)row);
-        ui = r_u32(0x800B69F4u);
-        w_u16(ui + 28u, clut);
+        descs = render_hud.descs;
+        descs[0].clut = clut;
     }
 
-    alternate = (sint32)r_u32(0x800B69ECu) > 0 && vehicle_menu(source)->mode == 4u;
-    ui = r_u32(0x800B69F4u);
-    w_u8(ui + 332u, (uint8)alternate);
-    ui = r_u32(0x800B69F4u);
-    w_u8(ui + 372u, (uint8)alternate);
-    ui = r_u32(0x800B69F4u);
-    text = alternate ? 0x800D6948u : 0x800D6B48u;
+    alternate = (sint32)r_u32(0x800B69ECu) > 0 && vehicle_menu(src)->mode == 4u;
+    descs = render_hud.descs;
+    descs[8].visible = (uint8)alternate;
+    descs = render_hud.descs;
+    descs[9].visible = (uint8)alternate;
+    descs = render_hud.descs;
+    time_rec = alternate ? &race_bonus_time : &race_time;
     position = alternate ? (sint32)((r_u32(0x800B69ECu) >> 3) & 1u) : 1;
-    w_u8(ui + 12u, (uint8)position);
-    time_copy_chars7(text_bind(text), text_bind(r_u32(ui + 24u)));
-    w_u8(0x80083908u, 0u);
+    descs[0].visible = (uint8)position;
+    time_copy_chars7((char *)time_rec->text, descs[0].text);
+    hud_text.time[4] = 0;
 
     position = alternate;
     if (!alternate)
     {
         position = 1;
         if ((sint16)r_u16(state + 76u) == 2)
-            position = vehicle_menu(source)->mode != 4u;
+            position = vehicle_menu(src)->mode != 4u;
     }
-    ui = r_u32(0x800B69F4u);
-    w_u8(ui + 412u, (uint8)(1 - position));
+    descs = render_hud.descs;
+    descs[10].visible = (uint8)(1 - position);
 
-    position = r_u8(source);
-    ui = r_u32(0x800B69F4u);
-    record = ui + 120u;
-    for (index = 0; index < 4; ++index)
+    position = r_u8(src);
+    descs = render_hud.descs;
+    desc = descs + 3;
+    for (idx = 0; idx < 4; ++idx)
     {
-        w_u8(record + 12u, position >= index);
-        if (position - index >= 0)
+        desc->visible = position >= idx;
+        if (position - idx >= 0)
         {
-            uint32 name = source + 20u + (uint32)index * 16u;
+            uint32 name = src + 20u + (uint32)idx * 16u;
 
             if (r_u8(name) == '0')
-                time_copy_chars7(text_bind(name), text_bind(r_u32(record + 24u)));
+                time_copy_chars7(text_bind(name), desc->text);
             else
-                name_bytes_copy8(text_bind(name), text_bind(r_u32(record + 24u)));
-            w_u16(record + 28u, r_u16(0x800B3E28u + (uint32)(position - index) * 2u));
+                name_bytes_copy8(text_bind(name), desc->text);
+            desc->clut = r_u16(0x800B3E28u + (uint32)(position - idx) * 2u);
         }
-        record += 40u;
+        ++desc;
     }
 
     if (r_u32(0x80083484u) == 8u)
     {
-        ui = r_u32(0x800B69F4u);
-        record = ui;
-        for (index = 0; index < 17; ++index)
+        descs = render_hud.descs;
+        desc = descs;
+        for (idx = 0; idx < 17; ++idx)
         {
-            w_u8(record + 12u, 0u);
-            record += 40u;
+            desc->visible = 0u;
+            ++desc;
         }
-        ui = r_u32(0x800B69F4u);
-        text = r_u32(ui + 704u);
-        w_u8(ui + 692u, 1u);
-        time_copy_chars7(text_bind(0x800D6B48u), text_bind(text));
-        ui = r_u32(0x800B69F4u);
-        record = ui + 720u;
-        for (index = 0; index < 3; ++index)
+        descs = render_hud.descs;
+        text = descs[17].text;
+        descs[17].visible = 1u;
+        time_copy_chars7((char *)race_time.text, text);
+        descs = render_hud.descs;
+        desc = descs + 18;
+        for (idx = 0; idx < 3; ++idx)
         {
-            sint16 value = (sint16)r_u16(0x800B69FCu + (uint32)index * 2u);
+            sint16 value = (sint16)r_u16(0x800B69FCu + (uint32)idx * 2u);
 
             if (value == -1)
-                w_u8(record + 12u, 0u);
+                desc->visible = 0u;
             else
             {
-                w_u8(record + 12u, 1u);
-                value = (sint16)r_u16(0x800B69FCu + (uint32)index * 2u);
-                text_format_decimal_digits(value, text_bind(r_u32(record + 24u)), 2);
+                desc->visible = 1u;
+                value = (sint16)r_u16(0x800B69FCu + (uint32)idx * 2u);
+                text_format_decimal_digits(value, desc->text, 2);
             }
-            record += 40u;
+            ++desc;
         }
-        return render_activate_recs(r_u32(0x800B69A0u));
+        return render_activate_recs(render_hud.prims);
     }
 
-    first = (uint16)vehicle_racer_count;
-    second = vehicle_leader_count;
-    third = vehicle_trailer_count;
-    w_u8(record + 12u, (uint8)language_is_six);
-    w_u8(0x80083BD4u, (uint8)language_is_six);
-    alternate = vehicle_menu(source)->racer_num;
-    total = (sint32)(first + second);
-    ui = r_u32(0x800B69F4u);
-    text = r_u32(ui + 64u);
-    total = (sint16)(total + (sint32)third);
-    text_format_decimal_digits(alternate, text_bind(text), 2);
-    w_u8(text + 2u, '/');
-    text_format_decimal_digits(total, text_bind(text + 3u), 2);
-    position = r_u8(source);
+    racer_count = (uint16)vehicle_racer_count;
+    leader_count = vehicle_leader_count;
+    trailer_count = vehicle_trailer_count;
+    desc->visible = (uint8)language_is_six;
+    render_hud_desc_bank(HUD_LAYOUT_SINGLE, 0)[12].visible = (uint8)language_is_six;
+    alternate = vehicle_menu(src)->racer_num;
+    total = (sint32)(racer_count + leader_count);
+    descs = render_hud.descs;
+    text = descs[1].text;
+    total = (sint16)(total + (sint32)trailer_count);
+    text_format_decimal_digits(alternate, text, 2);
+    text[2u] = (uint8)('/');
+    text_format_decimal_digits(total, text + 3u, 2);
+    position = r_u8(src);
     position = (sint16)(position + (sint32)r_u16(0x800B699Cu) + 1);
     if ((sint16)position >= 100)
         position = 99;
     {
-        uint32 course = r_u32(0x8008349Cu);
         sint16 course_total;
 
-        ui = r_u32(0x800B69F4u);
-        course_total = (sint16)r_u16(course + 28u);
+        descs = render_hud.descs;
+        course_total = scene_race->laps;
         alternate = (sint16)position < 10;
-        text = r_u32(ui + 104u);
+        text = descs[2].text;
 
         if (alternate)
         {
-            text_format_decimal_digits(position, text_bind(text), 1);
-            w_u8(text + 1u, '/');
-            text_format_decimal_digits(course_total, text_bind(text + 2u), 1);
+            text_format_decimal_digits(position, text, 1);
+            text[1u] = (uint8)('/');
+            text_format_decimal_digits(course_total, text + 2u, 1);
         }
         else
         {
-            text_format_decimal_digits(position, text_bind(text), 2);
-            w_u8(text + 2u, 0u);
+            text_format_decimal_digits(position, text, 2);
+            text[2u] = (uint8)(0u);
         }
     }
-    ui = r_u32(0x800B69F4u);
-    alternate = r_u8(source + 516u);
-    text = r_u32(ui + 304u);
+    descs = render_hud.descs;
+    alternate = r_u8(src + 516u);
+    text = descs[7].text;
     if (alternate == '0')
-        time_copy_chars7(text_bind(source + 516u), text_bind(text));
+        time_copy_chars7(text_bind(src + 516u), text);
     else
-        name_bytes_copy8(text_bind(source + 516u), text_bind(text));
+        name_bytes_copy8(text_bind(src + 516u), text);
     menu_update_result_rec_palettes(state);
 
     alternate = r_u32(0x80083484u) == 4u;
     if (alternate)
-        w_u8(0x800839F4u, 0u);
-    w_u8(0x80083A1Cu, (uint8)(1 - alternate));
-    w_u8(0x80083B0Cu, (uint8)(1 - alternate));
-    w_u8(0x80083BFCu, (uint8)alternate);
-    w_u8(0x80083BD4u, (uint8)alternate);
-    w_u8(0x80083C4Cu, (uint8)alternate);
-    w_u8(0x80083C24u, (uint8)alternate);
+        render_hud_desc_bank(HUD_LAYOUT_SINGLE, 0)[0].visible = 0u;
+    render_hud_desc_bank(HUD_LAYOUT_SINGLE, 0)[1].visible = (uint8)(1 - alternate);
+    render_hud_desc_bank(HUD_LAYOUT_SINGLE, 0)[7].visible = (uint8)(1 - alternate);
+    render_hud_desc_bank(HUD_LAYOUT_SINGLE, 0)[13].visible = (uint8)alternate;
+    render_hud_desc_bank(HUD_LAYOUT_SINGLE, 0)[12].visible = (uint8)alternate;
+    render_hud_desc_bank(HUD_LAYOUT_SINGLE, 0)[15].visible = (uint8)alternate;
+    render_hud_desc_bank(HUD_LAYOUT_SINGLE, 0)[14].visible = (uint8)alternate;
     if (alternate)
     {
         if ((sint16)position >= 10)
-            w_u8(0x8008390Eu, 0u);
+            hud_text.lap[2] = 0;
         else
-            w_u8(0x8008390Du, 0u);
-        w_u8(0x80083B34u, 0u);
-        w_u8(0x80083B5Cu, 0u);
+            hud_text.lap[1] = 0;
+        render_hud_desc_bank(HUD_LAYOUT_SINGLE, 0)[8].visible = 0u;
+        render_hud_desc_bank(HUD_LAYOUT_SINGLE, 0)[9].visible = 0u;
         result = (sint16)position < 10;
     }
     else
     {
-        w_u8(0x8008390Du, '/');
+        hud_text.lap[1] = '/';
         result = '/';
     }
     return result;
@@ -232,36 +394,34 @@ sint32 results_layout_populate(uint32 state)
 
 sint32 results_init_marker_recs(void)
 {
-    uint32 records = game_alloc_arena_bytes(60);
+    static EVENT_REC recs[3];
     sint32 angle = 768;
     sint32 index;
-    const PROFILE_GRID *table = &profile_at(r_u8(0x800E0595u))->grid[r_u32(0x8008347Cu)];
+    const PROFILE_GRID *table = &profile_at(profile_selection.slot)->grid[r_u32(0x8008347Cu)];
 
     FUNCTION_MARKER(0x8003B9C4u, "MAIN.EXE");
-    w_u16(0x800F3FACu, 3u);
-    w_u32(0x800F3FB4u, UINT32_MAX);
-    w_u32(0x800F3FA8u, records);
-    w_u32(0x800F3FB0u, 0u);
-    w_u32(0x800F3FC0u, 0u);
+    race_event_markers.recs = recs;
+    race_event_markers.count = 3;
+    race_event_markers.idx = 0;
     for (index = 0; index < 3; ++index)
     {
-        uint32 record = records + (uint32)index * 20u;
+        EVENT_REC *rec = &recs[index];
         sint32 sine = rsin(angle);
         sint32 cosine = rcos(angle);
         sint32 type = index;
-        w_u16(record, (uint16)(r_u16(0x800CB070u) + 1000 * cosine / 4096 + cosine * (sint32)r_u32(0x800914A0u) / 4096));
-        w_u16(record + 2u, r_u16(r_u32(0x8008349Cu) + 4u));
-        w_u16(record + 4u, (uint16)(r_u16(0x800CB074u) + 1000 * sine / 4096 + sine * (sint32)r_u32(0x800914A0u) / 4096));
-        if (table->offset[r_u32(0x80091480u + (uint32)index * 4u)] == 2u)
+        rec->pos[0] = (uint16)((uint16)route_showcase_seg.origin[0] + 1000 * cosine / 4096 + 2000 * cosine / 4096);
+        rec->pos[1] = (uint16)scene_horizon->ground;
+        rec->pos[2] = (uint16)((uint16)route_showcase_seg.origin[2] + 1000 * sine / 4096 + 2000 * sine / 4096);
+        if (table->offset[results_grid_columns[index]] == 2u)
             type = 3;
-        w_u16(record + 6u, (uint16)((type << 12) | (angle & 0x0FFF)));
-        w_u16(record + 14u, 0u);
+        rec->angle = (uint16)((type << 12) | (angle & 0x0FFF));
+        rec->kind = 0u;
         angle += 256;
     }
     return 0;
 }
 
-uint32 results_select_table(uint32 unused, uint32 fallback)
+static const RESULTS_COURSE *results_select_course(const RESULTS_COURSE *fallback)
 {
     const PLAYER_PROFILE *profile_data;
     uint32 index;
@@ -270,35 +430,41 @@ uint32 results_select_table(uint32 unused, uint32 fallback)
     uint32 first;
 
     FUNCTION_MARKER(0x8003BC14u, "MAIN.EXE");
-    if (r_u16(0x800E1B9Cu) != 0u)
+    if (race_selection.special != 0u)
     {
-        w_u32(0x80083740u, 6u);
-        return 0x80091F3Cu;
+        sound_options.track_slot = 6u;
+        return &results_courses[54];
     }
-    if (r_s16(0x800E0582u) == 4)
-        return 0x80091F8Cu + 20u * r_u8(0x800E1B8Bu);
+    if ((sint16)game_selection.mode == 4)
+    {
+        if (game_selection.attract >= 3u)
+            abort();
+        return &results_courses[58u + game_selection.attract];
+    }
     profile_data = profile_current();
     second = profile_data->level;
-    profile = r_u8(0x800E0595u);
+    profile = profile_selection.slot;
     first = profile_data->course;
     index = first + 6u * second;
-    if (profile == 0u)
-        fallback = 0x80091B04u + index * 20u;
-    else if (profile == 1u)
-        fallback = 0x80091C6Cu + index * 20u;
-    else if (profile == 2u)
-        fallback = 0x80091DD4u + index * 20u;
-    w_u32(0x80083740u, profile_data->course);
-    if (r_s16(0x800E0582u) == 3)
-        w_u32(0x80083740u, 7u);
+    if (profile < 3u)
+    {
+        index += profile * 18u;
+        if (index >= 61u)
+            abort();
+        fallback = &results_courses[index];
+    }
+    sound_options.track_slot = profile_data->course;
+    if ((sint16)game_selection.mode == 3)
+        sound_options.track_slot = 7u;
     return fallback;
 }
 
 sint32 race_config_results(void)
 {
-    uint32 descriptor;
-    uint32 config;
-    uint32 source;
+    const RESULTS_COURSE *desc;
+    SCENE_RACE_CFG *cfg;
+    const TOURNAMENT_TIME *source;
+    const TOURNAMENT_TIME *times = NULL;
     sint32 mode;
     sint32 selector;
     sint32 publish_selector = 1;
@@ -311,29 +477,29 @@ sint32 race_config_results(void)
     race_format_time(0x800CB390u, 300);
     time_init_rec_zero(0x800DCFC8u);
     w_u32(0x800B69ECu, 0u);
-    descriptor = results_select_table(0u, 0u);
+    desc = results_select_course(NULL);
     for (index = 0; index < 4; ++index)
         w_u16(0x800D69D8u + (uint32)index * 28u, 0u);
 
-    w_u32(0x800834A0u, (uint32)(sint32)(sint16)r_u16(descriptor));
-    w_u32(0x8008348Cu, (uint32)(sint32)(sint16)r_u16(descriptor + 12u));
-    render_select_tex_desc(0x80083478u);
+    w_u32(0x800834A0u, (uint32)(sint32)(sint16)desc->course);
+    w_u32(0x8008348Cu, (uint32)(sint32)(sint16)desc->variant);
+    scene_select(r_u32(0x800834A0u), r_u32(0x8008348Cu));
     {
-        uint8 descriptor_mode = r_u8(descriptor + 8u);
+        uint8 desc_mode = desc->ai_variant;
 
-        config = r_u32(0x8008349Cu);
-        w_u8(0x800E0596u, descriptor_mode);
+        cfg = scene_race;
+        race_selection.ai_variant = desc_mode;
     }
-    w_u16(config + 28u, r_u16(descriptor + 10u));
-    w_u16(config + 30u, (uint16)(r_u16(descriptor + 14u) + 1u));
-    mode = r_s16(0x800E0582u);
-    source = r_u32(descriptor + 16u);
+    cfg->laps = (sint16)desc->parameter;
+    cfg->checkpoint_count = (sint16)(uint16)(desc->laps + 1u);
+    mode = (sint16)game_selection.mode;
+    source = desc->times;
 
     switch (mode)
     {
         case 0:
         case 1:
-            selector = r_u8(0x800E058Du) != 0u ? 1 : 2;
+            selector = game_selection.menu_variant != 0u ? 1 : 2;
             break;
         case 2:
         case 3:
@@ -344,14 +510,14 @@ sint32 race_config_results(void)
             break;
         case 6:
         {
-            sint32 submode = r_s16(0x800E0584u);
+            sint32 submode = (sint16)game_selection.rules;
 
             if (submode == 1)
             {
-                w_u16(config + 28u, 1u);
+                cfg->laps = 1;
                 for (index = 0; index < 5; ++index)
-                    w_u16(0x800E1A4Au + (uint32)index * 8u, r_u16(source + 6u + (uint32)index * 8u));
-                source = 0x800E1A44u;
+                    tournament_times[index].parameter = source[index].parameter;
+                times = tournament_times;
                 selector = 2;
             }
             else if (submode == 2)
@@ -363,7 +529,7 @@ sint32 race_config_results(void)
             break;
         }
         case 7:
-            source = 0x8009157Cu;
+            source = results_times[0];
             selector = 1;
             break;
         default:
@@ -371,61 +537,64 @@ sint32 race_config_results(void)
             break;
     }
     if (publish_selector)
-        w_u16(0x800E05D6u, (uint16)selector);
-    if (r_s16(0x800E1B9Cu) != 0)
-        w_u16(0x800E05D6u, 1u);
+        race_selection.format = (uint16)selector;
+    if ((sint16)race_selection.special != 0)
+        race_selection.format = 1u;
 
     for (index = 0; index < 5; ++index)
     {
-        uint32 input = source + (uint32)index * 8u;
-        uint32 output = config + 36u + (uint32)index * 20u;
-        sint32 first = r_s16(input);
-        sint32 third = r_s16(input + 4u);
-        sint32 second = r_s16(input + 2u);
+        const TOURNAMENT_TIME *input = &source[index];
+        SCENE_CHECKPOINT *dst = &cfg->checkpoints[index];
+        sint32 first = times != NULL ? (sint16)times[index].parts[0] : (sint16)input->parts[0];
+        sint32 third = times != NULL ? (sint16)times[index].parts[2] : (sint16)input->parts[2];
+        sint32 second = times != NULL ? (sint16)times[index].parts[1] : (sint16)input->parts[1];
         sint32 value = (sint32)(6000u * (uint32)first + 100u * (uint32)second + (uint32)(third / 10));
 
-        race_format_time(output, value);
-        w_u16(output + 16u, r_u16(input + 6u));
+        time_format(&dst->time, value);
+        dst->seg = (sint16)(times != NULL ? times[index].parameter : input->parameter);
     }
-    w_u32(0x800B6AC0u, r_s16(0x800E05D6u) != 1);
+    w_u32(0x800B6AC0u, (sint16)race_selection.format != 1);
     mode = (sint32)r_u32(0x80083484u);
     w_u32(0x800B6B1Cu, 0u);
     if (mode == 8)
     {
-        uint8 profile = r_u8(0x800E0595u);
+        uint8 profile = profile_selection.slot;
         sint32 value = profile == 1u ? 3000 : (profile == 2u ? 2500 : 3500);
 
-        race_format_time(0x800D6B48u, value);
+        time_format(&race_time, value);
     }
     else
     {
-        time_copy_rec(0x800D6B48u, config + 36u);
-        time_packed_add(0x800D6B48u, config + 56u);
+        time_copy(&race_time, &cfg->checkpoints[0].time);
+        time_add(&race_time, &cfg->checkpoints[1].time);
     }
     mode = (sint32)r_u32(0x80083478u);
     w_u32(0x800B6AF4u, 0u);
 
     if (mode == 1)
         vertical = 420;
-    w_u16(0x800D6A10u, r_u16(descriptor + 4u));
+    w_u16(0x800D6A10u, desc->counts[1]);
     w_u16(0x800D6A2Au, 76u);
     {
-        uint16 count = r_u16(descriptor + 2u);
+        uint16 count = desc->counts[0];
 
         w_u16(0x800D6A0Eu, 192u);
         w_u16(0x800D69F4u, count);
     }
-    w_u16(0x800D6A2Cu, r_u16(descriptor + 6u));
+    w_u16(0x800D6A2Cu, desc->counts[2]);
     w_u16(0x800D6A46u, 308u);
     {
         sint32 count = r_s16(0x800D6A10u);
-        uint32 points = r_u32(0x80092010u + 4u * (uint32)count);
+        const sint16(*points)[2];
+        if (count < 0 || count >= 6)
+            abort();
+        points = results_points[0];
 
         for (index = 0; index < r_s16(0x800D6A10u); ++index)
         {
-            w_u16(0x800D6A12u + (uint32)index * 2u, (uint16)((sint16)r_u16(points) + 20));
-            w_u16(0x800D6A1Eu + (uint32)index * 2u, (uint16)(vertical + (sint16)r_u16(points + 2u) - 38));
-            points += 4u;
+            w_u16(0x800D6A12u + (uint32)index * 2u, (uint16)(points[0][0] + 20));
+            w_u16(0x800D6A1Eu + (uint32)index * 2u, (uint16)(vertical + points[0][1] - 38));
+            ++points;
         }
     }
     {
@@ -442,13 +611,17 @@ sint32 race_config_results(void)
     }
     result = 4 * (sint16)r_u16(0x800D6A2Cu);
     {
-        uint32 points = r_u32(0x80092028u + (uint32)result);
+        sint32 count = (sint16)r_u16(0x800D6A2Cu);
+        const sint16(*points)[2];
+        if (count < 0 || count >= 6)
+            abort();
+        points = results_points[1];
 
         for (index = 0; index < (sint16)r_u16(0x800D6A2Cu); ++index)
         {
-            w_u16(0x800D6A2Eu + (uint32)index * 2u, (uint16)(384 - ((sint16)r_u16(points) + 48)));
-            w_u16(0x800D6A3Au + (uint32)index * 2u, (uint16)(vertical + (sint16)r_u16(points + 2u) - 38));
-            points += 4u;
+            w_u16(0x800D6A2Eu + (uint32)index * 2u, (uint16)(384 - (points[0][0] + 48)));
+            w_u16(0x800D6A3Au + (uint32)index * 2u, (uint16)(vertical + points[0][1] - 38));
+            ++points;
             result = r_s16(0x800D6A2Cu);
         }
     }
@@ -482,7 +655,7 @@ sint32 results_fn_8003cb14(uint32 state, uint32 menu, sint32 unused, uint32 argu
 
     FUNCTION_MARKER(0x8003CB14u, "MAIN.EXE");
     w_u32(menu + 624u, 7u);
-    if (!(r_u16(0x800E0582u) == 6u && r_u16(0x800E0584u) == 1u))
+    if (!(game_selection.mode == 6u && game_selection.rules == 1u))
     {
         if (r_u32(0x80083478u) == 1u)
         {
@@ -518,15 +691,14 @@ sint32 results_fn_8003cb14(uint32 state, uint32 menu, sint32 unused, uint32 argu
     xport_update_u8(menu, XPORT_MEMORY_UPDATE_SUBTRACT, 1u);
     race_format_time(0x800F2578u, 500);
     w_u16(0x800B6ACCu, 1u);
-    w_u8(0x800E05B8u, r_u8(menu + 582u));
-    return pickup_write_racer_indices(0x800E059Du);
+    result_state.pickups = (uint8)(r_u8(menu + 582u));
+    return pickup_write_racer_indices(race_selection.ranks);
 }
 
 sint32 results_advance_page(uint32 state, uint32 menu, sint32 unused, uint32 argument)
 {
     uint32 current;
     uint32 previous;
-    uint32 settings;
     uint32 value;
     sint32 index;
     sint32 maximum;
@@ -534,7 +706,7 @@ sint32 results_advance_page(uint32 state, uint32 menu, sint32 unused, uint32 arg
     FUNCTION_MARKER(0x8003CCECu, "MAIN.EXE");
     current = r_u8(menu);
     w_u8(menu, current + 1u);
-    if ((sint16)r_u16(0x800E0582u) == 2)
+    if ((sint16)game_selection.mode == 2)
     {
         current = r_u8(menu);
         if (current == 4u)
@@ -556,7 +728,7 @@ sint32 results_advance_page(uint32 state, uint32 menu, sint32 unused, uint32 arg
             if (current == 1u)
             {
                 replay_finish(&vehicle_players[0]->contacts.points[0], 1);
-                time_copy_chars7(text_bind(entry), text_bind(0x80083974u));
+                time_copy_chars7(text_bind(entry), hud_text.best);
                 previous = r_u32(0x800B6A54u);
                 w_u32(0x800B6BC0u, value);
             }
@@ -571,14 +743,14 @@ sint32 results_advance_page(uint32 state, uint32 menu, sint32 unused, uint32 arg
                 }
                 replay_finish(&vehicle_players[0]->contacts.points[0], 1);
                 w_u32(0x800B6BC0u, value);
-                time_copy_chars7(text_bind(entry), text_bind(0x80083974u));
+                time_copy_chars7(text_bind(entry), hud_text.best);
                 previous = r_u32(0x800B6A54u);
             }
             if (value < previous)
             {
                 sound_queue_command(state, 1, 0, 0u);
                 w_u32(0x800B6A54u, value);
-                time_copy_chars7(text_bind(entry), text_bind(0x80083968u));
+                time_copy_chars7(text_bind(entry), hud_text.record);
                 time_copy_rec(menu + 532u, entry);
             }
         }
@@ -587,9 +759,8 @@ sint32 results_advance_page(uint32 state, uint32 menu, sint32 unused, uint32 arg
     }
 
     w_u8(menu + 2u, 1u);
-    settings = r_u32(0x8008349Cu);
     current = r_u8(menu);
-    maximum = (sint16)r_u16(settings + 28u);
+    maximum = scene_race->laps;
     if ((sint32)current == maximum)
     {
         results_fn_8003cb14(state, menu, unused, argument);
@@ -599,7 +770,7 @@ sint32 results_advance_page(uint32 state, uint32 menu, sint32 unused, uint32 arg
         sound_queue_command(state, 0, 0, 0u);
     else
     {
-        if ((sint32)r_u32(0x800D6B54u) >= 200)
+        if ((sint32)race_time.ticks >= 200)
             return 0;
         sound_queue_command(state, 9, 0, 0u);
     }
@@ -612,18 +783,18 @@ sint32 results_fn_8003cf10(uint32 state, uint32 menu, sint32 unused, uint32 argu
 
     FUNCTION_MARKER(0x8003CF10u, "MAIN.EXE");
     if (r_u8(menu + 582u) >= 5u)
-        w_u8(0x800E05B3u, 2u);
-    if (r_u8(0x800E05B3u) == 0u)
+        result_state.status = (uint8)(2u);
+    if (result_state.status == 0u)
         return 5;
     if (vehicle_menu(menu)->mode == 5u || vehicle_menu(menu)->mode == 7u)
         return 7;
-    profile_data = profile_at(r_u8(0x800E0595u));
-    if (r_u8(0x800E05B3u) == 2u)
+    profile_data = profile_at(profile_selection.slot);
+    if (result_state.status == 2u)
     {
         sound_queue_command(state, 2, 0, argument);
         profile_data->progress.courses[profile_data->level][profile_data->course].result = 2u;
     }
-    else if (r_u8(0x800E05B3u) == 1u)
+    else if (result_state.status == 1u)
         sound_queue_command(state, 4, 0, argument);
     sound_queue_command(state, 0, 5, argument);
     vehicle_menu(menu)->mode = 5u;
@@ -634,19 +805,17 @@ sint32 results_fn_8003cf10(uint32 state, uint32 menu, sint32 unused, uint32 argu
 
 sint32 race_process_lap_completion(uint32 state, uint32 menu, sint32 unused, uint32 argument)
 {
-    uint32 frame;
     sint32 phase;
     sint32 completed = 0;
     sint32 result;
 
     FUNCTION_MARKER(0x8003D04Cu, "MAIN.EXE");
-    frame = guest_stack_push(0x38u);
     phase = (sint32)vehicle_menu(menu)->mode;
     if (phase == 4 || phase == 6)
     {
         sint32 enabled = 1;
 
-        if ((sint16)r_u16(0x800E0582u) == 6 && (sint16)r_u16(0x800E0584u) == 1 && (sint32)vehicle_menu(menu)->mode != 4)
+        if ((sint16)game_selection.mode == 6 && (sint16)game_selection.rules == 1 && (sint32)vehicle_menu(menu)->mode != 4)
             enabled = 0;
         if (enabled != 0 && r_u8(menu + 2u) == 0u)
         {
@@ -661,9 +830,8 @@ sint32 race_process_lap_completion(uint32 state, uint32 menu, sint32 unused, uin
 
             xport_update_u8(menu + 2u, XPORT_MEMORY_UPDATE_ADD, 1u);
             {
-                uint32 table = r_u32(0x8008349Cu);
                 uint32 checkpoint = r_u8(menu + 2u);
-                sint32 checkpoint_count = (sint16)r_u16(table + 30u);
+                sint32 checkpoint_count = scene_race->checkpoint_count;
 
                 if (checkpoint == (uint32)checkpoint_count)
                 {
@@ -684,28 +852,28 @@ sint32 race_process_lap_completion(uint32 state, uint32 menu, sint32 unused, uin
             if ((sint32)r_u32(0x800B6AF4u) < (sint32)count)
             {
                 w_u32(0x800B6AF4u, count);
-                if (((uint32)completed << 16) == 0u && ((sint16)r_u16(0x800E0582u) != 6 || (sint16)r_u16(0x800E0584u) != 1) && r_u32(0x80083484u) != 4u)
+                if (((uint32)completed << 16) == 0u && ((sint16)game_selection.mode != 6 || (sint16)game_selection.rules != 1) && r_u32(0x80083484u) != 4u)
                 {
                     phase = (sint32)vehicle_menu(menu)->mode;
                     if (phase == 6 && r_u32(0x800B6AC0u) != 0u)
                     {
-                        uint32 scratch = frame + 0x10u;
+                        TIME_REC scratch;
                         uint32 peer;
 
                         sound_queue_command(state, 9, 0, argument);
-                        race_format_time(scratch, 300);
-                        time_packed_sub(scratch, 0x800F2578u);
-                        time_packed_sub(0x800D6B48u, scratch);
+                        time_format(&scratch, 300);
+                        time_sub_from_legacy(&scratch, 0x800F2578u);
+                        time_sub(&race_time, &scratch);
                         peer = r_u32(0x800DE154u);
                         if (vehicle_menu(peer)->mode == 6u)
                         {
                             uint32 player_index;
 
-                            time_packed_add(r_u32(0x800DE154u) + 516u, scratch);
+                            time_add_to_legacy(r_u32(0x800DE154u) + 516u, &scratch);
                             peer = r_u32(0x800DE154u);
                             player_index = r_u8(peer);
                             peer = r_u32(0x800DE154u);
-                            time_packed_add(peer + 20u + 16u * player_index, scratch);
+                            time_add_to_legacy(peer + 20u + 16u * player_index, &scratch);
                             vehicle_menu(r_u32(0x800DE154u))->mode = 4u;
                         }
                         if (r_u32(0x80083478u) == 2u)
@@ -715,28 +883,27 @@ sint32 race_process_lap_completion(uint32 state, uint32 menu, sint32 unused, uin
                             {
                                 uint32 player_index;
 
-                                time_packed_add(r_u32(0x800DF0FCu) + 516u, scratch);
+                                time_add_to_legacy(r_u32(0x800DF0FCu) + 516u, &scratch);
                                 peer = r_u32(0x800DF0FCu);
                                 player_index = r_u8(peer);
                                 peer = r_u32(0x800DF0FCu);
-                                time_packed_add(peer + 20u + 16u * player_index, scratch);
+                                time_add_to_legacy(peer + 20u + 16u * player_index, &scratch);
                                 vehicle_menu(r_u32(0x800DF0FCu))->mode = 4u;
                             }
                         }
                         race_format_time(0x800F2578u, 300);
                     }
                     {
-                        uint32 table = r_u32(0x8008349Cu);
-                        sint32 lap_count = (sint16)r_u16(table + 28u);
+                        sint32 lap_count = scene_race->laps;
                         uint32 lap = r_u8(menu);
 
                         if (lap == (uint32)(lap_count - 1))
                         {
-                            sint32 checkpoint_count = (sint16)r_u16(table + 30u);
+                            sint32 checkpoint_count = scene_race->checkpoint_count;
                             uint32 checkpoint = r_u8(menu + 2u);
 
                             if (checkpoint == (uint32)(checkpoint_count - 1))
-                                mesh_fn_8003429c(0x800DD4A0u);
+                                title_show_finish();
                         }
                     }
                     {
@@ -747,14 +914,12 @@ sint32 race_process_lap_completion(uint32 state, uint32 menu, sint32 unused, uin
                     }
                     {
                         uint32 checkpoint = r_u8(menu + 2u);
-                        uint32 table;
-                        uint32 record;
+                        const TIME_REC *rec;
 
                         w_u32(0x800B69ECu, 120u);
-                        table = r_u32(0x8008349Cu);
-                        record = table + 36u + 20u * checkpoint;
-                        time_packed_add(0x800D6B48u, record);
-                        time_copy_rec(0x800D6948u, record);
+                        rec = &scene_checkpoint(checkpoint)->time;
+                        time_add(&race_time, rec);
+                        time_copy(&race_bonus_time, rec);
                     }
                 }
             }
@@ -770,35 +935,36 @@ sint32 race_process_lap_completion(uint32 state, uint32 menu, sint32 unused, uin
         }
     }
     result = (sint16)(uint16)vehicle_menu(menu)->mode;
-    guest_stack_pop(0x38u);
     return result;
 }
 
-sint32 results_2p_complete_route(void)
+void results_2p_complete_route(void)
 {
-    sint32 state = (sint16)r_u16(0x800E0582u);
-    sint32 selection = (sint16)r_u16(0x800E0580u);
+    sint32 state = (sint16)game_selection.mode;
+    sint32 selection = (sint16)game_selection.selection;
 
     FUNCTION_MARKER(0x8005D8E8u, "MAIN.EXE");
-    w_u8(0x800E058Bu, 10u);
-    w_u8(0x800E058Cu, 0u);
+    game_selection.event = 10u;
+    game_selection.event_arg = 0u;
     if (state == 0)
     {
         if (selection == -3)
         {
-            w_u8(0x800E058Bu, 48u);
-            return 48;
+            game_selection.event = 48u;
+            return;
         }
         if (selection != -4 && selection != -2)
-            return 51;
-        w_u8(0x800E058Bu, 51u);
+            return;
+        game_selection.event = 51u;
         w_u16(0x800B6A62u, (uint16)((sint32)r_u32(r_u32(0x800DE154u) + 528u) >= (sint32)r_u32(r_u32(0x800DF0FCu) + 528u)));
-        return 1;
+        return;
     }
     if (state == 1)
     {
-        w_u16(0x800E1BB0u, (uint16)((uint16)vehicle_racer_count + vehicle_leader_count + vehicle_trailer_count));
-        return profile_complete_selection();
+        result_state.count = (uint16)((uint16)vehicle_racer_count + vehicle_leader_count + vehicle_trailer_count);
+        {
+            profile_complete_selection();
+            return;
+        }
     }
-    return 1;
 }

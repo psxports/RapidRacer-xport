@@ -32,6 +32,9 @@
 #include "game.h"
 #include "xport_trace.h"
 
+// Timing from MAIN.EXE 800B3D88/800B69DC
+GAME_TIMING game_timing = {50u, 0u};
+
 static void game_run_startup_constructors(void)
 {
 }
@@ -79,6 +82,18 @@ void game_start(void)
     game_main_loop_continue(0);
 }
 
+GAME_SELECTION game_selection;
+
+// Race choices from MAIN.EXE 800E059D/800E05AD, AI variant 800E0596 and format 800E05D6
+RACE_SELECTION race_selection;
+
+// Participant records from MAIN.EXE 800E0B40
+RACE_PARTICIPANT race_participants[16];
+
+// Race options from MAIN.EXE 800E0598..059C
+// Additional options from MAIN.EXE 800E0590/94 and 800E05B2
+GAME_OPTIONS game_options;
+
 sint32 race_loop(uint32 first, uint32 second, uint32 configuration)
 {
     PSX_RECT clear_area;
@@ -97,13 +112,13 @@ sint32 race_loop(uint32 first, uint32 second, uint32 configuration)
     cb_wait_vblank();
     if (r_u32(configuration) == 1u)
     {
-        PutDispEnv((DISPENV *)psx_addr(first + 196u, sizeof(DISPENV)));
-        PutDrawEnv((DRAWENV *)psx_addr(first + 104u, sizeof(DRAWENV)));
+        PutDispEnv(&display_scene_frame(camera_for_view(first), 0)->disp);
+        PutDrawEnv(&display_scene_frame(camera_for_view(first), 0)->draw);
     }
     VSync(0);
-    w_u16(0x800B3D94u, 0u);
-    w_u32(0x800B3DA8u, 0u);
-    if ((sint16)r_u16(0x800E05D6u) == 1)
+    game_timing.ticks = 0u;
+    display_state.scene_buffer = 0u;
+    if ((sint16)race_selection.format == 1)
         sound_queue_command(0x800DE0F0u, 11, 0, 0u);
     return race_loop_resume(first, second, configuration, warmup);
 }
@@ -117,28 +132,28 @@ sint32 game_render_frame(void)
 #if 0
     perf_frame_end();
     {
-        sint16 buffer = (sint16)r_u32(0x800B3DA8u);
+        sint16 buffer = (sint16)display_state.scene_buffer;
         uint32 overlay_entry = 0x800DE238u + 1784u * (uint32)(sint32)buffer;
 
         perf_render_graph(overlay_entry, buffer);
         perf_render_current(overlay_entry, buffer);
     }
 #endif
-    if (players == 1 && r_u32(0x800B3D88u) == r_u32(0x800B69DCu))
+    if (players == 1 && game_timing.base_rate == game_timing.frame_rate)
     {
         uint32 state = 0x800DE0F0u;
         uint32 buffer_index;
 
         cb_sync_video_field();
         ResetGraph(1);
-        buffer_index = r_u32(0x800B3DA8u);
-        render_fn_8006c434(state + 1784u * (uint32)buffer_index + 1792u);
-        if (r_u32(0x800B6C20u) != 0u)
+        buffer_index = display_state.scene_buffer;
+        DrawOTag(render_scene_ot(render_frame(camera_for_view(state), (sint32)buffer_index)) + 14);
+        if (render_capture_enabled != 0u)
         {
-            buffer_index = r_u32(0x800B3DA8u);
+            buffer_index = display_state.scene_buffer;
             effects_capture_screen_region(state, buffer_index);
-            buffer_index = r_u32(0x800B3DA8u);
-            render_fn_8006c434(state + 1784u * (uint32)buffer_index + 1740u);
+            buffer_index = display_state.scene_buffer;
+            DrawOTag(render_scene_ot(render_frame(camera_for_view(state), (sint32)buffer_index)) + 1);
         }
     }
     else
@@ -147,22 +162,22 @@ sint32 game_render_frame(void)
 
         VSync(2);
         ResetGraph(1);
-        buffer_index = r_u32(0x800B3DA8u);
-        PutDrawEnv((DRAWENV *)psx_addr(0x800DE158u + 1784u * (uint32)buffer_index, sizeof(DRAWENV)));
-        buffer_index = r_u32(0x800B3DA8u);
-        PutDispEnv((DISPENV *)psx_addr(0x800DE1B4u + 1784u * (uint32)buffer_index, sizeof(DISPENV)));
+        buffer_index = display_state.scene_buffer;
+        PutDrawEnv(&display_scene_frame(&camera_views[0], (sint32)buffer_index)->draw);
+        buffer_index = display_state.scene_buffer;
+        PutDispEnv(&display_scene_frame(&camera_views[0], (sint32)buffer_index)->disp);
         for (index = 0; index < (sint32)r_u32(0x80083478u); ++index)
         {
             uint32 state = index == 0 ? 0x800DE0F0u : 0x800DF098u;
 
-            buffer_index = r_u32(0x800B3DA8u);
-            render_fn_8006c434(state + 1784u * (uint32)buffer_index + 1792u);
-            if (r_u32(0x800B6C20u) != 0u)
+            buffer_index = display_state.scene_buffer;
+            DrawOTag(render_scene_ot(render_frame(camera_for_view(state), (sint32)buffer_index)) + 14);
+            if (render_capture_enabled != 0u)
             {
-                buffer_index = r_u32(0x800B3DA8u);
+                buffer_index = display_state.scene_buffer;
                 effects_capture_screen_region(state, buffer_index);
-                buffer_index = r_u32(0x800B3DA8u);
-                render_fn_8006c434(state + 1784u * (uint32)buffer_index + 1740u);
+                buffer_index = display_state.scene_buffer;
+                DrawOTag(render_scene_ot(render_frame(camera_for_view(state), (sint32)buffer_index)) + 1);
             }
         }
     }
@@ -184,26 +199,26 @@ sint32 race_init_runtime(uint32 first, uint32 second, uint32 context)
     uint8 parameter = 5u;
 
     FUNCTION_MARKER(0x80010DDCu, "MAIN.EXE");
-    w_u32(0x800B69DCu, r_u32(0x80083478u) == 2u ? (uint32)((sint32)r_u32(0x800B3D88u) / 2) : r_u32(0x800B3D88u));
+    game_timing.frame_rate = r_u32(0x80083478u) == 2u ? (uint32)((sint32)game_timing.base_rate / 2) : game_timing.base_rate;
     w_u32(context + 708u, 0u);
-    half_period = (sint32)r_u32(0x800B3D88u) / 2;
-    w_u32(0x800B6A4Cu, 0u);
+    half_period = (sint32)game_timing.base_rate / 2;
+    menu_state.confirm = MENU_CONFIRM_CLOSED;
     motion_half_period = (sint32)((uint32)half_period);
-    render_alloc_mode_bufs();
-    render_build_tex_descs();
+    render_init_packet_pools();
+    render_init_billboards();
     if (r_u32(0x8008348Cu) != 2u)
-        w_u32(0x800B6C20u, 1u);
+        render_capture_enabled = 1u;
     if (r_u32(0x80083484u) == 8u)
         race_events_fn_8003b508();
     else
     {
-        render_select_tex_desc(context);
+        scene_select(r_u32(context + 40u), r_u32(context + 20u));
         mode = r_u32(0x80083484u);
         call_argument = r_u32(context + 40u);
-        ai_config_template_desc((sint32)call_argument, mode == 5u ? 4u : r_u8(0x800E0596u));
-        object_node_flags_update_linked(r_u32(0x800B6A98u));
+        ai_config_template_desc((sint32)call_argument, mode == 5u ? 4u : race_selection.ai_variant);
+        object_node_flags_update_linked(route_resources.count);
         game_select_state(context);
-        route_assign_topology_states();
+        route_init_lanes(&route_resources, r_u32(0x800834A0u));
     }
     vehicle_init_slots();
     first_state = vehicle_legacy(vehicle_player(first));
@@ -212,7 +227,7 @@ sint32 race_init_runtime(uint32 first, uint32 second, uint32 context)
     vehicle_tracks(first)[0] = NULL;
     w_u32(first + 100u, first_state + 1720u);
     w_u32(first_output_state + 2348u, 0x800B6B20u);
-    call_argument = r_u32(context + 36u);
+    call_argument = 0u;
     menu_init_race(first, call_argument, 0);
     camera_init(camera_for_view(first));
     if (r_u32(0x80083478u) == 2u)
@@ -223,7 +238,7 @@ sint32 race_init_runtime(uint32 first, uint32 second, uint32 context)
         vehicle_tracks(second)[0] = NULL;
         w_u32(second + 100u, second_state + 1720u);
         w_u32(second_output_state + 2348u, 0x800B6B22u);
-        call_argument = r_u32(context + 36u);
+        call_argument = 0u;
         menu_init_race(second, call_argument, 1);
         camera_init(camera_for_view(second));
     }
@@ -235,14 +250,14 @@ sint32 race_init_runtime(uint32 first, uint32 second, uint32 context)
         vehicle_tracks(second)[0] = NULL;
     }
     ai_sort_racers_by_rank(first, second);
-    pickup_write_racer_indices(0x800E059Du);
-    render_build_tex_desc_table((sint32)r_u32(context + 40u));
-    render_init_prims(first + 104u, context);
-    render_init_prims(first + 1888u, context);
+    pickup_write_racer_indices(race_selection.ranks);
+    render_init_materials((sint32)r_u32(context + 40u));
+    render_init_prims(render_frame(&camera_views[0], 0));
+    render_init_prims(render_frame(&camera_views[0], 1));
     if (r_u32(context) == 2u)
     {
-        render_init_prims(second + 104u, context);
-        render_init_prims(second + 1888u, context);
+        render_init_prims(render_frame(&camera_views[1], 0));
+        render_init_prims(render_frame(&camera_views[1], 1));
     }
     if (r_u32(0x80083484u) != 8u)
         object_init_racer_object_groups(first, second, (sint32)r_u32(context));
@@ -282,8 +297,8 @@ sint32 game_init_defaults(void)
     sint32 index;
 
     FUNCTION_MARKER(0x80053A60u, "MAIN.EXE");
-    w_u8(0x800E058Au, 0u);
-    w_u8(0x800E058Du, 0u);
+    game_selection.ready = 0u;
+    game_selection.menu_variant = 0u;
     for (index = 0; index < 3; ++index)
     {
         profile_at((uint32)index)->reset_pending = 1u;
@@ -293,34 +308,34 @@ sint32 game_init_defaults(void)
     profile_at(3u)->reward_flags = 0u;
     for (index = 0; index < 18; ++index)
     {
-        uint32 record = 0x800E0BC0u + 14u * (uint32)index;
-        w_u8(record, 50u);
-        w_u8(record + 1u, 50u);
-        w_u16(record + 2u, 0u);
-        w_u16(record + 4u, 0u);
-        w_u16(record + 6u, 0u);
-        w_u16(record + 8u, 0u);
-        w_u16(record + 10u, 0u);
-        w_u16(record + 12u, 0u);
+        PROFILE_SUMMARY *record = &profile_summaries[index];
+        record->rank = 50u;
+        record->profile = 50u;
+        record->lap_time[0] = 0u;
+        record->lap_time[1] = 0u;
+        record->lap_time[2] = 0u;
+        record->race_time[0] = 0u;
+        record->race_time[1] = 0u;
+        record->race_time[2] = 0u;
     }
     profile_generate_opponents();
     for (index = 0; index < 8; ++index)
-        w_u16(0x800E05BCu + 2u * (uint32)index, r_u16(0x80098D1Cu + 2u * (uint32)index));
-    w_u8(0x800E058Eu, 3u);
-    w_u16(0x800E0590u, 5u);
-    w_u16(0x800E0592u, 0u);
+        sound_options.tracks[index] = sound_default_tracks[index];
+    game_selection.players = (uint16)((game_selection.players & 0xFF00u) | (uint8)(3u));
+    game_options.round_limit = 5u;
+    game_options.level = 0u;
     name_reset_players();
-    w_u16(0x800E05D0u, 40u);
+    sound_options.effects = 40u;
     w_u16(0x80083490u, 40u);
-    w_u16(0x800E05CEu, 63u);
+    sound_options.music = 63u;
     w_u16(0x80083494u, 63u);
     vehicle_racer_count = (uint32)(8u);
     vehicle_leader_count = (uint16)(8u);
     vehicle_trailer_count = (uint16)(0u);
-    w_u16(0x800E1B86u, 0u);
-    w_u8(0x800E1B88u, 0u);
-    w_u16(0x800E1B84u, 0u);
-    w_u8(0x800E1B8Au, 0u);
+    profile_selection.menu_slot = 0u;
+    profile_selection.mode_choice = 0u;
+    profile_selection.rules_slot = 0u;
+    profile_selection.controller = 0u;
     input_calibrations[0].steer_center = (uint16)(0u);
     input_calibrations[0].steer_range = (uint16)(4000u);
     input_calibrations[0].accel_range = (uint16)(3500u);
@@ -335,7 +350,7 @@ sint32 game_init_defaults(void)
     input_calibrations[1].stick_range = (uint16)(4000u);
     for (index = 0; index < 5; ++index)
         vehicle_select_init_player_profile((uint32)index);
-    w_u8(0x800E1B8Bu, 0u);
+    game_selection.attract = 0u;
     name_reels.code = (uint32)game_random_next() & 0xFFFFFu;
     return (sint32)name_reels.code;
 }
@@ -397,13 +412,13 @@ sint32 race_loop_before_frame(RR_RACE_LOOP_STATE *state)
     // Host quit boundary for original loop at 0x800104AC
     if (xport_isquit())
         return -1;
-    if (r_u32(configuration) == 1u && r_u32(0x800B3D88u) == r_u32(0x800B69DCu))
+    if (r_u32(configuration) == 1u && game_timing.base_rate == game_timing.frame_rate)
     {
-        w_u16(0x800B3D94u, (uint16)(r_u16(0x800B3D94u) + 2u));
-        if (r_u16(0x800B3D94u) == 65022u)
-            w_u16(0x800B3D94u, 0u);
-        buffer = 1 - (sint32)r_u32(0x800B3DA8u);
-        w_u32(0x800B3DA8u, (uint32)buffer);
+        game_timing.ticks = (uint16)(game_timing.ticks + 2u);
+        if (game_timing.ticks == 65022u)
+            game_timing.ticks = 0u;
+        buffer = 1 - (sint32)display_state.scene_buffer;
+        display_state.scene_buffer = (uint32)buffer;
         if (buffer != 0)
         {
             input_update_states();
@@ -415,11 +430,11 @@ sint32 race_loop_before_frame(RR_RACE_LOOP_STATE *state)
     }
     else
     {
-        w_u16(0x800B3D94u, (uint16)(r_u16(0x800B3D94u) + 4u));
-        if (r_u16(0x800B3D94u) == 65022u)
-            w_u16(0x800B3D94u, 0u);
-        buffer = 1 - (sint32)r_u32(0x800B3DA8u);
-        w_u32(0x800B3DA8u, (uint32)buffer);
+        game_timing.ticks = (uint16)(game_timing.ticks + 4u);
+        if (game_timing.ticks == 65022u)
+            game_timing.ticks = 0u;
+        buffer = 1 - (sint32)display_state.scene_buffer;
+        display_state.scene_buffer = (uint32)buffer;
         input_update_states();
         if (state->warmup == 0 && (menu_run_pause(first) != 0 || menu_run_pause(second) != 0))
             return 0;
@@ -434,19 +449,19 @@ sint32 race_loop_before_frame(RR_RACE_LOOP_STATE *state)
 #endif
     if (r_u32(0x80083484u) == 8u)
         vehicle_update_route_segments(first);
-    else if (r_u32(0x80083484u) == 5u && r_u16(0x800B3D94u) >= 0x0E10u)
+    else if (r_u32(0x80083484u) == 5u && game_timing.ticks >= 0x0E10u)
         return 0;
-    if ((sint16)r_u16(0x800E0580u) != 0)
+    if ((sint16)game_selection.selection != 0)
         return 0;
     render_select_prim_pool(buffer);
     cb_dispatch_list();
-    cb_traverse_list(0x800DE0F0u);
-    cb_traverse_list(0x800DF098u);
+    cb_traverse_list(&cb_players[0]);
+    cb_traverse_list(&cb_players[1]);
 #if 0
     perf_mark_frame();
 #endif
     camera_update(camera_for_view(first), vehicle_player(first));
-    scene_render_player_scene(first, buffer);
+    scene_render_player(first, buffer);
 #if 0
     perf_mark_frame();
 #endif
@@ -457,7 +472,7 @@ sint32 race_loop_before_frame(RR_RACE_LOOP_STATE *state)
     if (r_u32(configuration) == 2u)
     {
         camera_update(camera_for_view(second), vehicle_player(second));
-        scene_render_player_scene(second, buffer);
+        scene_render_player(second, buffer);
         if (r_u32(0x80083484u) != 5u)
             vehicle_update_audio(second, 0u, 0u, 0u);
     }
@@ -476,10 +491,10 @@ void race_loop_after_frame(RR_RACE_LOOP_STATE *state)
 
 sint32 race_finish_loop(RR_RACE_LOOP_STATE *state)
 {
-    w_u32(0x800B3DA8u, 1u - r_u32(0x800B3DA8u));
+    display_state.scene_buffer = 1u - display_state.scene_buffer;
     if (r_u32(0x8008373Cu) == 0u && r_u32(0x80083478u) == 1u)
         display_sync_swap_buf();
-    pickup_write_racer_indices(0x800E059Du);
+    pickup_write_racer_indices(race_selection.ranks);
     return effects_run_expanding_circle_trans();
 }
 
@@ -493,8 +508,8 @@ void game_main_loop_continue(sint32 menu_already_returned)
         {
             game_push_checkpoint();
             game_push_checkpoint();
-            if ((sint16)r_u16(0x800E0580u) == -5)
-                w_u16(0x800E0580u, 0u);
+            if ((sint16)game_selection.selection == -5)
+                game_selection.selection = 0u;
             else
                 menu_update_select_mode();
         }
@@ -503,8 +518,8 @@ void game_main_loop_continue(sint32 menu_already_returned)
         sound_release_bank_allocs();
         game_pop_checkpoint();
         race_config_results();
-        w_u32(0x800B6988u, 1u);
-        w_u32(0x800B6C20u, 0u);
+        mesh_render_state.enabled = 1u;
+        render_capture_enabled = 0u;
         cd_load_course_assets(0x80083478u);
         spu_init_cd_audio();
         race_init_runtime(0x800DE0F0u, 0x800DF098u, 0x80083478u);
@@ -515,8 +530,8 @@ void game_main_loop_continue(sint32 menu_already_returned)
         if (xport_isquit())
             return;
         cb_clear_active_list();
-        cb_clear_list(0x800DE0F0u);
-        cb_clear_list(0x800DF098u);
+        cb_clear_list(&cb_players[0]);
+        cb_clear_list(&cb_players[1]);
         guest_swap_stack_ptr(r_u32(0x800B6BB4u));
         sound_config_reverb_depth(0u, 0u);
         SpuSetReverb(0);

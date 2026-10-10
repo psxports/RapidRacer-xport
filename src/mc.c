@@ -1,3 +1,5 @@
+#include "tournament.h"
+#include "game.h"
 #include "profile.h"
 #include "vehicle.h"
 #include "text.h"
@@ -18,66 +20,6 @@
 MC_STATE mc_state;
 #include <string.h>
 
-sint32 mc_parse_checkpoint_data(void)
-{
-    uint32 cursor;
-    sint16 section = 0;
-    sint16 index = 0;
-    sint32 stop = 0;
-
-    FUNCTION_MARKER(0x800487F0u, "MAIN.EXE");
-    game_push_checkpoint();
-    w_u32(0x800D6958u, r_u32(0x800B40C0u));
-    w_u8(0x800D695Cu, r_u8(0x800B40C4u));
-    w_u8(0x800D695Du, r_u8(0x800B40C5u));
-    cursor = cd_load_file_alloc(0x8008184Cu);
-    do
-    {
-        sint16 length = 0;
-        sint32 value;
-
-        while ((r_u8(0x800A0D59u + r_u8(cursor)) & 8u) != 0u)
-            ++cursor;
-        if (r_u8(cursor) == ';')
-        {
-            ++cursor;
-            while (r_u8(cursor++) != 10u)
-            {
-            }
-        }
-        if ((r_u8(0x800A0D59u + r_u8(cursor)) & 8u) == 0u)
-        {
-            do
-            {
-                w_u8(0x800F2788u + (uint32)(sint32)length, r_u8(cursor++));
-                ++length;
-            } while ((r_u8(0x800A0D59u + r_u8(cursor)) & 8u) == 0u);
-        }
-        w_u8(0x800F2788u + (uint32)(sint32)length, 0u);
-        if (r_u8(0x800F2788u) == '!')
-        {
-            ++section;
-            index = 0;
-        }
-        else if (r_u8(0x800F2788u) == '*')
-            stop = 1;
-        else if (r_u8(0x800F2788u) != ';')
-        {
-            ++cursor;
-            value = runtime_parse_decimal(0x800F2788u, length);
-            if (section == 0)
-                w_u16(0x800F5B68u + (uint32)(sint32)index * 2u, (uint16)value);
-            else if (section == 1)
-                w_u16(0x800FF708u + (uint32)(sint32)index * 2u, (uint16)value);
-            else if (section == 2)
-                w_u16(0x800DCC40u + (uint32)(sint32)index * 2u, (uint16)value);
-            ++index;
-        }
-    } while (stop == 0 && section < 9);
-    game_pop_checkpoint();
-    return sprite_build_tex_desc_grid();
-}
-
 void mc_fn_800499e0(void)
 {
     FUNCTION_MARKER(0x800499E0u, "MAIN.EXE");
@@ -91,9 +33,9 @@ sint32 mc_open_events(void)
     FUNCTION_MARKER(0x800499E8u, "MAIN.EXE");
     menu_fn_8006776c();
     for (index = 0u; index < 4u; ++index)
-        mc_state.events[index] = OpenEvent(0xF4000001u, specifications[index], 0x2000u, 0u);
+        mc_state.events[index] = OpenEventGuest(0xF4000001u, specifications[index], 0x2000u, 0u);
     for (index = 0u; index < 4u; ++index)
-        mc_state.events[index + 4u] = OpenEvent(0xF0000011u, specifications[index], 0x2000u, 0u);
+        mc_state.events[index + 4u] = OpenEventGuest(0xF0000011u, specifications[index], 0x2000u, 0u);
     global_fn_8006777c();
     return 0;
 }
@@ -549,6 +491,7 @@ sint32 mc_save_segments_gather(uint32 destination)
 sint32 mc_save_segments_scatter(uint32 source)
 {
     FUNCTION_MARKER(0x8004B6BCu, "MAIN.EXE");
+    tournament_clear_extra_rounds();
     mc_state.save_size = r_u32(source);
     mc_state.save_checksum = r_u32(source + 4u);
     for (uint32 index = 0u; index < MC_SAVE_DATA_BYTES; ++index)
@@ -603,7 +546,7 @@ sint32 mc_load_state_update(void)
     phase = (sint16)(uint16)mc_state.phase;
     if (phase == MC_LOAD && (sint16)mc_state.countdown == 0)
     {
-        uint8 old_language = r_u8(0x800E05B7u);
+        uint8 old_language = menu_state.language;
 
         ResetGraph(0);
         mc_init_menu_status();
@@ -638,22 +581,22 @@ sint32 mc_load_state_update(void)
         if ((sint16)load_result != 0)
         {
             menu_update_flag_index(3, 1);
-            w_u8(0x800E0588u, 0u);
+            game_selection.flags = (uint16)((game_selection.flags & 0xFF00u) | (uint8)(0u));
             if ((sint16)mc_probe(card, 0x80081DE4u) != 0 || (sint16)mc_probe(card, 0x80081DFCu) != 0 || (sint16)mc_probe(card, 0x80081E14u) != 0)
             {
-                if ((r_u8(0x800E0588u) & 0x20u) != 0u)
-                    w_u8(0x800E0588u, (uint8)(r_u8(0x800E0588u) - 32u));
-                w_u16(0x800B6AFAu, 3u);
-                w_u8(0x800E0588u, (uint8)(r_u8(0x800E0588u) + 32u));
+                if (((uint8)game_selection.flags & 0x20u) != 0u)
+                    game_selection.flags = (uint16)((game_selection.flags & 0xFF00u) | (uint8)((uint8)((uint8)game_selection.flags - 32u)));
+                menu_state.sound = 3u;
+                game_selection.flags = (uint16)((game_selection.flags & 0xFF00u) | (uint8)((uint8)((uint8)game_selection.flags + 32u)));
             }
-            else if ((r_u8(0x800E0588u) & 0x20u) != 0u)
-                w_u8(0x800E0588u, (uint8)(r_u8(0x800E0588u) - 32u));
+            else if (((uint8)game_selection.flags & 0x20u) != 0u)
+                game_selection.flags = (uint16)((game_selection.flags & 0xFF00u) | (uint8)((uint8)((uint8)game_selection.flags - 32u)));
             menu_tex_refresh_if_needed();
-            if (old_language != r_u8(0x800E05B7u))
+            if (old_language != menu_state.language)
                 menu_fn_80050440(24, 0);
-            w_u16(0x80083494u, r_u16(0x800E05CEu));
-            w_u16(0x80083490u, r_u16(0x800E05D0u));
-            voice_set_volume(7, (sint32)((uint32)(sint32)(sint16)r_u16(0x800E05CEu) << 8));
+            w_u16(0x80083494u, sound_options.music);
+            w_u16(0x80083490u, sound_options.effects);
+            voice_set_volume(7, (sint32)((uint32)(sint32)(sint16)sound_options.music << 8));
             vehicle_racer_count = (uint32)(8u);
             vehicle_leader_count = (uint16)(8u);
             vehicle_trailer_count = (uint16)(0u);

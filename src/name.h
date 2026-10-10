@@ -64,7 +64,7 @@ char *name_player_text(uint32 slot);
 void name_reset_players(void);
 uint8 *name_save_byte(uint32 offset);
 
-sint32 name_apply_player_name_cheats(void);
+void name_apply_player_name_cheats(void);
 sint32 name_refresh_menu_text(void);
 sint32 name_player_name_matches(sint16 index, uint32 value);
 sint32 name_copy_player_name_bytes(uint16 index, char *output);

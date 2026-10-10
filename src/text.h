@@ -27,7 +27,7 @@ extern sint16 text_menu_count;
 extern sint16 text_hud_count;
 char *text_bind(uint32 address);
 void text_reset(void);
-void text_load_menu(uint32 descriptors, uint32 strings, size_t count);
+void text_load_menu(const uint8 *descs, char *strings, size_t count);
 
 enum
 {

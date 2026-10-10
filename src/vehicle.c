@@ -1,7 +1,9 @@
+#include "game.h"
 #include "camera.h"
 #include "input.h"
 #include "pickup.h"
 #include "ai.h"
+#include "scene.h"
 #include "profile.h"
 #include "race_events.h"
 #include "replay.h"
@@ -15,6 +17,9 @@
 #include "xport_trace.h"
 #include <stdlib.h>
 #include <string.h>
+
+// Base upgrade levels from MAIN.EXE 80093584
+const uint8 vehicle_base_levels[9] = {2, 1, 1, 4, 3, 3, 5, 5, 5};
 
 BOAT vehicle_boats[16];
 uint32 vehicle_racer_count;
@@ -76,8 +81,7 @@ static sint32 vehicle_mac_shift12(sint64 value)
 
 sint32 vehicle_steer_edge(BOAT *boat)
 {
-    uint32 table = r_u32(0x800B6B80u);
-    uint32 object = r_u32(table + (uint32)r_u16((uint32)boat->contacts.points[0].object) * 4u);
+    const ROUTE_SEGMENT *seg = boat->contacts.points[0].seg->next.seg;
     sint32 vertex;
     sint32 first_vertex;
     sint32 second_vertex;
@@ -85,19 +89,19 @@ sint32 vehicle_steer_edge(BOAT *boat)
     sint32 current_angle;
     sint32 target_angle;
     sint32 difference;
-    uint32 cursor;
+    const uint8 *cmd;
 
     FUNCTION_MARKER(0x80022CE8u, "MAIN.EXE");
-    object = r_u32(table + (uint32)r_u16(object) * 4u);
-    vertex = r_u8(object + 14u) >> 4;
+    seg = seg->next.seg;
+    vertex = seg->join[0];
     first_vertex = vertex;
     second_vertex = vertex;
-    if ((r_u8(object + 16u) & 0x0Cu) == 0x0Cu)
+    if ((seg->commands[0] & 0x0Cu) == 0x0Cu)
         return 12;
-    cursor = object;
+    cmd = seg->commands;
     do
     {
-        uint8 type = r_u8(cursor + 16u) & 3u;
+        uint8 type = *cmd & 3u;
 
         if (type == 0u)
         {
@@ -109,12 +113,12 @@ sint32 vehicle_steer_edge(BOAT *boat)
                 found = 1;
             }
         }
-        ++cursor;
+        ++cmd;
         if (type != 2u)
             ++vertex;
-    } while ((r_u8(cursor + 16u) & 0x0Cu) != 0x0Cu);
+    } while ((*cmd & 0x0Cu) != 0x0Cu);
     current_angle = ratan2((sint16)(uint16)boat->motion.transform.pose.m[0][2], (sint16)(uint16)boat->motion.transform.pose.m[2][2]);
-    target_angle = ratan2(8 * ((sint32)r_u8(object + (uint32)second_vertex * 14u + 30u) + (sint32)r_u8(object + (uint32)first_vertex * 14u + 30u)) + (sint16)r_u16(object + 8u) - (sint32)(uint32)boat->contacts.points[0].position[0], 8 * ((sint32)r_u8(object + (uint32)second_vertex * 14u + 32u) + (sint32)r_u8(object + (uint32)first_vertex * 14u + 32u)) + (sint16)r_u16(object + 12u) - (sint32)(uint32)boat->contacts.points[0].position[2]);
+    target_angle = ratan2(8 * ((sint32)seg->vertices[second_vertex].position[0] + (sint32)seg->vertices[first_vertex].position[0]) + seg->origin[0] - (sint32)(uint32)boat->contacts.points[0].position[0], 8 * ((sint32)seg->vertices[second_vertex].position[2] + (sint32)seg->vertices[first_vertex].position[2]) + seg->origin[2] - (sint32)(uint32)boat->contacts.points[0].position[2]);
     difference = current_angle - target_angle % 4096;
     if (difference >= 2049)
         difference -= 4096;
@@ -145,7 +149,7 @@ sint32 vehicle_config_feature_desc(BOAT_SETUP *output, sint32 index, sint32 mode
     else
     {
         vehicle_default_choice[3] = 2u;
-        vehicle_default_choice[0] = r_u8(0x80093584u + 4u * (uint32)index);
+        vehicle_default_choice[0] = vehicle_base_levels[index];
         source = vehicle_default_choice;
     }
     output->mass = 1000u;
@@ -168,7 +172,7 @@ sint32 vehicle_config_feature_desc(BOAT_SETUP *output, sint32 index, sint32 mode
     output->model_index = value;
     output->propellers = value == 2u || value - 4u < 2u ? 2u : 1u;
     output->grid_index = (uint32)index;
-    flags = r_u16(0x800E0588u);
+    flags = game_selection.flags;
     if ((flags & 4u) != 0u)
         result = 5;
     else if ((flags & 8u) != 0u)
@@ -207,7 +211,7 @@ static void vehicle_init_contact_samples(BOAT_CONTACTS *contacts, sint32 height)
     }
 }
 
-sint32 vehicle_init(BOAT *boat, sint16 segment, sint16 entry, sint32 driver, uint32 settings)
+sint32 vehicle_init(BOAT *boat, sint16 segment, sint16 entry, sint32 driver, sint32 cfg_idx)
 {
     const BOAT_SETUP *setup = &boat->setup;
     sint32 index;
@@ -246,7 +250,7 @@ sint32 vehicle_init(BOAT *boat, sint16 segment, sint16 entry, sint32 driver, uin
     boat->control.pitch_target = (sint32)(0u);
     boat->control.pitch = (sint32)(0u);
     if (segment > 0)
-        boat->race.progress = (sint32)((uint32)segment - r_u32(0x800B6A98u));
+        boat->race.progress = (sint32)((uint32)segment - route_resources.count);
     else
         boat->race.progress = (sint32)(0u);
     boat->race.progress_step = (sint32)(0u);
@@ -287,14 +291,12 @@ sint32 vehicle_init(BOAT *boat, sint16 segment, sint16 entry, sint32 driver, uin
     }
     else
     {
-        uint32 route_table;
 
-        route_contact_init(&boat->contacts.points[0], segment, entry);
+        route_contact_init(&boat->contacts.points[0], route_resources.segments[(uint32)(sint32)segment], entry);
         position[0] = boat->contacts.points[0].position[0];
         position[1] = boat->contacts.points[0].position[1];
         position[2] = boat->contacts.points[0].position[2];
-        route_table = r_u32(0x800B6B80u);
-        route_calc_boundary_direction(r_u32(route_table + (uint32)(sint32)segment * 4u), &rotation.vector);
+        route_calc_boundary_dir(route_resources.segments[(uint32)(sint32)segment], &rotation.vector);
         rotation.halfwords[1] = (sint16)((1024 - ratan2(rotation.vector.vz, rotation.vector.vx)) & 0xFFF);
         rotation.halfwords[2] = 0;
         rotation.halfwords[0] = 0;
@@ -323,14 +325,14 @@ sint32 vehicle_init(BOAT *boat, sint16 segment, sint16 entry, sint32 driver, uin
                 diagonal[2] = (sint16)(uint16)boat->contacts.speeds[index - 1];
             }
             terrain_init_contact(wheel);
-            terrain_update_contact(wheel, diagonal, (sint16)r_u16(r_u32(0x8008349Cu) + 4u));
+            terrain_update_contact(wheel, diagonal, scene_horizon->ground);
         }
     }
     else
         vehicle_update_route(boat);
     trail_init(boat);
     if (driver == 0)
-        ai_init_race(boat, segment, settings);
+        ai_init_race(boat, segment, cfg_idx);
     result = (uint16)boat->contacts.points[0].left;
     boat->route.target_lane = (uint16)(result);
     return result;
@@ -343,8 +345,6 @@ sint32 vehicle_init_slots(void)
     sint16 even_entry;
     sint16 odd_entry;
     sint32 player = 15;
-    uint32 mode_address = 0x800E0BBCu;
-    uint32 vehicle_address = 0x800E0BB8u;
     BOAT_SETUP *setup;
     uint32 accepted_index = 1u;
     sint32 result = 0;
@@ -352,25 +352,24 @@ sint32 vehicle_init_slots(void)
 
     FUNCTION_MARKER(0x80023460u, "MAIN.EXE");
     if (r_u32(0x80083484u) == 8u)
-        w_u32(0x800F3FDCu, 0u);
+    {
+        route_boundaries.count = 0u;
+        route_boundaries.entries[0].seg = NULL;
+    }
     else
-        route_build_boundary_vec();
+        route_build_boundaries(&route_resources, &route_boundaries);
     if (r_u32(0x80083484u) == 4u)
         replay_init();
 
     profile = profile_current();
     if (r_u32(0x80083484u) == 5u)
-        segment = (sint16)r_u16(r_u32(r_u32(0x8008349Cu) + 144u) + 6u);
-    else if ((sint16)r_u16(0x800E05D6u) == 2)
-        segment = (sint32)(r_u32(0x800B6A98u) - 1u);
+        segment = scene_start->attract_seg;
+    else if ((sint16)race_selection.format == 2)
+        segment = (sint32)(route_resources.count - 1u);
     else
     {
-        uint32 descriptor = r_u32(0x8008349Cu);
-        sint32 offset;
-
-        descriptor = r_u32(descriptor + 144u);
-        offset = (sint16)r_u16(descriptor + 4u);
-        segment = (sint32)(r_u32(0x800B6A98u) - (uint32)offset);
+        sint32 offset = scene_start->grid_offset;
+        segment = (sint32)(route_resources.count - (uint32)offset);
     }
     mode = r_u32(0x800834A0u);
     vehicle_racer_count = (uint32)(0u);
@@ -381,23 +380,24 @@ sint32 vehicle_init_slots(void)
     while (player >= 0)
     {
         BOAT *boat = &vehicle_boats[player];
+        const RACE_PARTICIPANT *participant = &race_participants[player];
         sint32 object_mode;
         sint32 accepted = -1;
         sint16 entry = (player & 1) != 0 ? odd_entry : even_entry;
-        uint8 vehicle = r_u8(vehicle_address);
+        uint8 vehicle = participant->boat;
 
         setup = &boat->setup;
-        vehicle_config_feature_desc(setup, vehicle, (sint32)r_u32(mode_address));
-        object_mode = (sint32)r_u32(mode_address);
+        vehicle_config_feature_desc(setup, vehicle, (sint32)participant->mode);
+        object_mode = (sint32)participant->mode;
         if (object_mode == 1)
         {
             sint32 slot = (sint16)vehicle_leader_count;
 
-            vehicle = r_u8(vehicle_address);
+            vehicle = participant->boat;
             *(vehicle_leaders + (slot)) = boat;
             slot = vehicle_leader_count + 1u;
             vehicle_leader_count = (uint16)((uint16)slot);
-            result = vehicle_init(boat, (sint16)segment, entry, 0, 0x800895F0u + 32u * vehicle);
+            result = vehicle_init(boat, (sint16)segment, entry, 0, vehicle);
             accepted = 5;
         }
         else if (object_mode == 0)
@@ -406,8 +406,8 @@ sint32 vehicle_init_slots(void)
 
             if (r_u32(0x80083484u) == 5u && player == 0)
                 vehicle_players[0] = boat;
-            vehicle = r_u8(vehicle_address);
-            vehicle_init(boat, (sint16)segment, entry, 0, 0x800895F0u + 32u * vehicle);
+            vehicle = participant->boat;
+            vehicle_init(boat, (sint16)segment, entry, 0, vehicle);
             count = vehicle_racer_count;
             *(vehicle_racers + (count)) = boat;
             count = vehicle_racer_count + 1u;
@@ -417,7 +417,6 @@ sint32 vehicle_init_slots(void)
         }
         else if (object_mode == 2 || object_mode == 3)
         {
-            uint32 descriptor;
             uint32 count;
             sint32 adjusted;
 
@@ -425,24 +424,20 @@ sint32 vehicle_init_slots(void)
             {
                 mode = r_u32(0x80083478u);
                 vehicle_players[0] = boat;
-                vehicle = r_u8(vehicle_address);
-                descriptor = r_u32(0x8008349Cu);
-                descriptor = r_u32(descriptor + 144u);
+                vehicle = participant->boat;
                 if (mode == 1u)
                 {
-                    segment = (sint32)((uint32)segment - (uint32)(sint32)(sint16)r_u16(descriptor));
+                    segment = (sint32)((uint32)segment - (uint32)(sint32)scene_start->gap);
                     adjusted = segment;
                 }
                 else
-                    adjusted = (sint16)((uint32)segment - r_u16(descriptor));
+                    adjusted = (sint16)((uint32)segment - (uint16)scene_start->gap);
             }
             else
             {
-                descriptor = r_u32(0x8008349Cu);
                 vehicle_players[1] = boat;
-                descriptor = r_u32(descriptor + 144u);
-                vehicle = r_u8(vehicle_address);
-                adjusted = (sint16)((uint32)segment - r_u16(descriptor));
+                vehicle = participant->boat;
+                adjusted = (sint16)((uint32)segment - (uint16)scene_start->gap);
             }
             vehicle_init(boat, (sint16)adjusted, object_mode == 2 ? entry : even_entry, object_mode, 0u);
             result = profile_get_table_byte(profile, vehicle, 0);
@@ -460,21 +455,16 @@ sint32 vehicle_init_slots(void)
             mode = r_u32(0x80083478u);
             if (mode == 1u)
             {
-                result = (sint32)r_u32(mode_address);
+                result = (sint32)participant->mode;
                 if ((uint32)result != mode)
                 {
-                    uint32 descriptor = r_u32(0x8008349Cu);
-
-                    descriptor = r_u32(descriptor + 144u);
-                    result = (sint16)r_u16(descriptor);
+                    result = scene_start->gap;
                     segment = (sint32)((uint32)segment - (uint32)result);
                 }
             }
             boat->menu.racer_num = (uint8)accepted_index;
             ++accepted_index;
         }
-        mode_address -= 8u;
-        vehicle_address -= 8u;
         --player;
     }
     return result;
@@ -584,7 +574,7 @@ sint32 vehicle_input(BOAT *boat, uint32 context)
         switch (camera_for_view(context)->mode)
         {
             case 1:
-                camera_for_view(context)->mode = (r_u32(0x800E0588u) & 12u) == 0u ? 2u : 3u;
+                camera_for_view(context)->mode = (((uint32)game_selection.flags | ((uint32)game_selection.ready << 16) | ((uint32)game_selection.event << 24)) & 12u) == 0u ? 2u : 3u;
                 break;
             case 2:
                 camera_for_view(context)->mode = 3u;
@@ -625,7 +615,7 @@ sint32 vehicle_input(BOAT *boat, uint32 context)
         boat->control.steering = (sint32)((uint32)-512);
     if ((sint32)(uint32)boat->control.steering > 512)
         boat->control.steering = (sint32)(512u);
-    if (acceleration != 0 && (uint32)boat->control.mode == 0u && (r_u8(stage + 592u) != 0u || (r_u32(0x800E0588u) & 0x40u) != 0u))
+    if (acceleration != 0 && (uint32)boat->control.mode == 0u && (r_u8(stage + 592u) != 0u || (((uint32)game_selection.flags | ((uint32)game_selection.ready << 16) | ((uint32)game_selection.event << 24)) & 0x40u) != 0u))
     {
         sound_queue_command(context, 0, 1, 0);
         if ((global_fn_8006e9d8() & 3) < 2)
@@ -1053,12 +1043,12 @@ sint32 vehicle_control_force(BOAT *boat)
         boat->motion.forces.torque[1] = (sint32)((uint32)value + (uint32)acceleration);
         quat_rotate_y(boat->motion.orientation.rotation, (uint32)rotation);
     }
-    if (r_u8(0x800E0598u) == 0u)
+    if (game_options.no_current == 0u)
         speed = (sint32)((uint32)speed + (uint32)boat->route.speed);
     {
-        const BOAT_SETUP *descriptor = &boat->setup;
+        const BOAT_SETUP *desc = &boat->setup;
         sint32 maximum = (sint32)(uint32)boat->motion.velocity.speed;
-        uint32 table_index = descriptor->engine_class * 8u;
+        uint32 table_index = desc->engine_class * 8u;
         sint32 factor = (sint32)r_u32(0x800843A4u + table_index);
         sint32 base = (sint32)r_u32(0x800843A8u + table_index);
         sint32 divisor;
@@ -1316,41 +1306,7 @@ void vehicle_sum_contacts(BOAT *boat, sint32 reset)
     boat->contacts.force[2] = (sint32)((uint32)gte_state.mac[2]);
 }
 
-void vehicle_sample_boundary(BOAT *boat)
-{
-    const sint32 slots[3] = {1, 3, 4};
-    BOAT_CONTACTS *contacts = &boat->contacts;
-    sint32 current = contacts->boundary_section;
-    sint32 previous = (sint32)((uint32)current - 1u);
-    sint32 next = (sint32)((uint32)current + 1u);
-    uint32 descriptor = 0x800F3FD8u + (uint32)current * 32u;
-    uint32 cursor = descriptor;
-    SVECTOR transformed;
 
-    FUNCTION_MARKER(0x80026DC0u, "MAIN.EXE");
-    if (boat->control.driver - 2u >= 2u)
-        return;
-    SetRotMatrix(&boat->motion.transform.pose);
-    SetTransMatrix(&boat->motion.transform.pose);
-    for (sint32 index = 0; index < 3; ++index)
-        RotTransSV(&contacts->points[slots[index]].sample, &transformed, NULL);
-    if (r_u32(descriptor + 4u) == 0u)
-        return;
-    if (previous < 0)
-    {
-        do
-        {
-            cursor += 32u;
-            ++previous;
-        } while (r_u32(cursor + 4u) != 0u);
-    }
-    if (r_u32(cursor + 36u) == 0u)
-        next = 0;
-    route_sample_boundary(boat->motion.position, 0x800F3FD8u + (uint32)previous * 32u);
-    route_sample_boundary(boat->motion.position, descriptor);
-    route_sample_boundary(boat->motion.position, 0x800F3FD8u + (uint32)next * 32u);
-    // Original equal stack-pointer returns exclude every correction path
-}
 
 static sint32 vehicle_solve_contact_points(BOAT *boat, const ROUTE_CONTACT *const contacts[3], sint32 count)
 {
@@ -1533,9 +1489,9 @@ sint32 vehicle_contact_force(BOAT *boat, const ROUTE_CONTACT *control, sint32 *a
     sint32 transformed_y;
     sint32 transformed_z;
     sint32 projection;
-    sint32 projected_x;
-    sint32 projected_y;
-    sint32 projected_z;
+    sint32 proj_x;
+    sint32 proj_y;
+    sint32 proj_z;
     sint32 force[3];
     sint16 axis[3];
     sint32 result;
@@ -1575,7 +1531,7 @@ sint32 vehicle_contact_force(BOAT *boat, const ROUTE_CONTACT *control, sint32 *a
         SVECTOR input;
         SVECTOR transformed_ir;
         SVECTOR residual;
-        SVECTOR projected_ir;
+        SVECTOR proj_ir;
         VECTOR output;
         VECTOR blended;
         PsxGteSnapshot gte_state;
@@ -1604,19 +1560,19 @@ sint32 vehicle_contact_force(BOAT *boat, const ROUTE_CONTACT *control, sint32 *a
         projection = (sint32)((uint32)math_mul_lo_s32(raw_x, transformed_x) + (uint32)math_mul_lo_s32(raw_y, transformed_y) + (uint32)math_mul_lo_s32(raw_z, transformed_z)) / 4096;
         gte_gpf12(&transformed_ir, projection, &output);
         psx_gte_snapshot(&gte_state);
-        projected_x = gte_state.mac[0];
-        projected_y = gte_state.mac[1];
-        projected_z = gte_state.mac[2];
-        residual.vx = (sint16)((uint32)raw_x - (uint32)projected_x);
-        residual.vy = (sint16)((uint32)raw_y - (uint32)projected_y);
-        residual.vz = (sint16)((uint32)raw_z - (uint32)projected_z);
+        proj_x = gte_state.mac[0];
+        proj_y = gte_state.mac[1];
+        proj_z = gte_state.mac[2];
+        residual.vx = (sint16)((uint32)raw_x - (uint32)proj_x);
+        residual.vy = (sint16)((uint32)raw_y - (uint32)proj_y);
+        residual.vz = (sint16)((uint32)raw_z - (uint32)proj_z);
         residual.pad = 0;
         gte_gpf0(&residual, 500, &blended);
-        projected_ir.vx = (sint16)projected_x;
-        projected_ir.vy = (sint16)projected_y;
-        projected_ir.vz = (sint16)projected_z;
-        projected_ir.pad = 0;
-        gte_gpl0(&projected_ir, 50, &blended);
+        proj_ir.vx = (sint16)proj_x;
+        proj_ir.vy = (sint16)proj_y;
+        proj_ir.vz = (sint16)proj_z;
+        proj_ir.pad = 0;
+        gte_gpl0(&proj_ir, 50, &blended);
         force[0] = blended.vx;
         force[1] = blended.vy;
         force[2] = blended.vz;
@@ -1701,14 +1657,14 @@ sint32 vehicle_update_terrain(BOAT *boat, sint32 reset)
     else
     {
         sint16 diagonal[3] = {pose->m[0][2], pose->m[1][2], pose->m[2][2]};
-        sint32 ground = (sint16)r_u16(r_u32(0x8008349Cu) + 4u);
-        uint32 record = (uint32)boat->contacts.points[0].object;
+        sint32 ground = scene_horizon->ground;
+        ROUTE_SEGMENT *record = boat->contacts.points[0].seg;
         boat->race.progress = (sint32)((uint32)boat->race.progress + (uint32)terrain_update_contact(&boat->contacts.points[0], diagonal, ground));
         terrain_update_contact(&boat->contacts.points[1], diagonal, ground);
         terrain_update_contact(&boat->contacts.points[3], diagonal, ground);
         terrain_update_contact(&boat->contacts.points[4], diagonal, ground);
         vehicle_sum_contacts(boat, 0);
-        boat->route.segment = (uint16)(r_u16(record) == 0u ? r_u16(record + 2u) + 1u : r_u16(record) - 1u);
+        boat->route.segment = (uint16)(record->next.idx == 0u ? record->prev.idx + 1u : record->next.idx - 1u);
         vehicle_contact_force(boat, &boat->contacts.points[1], NULL);
         vehicle_contact_force(boat, &boat->contacts.points[3], NULL);
         vehicle_contact_force(boat, &boat->contacts.points[4], NULL);
@@ -1748,7 +1704,7 @@ sint32 vehicle_update_route(BOAT *boat)
 
         if (index == 2)
             continue;
-        boat->contacts.points[index].object = boat->contacts.points[0].object;
+        boat->contacts.points[index].seg = boat->contacts.points[0].seg;
         boat->contacts.points[index].entry = boat->contacts.points[0].entry;
         boat->contacts.points[index].left = boat->contacts.points[0].left;
         boat->contacts.points[index].right = boat->contacts.points[0].right;
@@ -1767,13 +1723,13 @@ sint32 vehicle_update_route(BOAT *boat)
         boat->contacts.points[index].delta[2] = (sint32)delta_z;
     }
     {
-        uint32 list = (uint32)boat->contacts.points[0].object;
-        uint16 first = r_u16(list);
+        ROUTE_SEGMENT *list = boat->contacts.points[0].seg;
+        uint16 first = list->next.idx;
 
         if (first == 0u)
-            first = (uint16)(r_u16(list + 2u) + 1u);
+            first = (uint16)(list->prev.idx + 1u);
         else
-            first = (uint16)(r_u16(list) - 1u);
+            first = (uint16)(list->next.idx - 1u);
         boat->route.segment = (uint16)(first);
     }
     return result;
@@ -1872,15 +1828,15 @@ sint32 race_update_racers(sint32 argument)
         }
         else if (phase == 1)
         {
-            uint32 record = (uint32)boat->contacts.points[0].object;
+            ROUTE_SEGMENT *record = boat->contacts.points[0].seg;
             sint32 progress;
 
             SetRotMatrix(&boat->motion.transform.pose);
             SetTransMatrix(&boat->motion.transform.pose);
             progress = route_contact_update(&boat->contacts.points[0]);
             boat->race.progress = (sint32)((uint32)boat->race.progress + (uint32)progress);
-            record = (uint32)boat->contacts.points[0].object;
-            boat->route.segment = (uint16)((sint32)r_u16(record) - 1 < 0 ? r_u16(record + 2u) + 1u : r_u16(record) - 1u);
+            record = boat->contacts.points[0].seg;
+            boat->route.segment = (uint16)((sint32)record->next.idx - 1 < 0 ? record->prev.idx + 1u : record->next.idx - 1u);
             if ((sint16)(uint16)boat->race.mode == 7)
             {
                 boat->contacts.points[4].delta[0] = (sint32)((uint32)boat->contacts.points[0].delta[0]);
@@ -1895,7 +1851,7 @@ sint32 race_update_racers(sint32 argument)
                 boat->contacts.points[3].height = (sint32)((uint32)boat->contacts.points[0].height);
                 boat->contacts.points[4].surface = (uint32)((uint32)boat->contacts.points[0].surface);
                 boat->contacts.points[3].surface = (uint32)((uint32)boat->contacts.points[0].surface);
-                route_aim(boat);
+                route_aim(boat, boat->contacts.points[0].seg);
                 vehicle_update_matrix(boat);
                 boat->motion.velocity.vector[0] = (sint32)((uint32)(math_mul_lo_s32((sint32)(uint32)boat->route_target.vector[0], (sint32)(uint32)boat->route.speed) >> 12));
                 boat->motion.velocity.vector[1] = (sint32)(0u);
@@ -1903,7 +1859,7 @@ sint32 race_update_racers(sint32 argument)
             }
             else
             {
-                route_advance_target(&boat->route);
+                route_advance_target(&boat->route, &route_resources);
                 ai_choose_route_target(boat);
                 if (motion_horizontal_locked == 0u)
                     vehicle_update_matrix(boat);
@@ -1932,7 +1888,7 @@ sint32 race_update_racers(sint32 argument)
         }
     }
     for (index = 0; index < deferred_count; ++index)
-        vehicle_sample_boundary(deferred[index]);
+        vehicle_sample_boundary(deferred[index], &route_boundaries);
     for (index = 0; index < deferred_count; ++index)
         vehicle_update_route(deferred[index]);
     for (index = 0; index < deferred_count; ++index)
@@ -1969,10 +1925,10 @@ sint32 race_update_racers(sint32 argument)
                 boat->race.mode = (uint16)(4u);
             }
             pickup_scan(boat);
-            route_advance_target(route);
-            route_init_steps(boat);
-            route_update_speed_ctrl(vehicle_player(reference_entry), boat);
-            route_select_direction_vec(boat);
+            route_advance_target(route, &route_resources);
+            route_init_steps(boat, boat->contacts.points[0].seg);
+            route_update_speed_ctrl(vehicle_player(reference_entry), boat, r_u32(0x80083484u));
+            route_select_dir(boat, &route_resources);
             if (motion_horizontal_locked == 0u)
             {
                 vehicle_update_steering_force(boat);
@@ -2057,7 +2013,7 @@ sint32 race_update_racers(sint32 argument)
         if (state == 6)
             ai_random_mode(boat);
         else if (state == 5)
-            route_init_lookahead(boat);
+            route_init_lookahead(boat, boat->contacts.points[0].seg, route_resources.count);
     }
     if (r_u32(0x80083484u) == 4u)
     {
@@ -2117,7 +2073,7 @@ sint32 vehicle_init_motion(BOAT *boat)
         ROUTE_CONTACT *target = &boat->contacts.points[index];
         if (index == 2)
             continue;
-        target->object = boat->contacts.points[0].object;
+        target->seg = boat->contacts.points[0].seg;
         target->entry = boat->contacts.points[0].entry;
         target->left = boat->contacts.points[0].left;
         target->right = boat->contacts.points[0].right;
@@ -2210,10 +2166,9 @@ sint32 vehicle_update_steering_force(BOAT *boat)
 {
     BOAT_ROUTE_TARGET *force = &boat->route_target;
     BOAT_ROUTE_STATE *control = &boat->route;
-    uint32 offset = control->settings;
+    const AI_ROUTE_CFG *cfg = control->settings;
     uint32 total = (uint32)boat->contacts.points[3].height;
-    uint32 base;
-    uint32 settings;
+    const AI_CONTROL_CFG *settings = scene_control;
     sint32 throttle;
     sint32 target;
     sint32 current;
@@ -2221,8 +2176,6 @@ sint32 vehicle_update_steering_force(BOAT *boat)
 
     FUNCTION_MARKER(0x8002F210u, "MAIN.EXE");
     total += (uint32)boat->contacts.points[4].height;
-    base = r_u32(0x8008349Cu);
-    settings = r_u32(base + 136u);
     if ((sint32)total <= 0)
     {
         force->vector[2] = (sint32)(0u);
@@ -2236,6 +2189,8 @@ sint32 vehicle_update_steering_force(BOAT *boat)
         control->speed = (sint32)((uint32)result);
         return result;
     }
+    if (settings == NULL)
+        abort();
     if ((sint16)(uint16)control->hazard != 8)
     {
         uint16 raw_steering = (uint16)force->vector[1];
@@ -2259,15 +2214,15 @@ sint32 vehicle_update_steering_force(BOAT *boat)
     else
     {
         sint32 control_step = (sint16)(uint16)control->lookahead;
-        uint32 requested_step = r_u8(settings);
+        uint32 requested_step = settings->lookahead;
 
         if (control_step < (sint32)requested_step)
             control->lookahead = (uint16)((uint16)(control_step + 1));
         else if ((sint32)requested_step < control_step)
-            control->lookahead = (uint16)(r_u8(settings));
+            control->lookahead = (uint16)(settings->lookahead);
     }
-    throttle = r_u16(settings + 6u);
-    throttle = (sint32)((uint32)throttle + (uint32)(sint32)(sint16)r_u16(offset));
+    throttle = settings->target_speed;
+    throttle = (sint32)((uint32)throttle + (uint32)(sint32)cfg->speed_offset);
     throttle = (sint32)((uint32)throttle + (uint32)(sint32)(sint16)(uint16)control->speed_adjust);
     if (throttle < 0)
         throttle = 0;
@@ -2287,7 +2242,7 @@ sint32 vehicle_update_steering_force(BOAT *boat)
         control->speed = (sint32)(2560u);
     else
     {
-        uint32 maximum = r_u16(settings + 4u);
+        uint32 maximum = settings->max_speed;
 
         if ((sint32)maximum < current)
             control->speed = (sint32)(maximum);
@@ -2370,7 +2325,6 @@ sint32 vehicle_mark_contacts(BOAT *boat)
 {
     sint32 count = (uint16)boat->race.mode == 4u ? 2 : 1;
     ROUTE_CONTACT *base;
-    uint32 table;
     uint16 phase;
     sint32 index;
 
@@ -2378,20 +2332,19 @@ sint32 vehicle_mark_contacts(BOAT *boat)
     if ((uint16)boat->race.mode == 4u && (sint32)(uint32)boat->motion.velocity.speed < 3000)
         return 1;
     base = &boat->contacts.points[(uint16)boat->race.mode == 4u ? 2 : 0];
-    table = r_u32(0x800B6B80u);
-    phase = r_u16(0x800B3D94u);
+    phase = game_timing.ticks;
     for (index = 0; index < count; ++index, ++base)
     {
         if ((sint32)(uint32)base->height > 0)
         {
-            uint32 object = r_u32(table + (uint32)r_u16(base->object + 2u) * 4u);
+            ROUTE_SEGMENT *seg = base->seg->prev.seg;
             sint32 lane = (sint32)base->right;
-            uint32 vertex = object + (uint32)lane * 14u + 30u;
+            ROUTE_VERTEX *vtx = &seg->vertices[lane];
             uint16 delta;
-            if (lane + 1 < r_u8(object + 7u))
-                vertex += 14u;
-            delta = (uint16)(phase - r_u16(vertex + 10u));
-            w_u16(vertex + 10u, delta < 129u ? r_u16(vertex + 10u) : delta < 257u ? (uint16)(2u * phase - r_u16(vertex + 10u) - 256u) : phase);
+            if (lane + 1 < seg->vertex_count)
+                ++vtx;
+            delta = (uint16)(phase - vtx->impact_tick);
+            vtx->impact_tick = delta < 129u ? vtx->impact_tick : delta < 257u ? (uint16)(2u * phase - vtx->impact_tick - 256u) : phase;
         }
     }
     {

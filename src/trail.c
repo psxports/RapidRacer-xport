@@ -1,3 +1,4 @@
+#include "game.h"
 #include "trail.h"
 #include "global.h"
 #include "motion.h"
@@ -7,30 +8,45 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Marker texture owner from MAIN.EXE 800CA410
+typedef struct
+{
+    uint8 u0, v0;
+    uint16 clut;
+    uint8 u1, v1;
+    uint16 tpage;
+    uint8 u2, v2;
+    uint16 pad1;
+    uint8 u3, v3;
+    uint16 pad2;
+} TRAIL_QUAD_TEXTURE;
+
+static TRAIL_QUAD_TEXTURE trail_marker_textures[5];
+// Flare texture owner from MAIN.EXE 800CA460
+static TRAIL_QUAD_TEXTURE trail_flare_textures[8];
+// Immutable flare origins from MAIN.EXE 80089948
+static const SVECTOR trail_flare_origins[6] = {{2867, 0, 0, 0}, {11, 14, 7, 0}, {9, 13, 7, 0}, {13, 15, 7, 0}, {11, 14, 7, 0}, {13, 15, 7, 0}};
+
 sint32 trail_init_quad_templates5(void)
 {
     sint32 value = 328;
-    uint32 offset;
+    uint32 index;
 
     FUNCTION_MARKER(0x80030998u, "MAIN.EXE");
-    for (offset = 0u; offset < 80u; offset += 16u, value += 20)
+    for (index = 0; index < 5; ++index, value += 20)
     {
-        uint32 entry = 0x800CA410u + offset;
-        w_u8(entry + 1u, (uint8)value);
-        w_u8(entry + 5u, (uint8)value);
-        w_u16(entry + 6u, (uint16)(((value & 0x100) >> 4) | 0x2C | (4 * (value & 0x200))));
-        w_u16(entry + 2u, 31921u);
-        w_u8(entry, 0u);
-        w_u8(entry + 4u, 43u);
-        w_u8(entry + 8u, 0u);
-        w_u8(entry + 9u, (uint8)(value + 19));
-        w_u8(entry + 12u, 43u);
-        w_u8(entry + 13u, (uint8)(value + 19));
+        TRAIL_QUAD_TEXTURE *texture = &trail_marker_textures[index];
+        texture->v0 = texture->v1 = (uint8)value;
+        texture->tpage = (uint16)(((value & 0x100) >> 4) | 0x2C | (4 * (value & 0x200)));
+        texture->clut = 31921u;
+        texture->u0 = texture->u2 = 0;
+        texture->u1 = texture->u3 = 43;
+        texture->v2 = texture->v3 = (uint8)(value + 19);
     }
     return 0;
 }
 
-sint32 trail_render_marker(BOAT *boat, uint32 ordering_table)
+sint32 trail_render_marker(BOAT *boat, uint32 *ot)
 {
     sint32 mode = (sint32)(uint32)boat->control.driver;
     sint32 variant;
@@ -38,8 +54,9 @@ sint32 trail_render_marker(BOAT *boat, uint32 ordering_table)
     sint32 depth;
     sint32 flags;
     sint32 vertical;
-    uint32 packet;
-    uint32 source;
+    uint32 offset;
+    POLY_FT4 *packet;
+    const TRAIL_QUAD_TEXTURE *texture;
     SVECTOR point;
 
     FUNCTION_MARKER(0x80030A60u, "MAIN.EXE");
@@ -47,25 +64,33 @@ sint32 trail_render_marker(BOAT *boat, uint32 ordering_table)
         return mode;
     variant = mode == 2 ? 0 : 1;
     point.vx = (sint16)(uint16)boat->motion.position[0];
-    point.vy = (sint16)(uint16)boat->motion.position[1] + 100;
+    point.vy = (sint16)(uint16)((uint32)boat->motion.position[1] + 100u);
     point.vz = (sint16)(uint16)boat->motion.position[2];
     point.pad = 0;
-    packet = r_u32(0x800B6C00u) & 0xFFFFFFu;
+    offset = render_packet_offset();
+    packet = render_packet_at(offset, sizeof(*packet));
     depth = gte_project(&point, &screen, &flags);
     vertical = r_u32(0x80083478u) == 2u ? 10 : 20;
-    w_u32(packet + 8u, (uint32)(((uint32)(uint16)((sint16)(screen >> 16) - 2 * vertical)) << 16) | (uint16)((sint16)screen - 22));
-    w_u32(packet + 16u, (uint32)(((uint32)(uint16)((sint16)(screen >> 16) - 2 * vertical)) << 16) | (uint16)((sint16)screen + 22));
-    w_u32(packet + 24u, (uint32)((uint32)(uint16)(screen >> 16) << 16) | (uint16)((sint16)screen - 22));
-    w_u32(packet + 32u, (uint32)((uint32)(uint16)(screen >> 16) << 16) | (uint16)((sint16)screen + 22));
-    w_u32(packet + 4u, 0x2C808080u);
-    source = 0x800CA410u + (uint32)variant * 16u;
-    w_u32(packet + 12u, r_u32(source));
-    w_u32(packet + 20u, r_u32(source + 4u));
-    w_u16(packet + 28u, r_u16(source + 8u));
-    w_u16(packet + 36u, r_u16(source + 12u));
-    w_u32(packet, r_u32(ordering_table) | 0x09000000u);
-    w_u32(ordering_table, packet);
-    w_u32(0x800B6C00u, packet + 40u);
+    packet->x0 = packet->x2 = (sint16)(uint16)((uint32)(uint16)screen - 22u);
+    packet->x1 = packet->x3 = (sint16)(uint16)((uint32)(uint16)screen + 22u);
+    packet->y0 = packet->y1 = (sint16)(uint16)(((uint32)screen >> 16) - 2u * (uint32)vertical);
+    packet->y2 = packet->y3 = (sint16)(uint16)((uint32)screen >> 16);
+    packet->code = 0x2C;
+    packet->r0 = packet->g0 = packet->b0 = 128;
+    texture = &trail_marker_textures[variant];
+    packet->u0 = texture->u0;
+    packet->v0 = texture->v0;
+    packet->clut = texture->clut;
+    packet->u1 = texture->u1;
+    packet->v1 = texture->v1;
+    packet->tpage = texture->tpage;
+    packet->u2 = texture->u2;
+    packet->v2 = texture->v2;
+    packet->u3 = texture->u3;
+    packet->v3 = texture->v3;
+    packet->tag = *ot | 0x09000000u;
+    AddPrim(ot, packet);
+    render_packet_publish(offset + sizeof(*packet));
     return depth;
 }
 
@@ -324,7 +349,7 @@ sint32 trail_emit(BOAT *boat)
     particle = geometry_state->spray_order[4];
     for (index = 3; index >= 0; --index)
     {
-        TRAIL_SPRAY *descriptor = geometry_state->spray_order[index];
+        TRAIL_SPRAY *desc = geometry_state->spray_order[index];
         uint16 x;
         uint16 y;
         uint16 z;
@@ -332,19 +357,19 @@ sint32 trail_emit(BOAT *boat)
         uint16 dy;
         uint16 dz;
 
-        geometry_state->spray_order[index + 1] = descriptor;
-        x = (uint16)descriptor->fade;
-        dx = (uint16)descriptor->fade_step;
-        descriptor->fade = (uint16)((uint16)(x + dx));
-        x = (uint16)descriptor->position.vx;
-        dx = (uint16)descriptor->velocity[0];
-        dy = (uint16)descriptor->velocity[1];
-        dz = (uint16)descriptor->velocity[2];
-        descriptor->position.vx = (sint16)((uint16)(x + dx));
-        y = (uint16)descriptor->position.vy;
-        z = (uint16)descriptor->position.vz;
-        descriptor->position.vy = (sint16)((uint16)(y + dy));
-        descriptor->position.vz = (sint16)((uint16)(z + dz));
+        geometry_state->spray_order[index + 1] = desc;
+        x = (uint16)desc->fade;
+        dx = (uint16)desc->fade_step;
+        desc->fade = (uint16)((uint16)(x + dx));
+        x = (uint16)desc->position.vx;
+        dx = (uint16)desc->velocity[0];
+        dy = (uint16)desc->velocity[1];
+        dz = (uint16)desc->velocity[2];
+        desc->position.vx = (sint16)((uint16)(x + dx));
+        y = (uint16)desc->position.vy;
+        z = (uint16)desc->position.vz;
+        desc->position.vy = (sint16)((uint16)(y + dy));
+        desc->position.vz = (sint16)((uint16)(z + dz));
     }
     geometry_state->spray_order[0] = particle;
     matrix = &boat->motion.transform.matrix;
@@ -454,33 +479,31 @@ sint32 trail_emit(BOAT *boat)
     return (sint32)first;
 }
 
-uint32 trail_render(BOAT *boat, uint32 ordering_table, sint32 bucket)
+static uint32 trail_emit_window(uint32 offset, uint32 *link, uint32 rectangle)
+{
+    DR_TWIN *packet = render_packet_at(offset, sizeof(*packet));
+    uint32 x, y, width, height;
+    setlen(packet, 2);
+    x = r_u8(rectangle) >> 3;
+    width = (uint8)(0u - (uint32)(sint16)r_u16(rectangle + 4u)) >> 3;
+    y = r_u8(rectangle + 2u) >> 3;
+    height = (uint8)(0u - (uint32)(sint16)r_u16(rectangle + 6u)) >> 3;
+    packet->code[0] = 0xE2000000u | (y << 15) | (x << 10) | (height << 5) | width;
+    packet->code[1] = 0;
+    AddPrim(link, packet);
+    return offset + sizeof(*packet);
+}
+
+uint32 trail_render(BOAT *boat, uint32 *ot, sint32 bucket)
 {
     BOAT_TRAIL *geometry_state = &boat->trail;
-    uint32 link = ordering_table + (uint32)(bucket - 1) * 4u;
-    uint32 packet = r_u32(0x800B6C00u) & 0xFFFFFFu;
-    uint32 packet_word;
-    uint32 link_word;
-    uint32 draw_x;
-    uint32 draw_y;
-    uint32 draw_width;
-    uint32 draw_height;
+    uint32 *link = ot + (uint32)(bucket - 1);
+    uint32 packet_offset = render_packet_offset();
+    POLY_FT4 *packet;
     sint32 group;
 
     FUNCTION_MARKER(0x80031904u, "MAIN.EXE");
-    w_u8(packet + 3u, 2u);
-    draw_x = r_u8(0x800B3F2Cu) >> 3;
-    draw_width = ((uint32)(uint8)(0u - (uint32)(sint16)r_u16(0x800B3F30u))) >> 3;
-    draw_y = r_u8(0x800B3F2Eu) >> 3;
-    draw_height = ((uint32)(uint8)(0u - (uint32)(sint16)r_u16(0x800B3F32u))) >> 3;
-    w_u32(packet + 4u, 0xE2000000u | (draw_y << 15) | (draw_x << 10) | (draw_height << 5) | draw_width);
-    w_u32(packet + 8u, 0u);
-    packet_word = r_u32(packet);
-    link_word = r_u32(link);
-    w_u32(packet, (packet_word & 0xFF000000u) | (link_word & 0xFFFFFFu));
-    link_word = r_u32(link);
-    w_u32(link, (link_word & 0xFF000000u) | packet);
-    packet += 12u;
+    packet_offset = trail_emit_window(packet_offset, link, 0x800B3F2Cu);
     for (group = 0; group < 2; ++group)
     {
         TRAIL_GROUP *trail = &geometry_state->groups[group];
@@ -566,43 +589,39 @@ uint32 trail_render(BOAT *boat, uint32 ordering_table, sint32 bucket)
                 next_texture = texture + 0x1E00;
             if (segment != 0)
             {
-                w_u16(packet + 22u, 60u);
-                w_u16(packet + 14u, 0x7FF1u);
-                w_u32(packet + 4u, 0x2E404040u);
-                w_u16(packet + 12u, (uint16)texture);
-                w_u32(packet + 8u, (uint32)previous_base);
-                w_u16(packet + 20u, (uint16)(texture | 0x3F));
-                w_u32(packet + 16u, (uint32)previous_offset);
-                w_u16(packet + 28u, (uint16)next_texture);
-                w_u32(packet + 24u, (uint32)base_screen);
-                w_u16(packet + 36u, (uint16)(next_texture | 0x3F));
-                w_u32(packet + 32u, (uint32)offset_screen);
-                link_word = r_u32(link);
-                w_u32(packet, link_word | 0x09000000u);
-                w_u32(link, packet);
-                packet += 40u;
+                packet = render_packet_at(packet_offset, sizeof(*packet));
+                packet->tpage = 60u;
+                packet->clut = 0x7FF1u;
+                packet->code = 0x2E;
+                packet->r0 = packet->g0 = packet->b0 = 64;
+                packet->u0 = (uint8)((uint16)texture);
+                packet->v0 = (uint8)((uint16)((uint16)texture) >> 8);
+                packet->x0 = (sint16)(uint16)((uint32)previous_base);
+                packet->y0 = (sint16)(uint16)((uint32)((uint32)previous_base) >> 16);
+                packet->u1 = (uint8)((uint16)(texture | 0x3F));
+                packet->v1 = (uint8)((uint16)((uint16)(texture | 0x3F)) >> 8);
+                packet->x1 = (sint16)(uint16)((uint32)previous_offset);
+                packet->y1 = (sint16)(uint16)((uint32)((uint32)previous_offset) >> 16);
+                packet->u2 = (uint8)((uint16)next_texture);
+                packet->v2 = (uint8)((uint16)((uint16)next_texture) >> 8);
+                packet->x2 = (sint16)(uint16)((uint32)base_screen);
+                packet->y2 = (sint16)(uint16)((uint32)((uint32)base_screen) >> 16);
+                packet->u3 = (uint8)((uint16)(next_texture | 0x3F));
+                packet->v3 = (uint8)((uint16)((uint16)(next_texture | 0x3F)) >> 8);
+                packet->x3 = (sint16)(uint16)((uint32)offset_screen);
+                packet->y3 = (sint16)(uint16)((uint32)((uint32)offset_screen) >> 16);
+                packet->tag = *link | 0x09000000u;
+                AddPrim(link, packet);
+                packet_offset += sizeof(*packet);
             }
             previous_base = base_screen;
             previous_offset = offset_screen;
             texture = next_texture;
         }
     }
-    w_u8(packet + 3u, 2u);
-    draw_x = r_u8(0x800B3F1Cu) >> 3;
-    draw_width = ((uint32)(uint8)(0u - (uint32)(sint16)r_u16(0x800B3F20u))) >> 3;
-    draw_y = r_u8(0x800B3F1Eu) >> 3;
-    draw_height = ((uint32)(uint8)(0u - (uint32)(sint16)r_u16(0x800B3F22u))) >> 3;
-    w_u32(packet + 4u, 0xE2000000u | (draw_y << 15) | (draw_x << 10) | (draw_height << 5) | draw_width);
-    w_u32(packet + 8u, 0u);
-    packet_word = r_u32(packet);
-    link_word = r_u32(link);
-    w_u32(packet, (packet_word & 0xFF000000u) | (link_word & 0xFFFFFFu));
-    link_word = r_u32(link);
-    link_word = (link_word & 0xFF000000u) | (packet & 0xFFFFFFu);
-    packet += 12u;
-    w_u32(0x800B6C00u, packet);
-    w_u32(link, link_word);
-    return link_word;
+    packet_offset = trail_emit_window(packet_offset, link, 0x800B3F1Cu);
+    render_packet_publish(packet_offset);
+    return *link;
 }
 
 static void trail_shift_point(SVECTOR *point, const uint32 shift[3])
@@ -638,17 +657,15 @@ sint32 trail_rebase(BOAT *boat)
     return position[2];
 }
 
-uint32 trail_render_spray(BOAT *boat, uint32 ordering_table, sint32 bucket)
+// Immutable spray lift weights from MAIN.EXE 8008993C
+static const uint32 trail_spray_lift[5] = {0u, 2867u, 4096u, 2867u, 0u};
+
+uint32 trail_render_spray(BOAT *boat, uint32 *ot, sint32 bucket)
 {
     BOAT_TRAIL *geometry_state = &boat->trail;
-    uint32 link = ordering_table + (uint32)(bucket - 1) * 4u;
-    uint32 packet = r_u32(0x800B6C00u) & 0xFFFFFFu;
-    uint32 packet_word;
-    uint32 link_word;
-    uint32 draw_x;
-    uint32 draw_y;
-    uint32 draw_width;
-    uint32 draw_height;
+    uint32 *link = ot + (uint32)(bucket - 1);
+    uint32 packet_offset = render_packet_offset();
+    POLY_FT4 *packet;
     sint32 index;
     sint32 texture;
     sint32 previous_left = 0;
@@ -656,19 +673,7 @@ uint32 trail_render_spray(BOAT *boat, uint32 ordering_table, sint32 bucket)
     sint32 previous_right = 0;
 
     FUNCTION_MARKER(0x80031FA0u, "MAIN.EXE");
-    w_u8(packet + 3u, 2u);
-    draw_x = r_u8(0x800B3F2Cu) >> 3;
-    draw_width = ((uint32)(uint8)(0u - (uint32)(sint16)r_u16(0x800B3F30u))) >> 3;
-    draw_y = r_u8(0x800B3F2Eu) >> 3;
-    draw_height = ((uint32)(uint8)(0u - (uint32)(sint16)r_u16(0x800B3F32u))) >> 3;
-    w_u32(packet + 4u, 0xE2000000u | (draw_y << 15) | (draw_x << 10) | (draw_height << 5) | draw_width);
-    w_u32(packet + 8u, 0u);
-    packet_word = r_u32(packet);
-    link_word = r_u32(link);
-    w_u32(packet, (packet_word & 0xFF000000u) | (link_word & 0xFFFFFFu));
-    link_word = r_u32(link);
-    w_u32(link, (link_word & 0xFF000000u) | packet);
-    packet += 12u;
+    packet_offset = trail_emit_window(packet_offset, link, 0x800B3F2Cu);
     texture = ((uint16)geometry_state->scroll & 0x3F00u) + 64;
     {
         TRAIL_SPRAY *first = geometry_state->spray_order[0];
@@ -694,16 +699,25 @@ uint32 trail_render_spray(BOAT *boat, uint32 ordering_table, sint32 bucket)
 
         if (index != 0)
         {
-            uint32 second = packet + 40u;
+            POLY_FT4 *second = (POLY_FT4 *)render_packet_at(packet_offset, 2u * sizeof(*packet)) + 1;
 
-            w_u32(packet + 8u, (uint32)previous_left);
-            w_u32(packet + 16u, (uint32)previous_center);
-            w_u32(second + 16u, (uint32)previous_center);
-            w_u32(second + 8u, (uint32)previous_right);
-            w_u16(packet + 12u, (uint16)(texture | 0x7F));
-            w_u16(packet + 20u, (uint16)texture);
-            w_u16(second + 20u, (uint16)texture);
-            w_u16(second + 12u, (uint16)(texture | 0x7F));
+            packet = second - 1;
+            packet->x0 = (sint16)(uint16)((uint32)previous_left);
+            packet->y0 = (sint16)(uint16)((uint32)((uint32)previous_left) >> 16);
+            packet->x1 = (sint16)(uint16)((uint32)previous_center);
+            packet->y1 = (sint16)(uint16)((uint32)((uint32)previous_center) >> 16);
+            second->x1 = (sint16)(uint16)((uint32)previous_center);
+            second->y1 = (sint16)(uint16)((uint32)((uint32)previous_center) >> 16);
+            second->x0 = (sint16)(uint16)((uint32)previous_right);
+            second->y0 = (sint16)(uint16)((uint32)((uint32)previous_right) >> 16);
+            packet->u0 = (uint8)((uint16)(texture | 0x7F));
+            packet->v0 = (uint8)((uint16)((uint16)(texture | 0x7F)) >> 8);
+            packet->u1 = (uint8)((uint16)texture);
+            packet->v1 = (uint8)((uint16)((uint16)texture) >> 8);
+            second->u1 = (uint8)((uint16)texture);
+            second->v1 = (uint8)((uint16)((uint16)texture) >> 8);
+            second->u0 = (uint8)((uint16)(texture | 0x7F));
+            second->v0 = (uint8)((uint16)((uint16)(texture | 0x7F)) >> 8);
         }
 
         fade = (sint16)(uint16)record->fade / 256;
@@ -720,7 +734,7 @@ uint32 trail_render_spray(BOAT *boat, uint32 ordering_table, sint32 bucket)
         points[0].vy = (sint16)((uint16)record->position.vy - (uint32)width.vy);
         points[0].vz = (sint16)((uint16)record->position.vz - (uint32)width.vz);
         points[0].pad = 0;
-        product = (uint32)(sint32)(sint16)(uint16)record->lift * r_u32(0x8008993Cu + (uint32)index * 4u);
+        product = (uint32)(sint32)(sint16)(uint16)record->lift * trail_spray_lift[index];
         vertical = (sint32)product;
         if (vertical < 0)
             vertical += 0xFFF;
@@ -730,7 +744,7 @@ uint32 trail_render_spray(BOAT *boat, uint32 ordering_table, sint32 bucket)
         points[1].vy = (sint16)(uint16)record->position.vy;
         points[1].vz = (sint16)(uint16)record->position.vz;
         points[1].pad = 0;
-        product = (uint32)(sint32)(sint16)(uint16)record->lift * r_u32(0x8008993Cu + (uint32)index * 4u);
+        product = (uint32)(sint32)(sint16)(uint16)record->lift * trail_spray_lift[index];
         vertical = (sint32)product;
         if (vertical < 0)
             vertical += 0xFFF;
@@ -749,53 +763,53 @@ uint32 trail_render_spray(BOAT *boat, uint32 ordering_table, sint32 bucket)
         if (index != 0)
         {
             uint32 color = 0x2E404040u + (uint32)darken * 0x010101u;
-            uint32 second = packet + 40u;
+            POLY_FT4 *second = (POLY_FT4 *)render_packet_at(packet_offset, 2u * sizeof(*packet)) + 1;
             sint32 next_texture = texture + (uint16)record->texture;
 
+            packet = second - 1;
             (void)NormalClip(screens[0], screens[1], screens[2]);
-            w_u32(packet + 24u, (uint32)screens[0]);
-            w_u32(packet + 32u, (uint32)screens[1]);
-            w_u32(second + 32u, (uint32)screens[1]);
-            w_u32(second + 24u, (uint32)screens[2]);
-            w_u32(packet + 4u, color);
-            w_u32(second + 4u, color);
-            w_u16(packet + 28u, (uint16)(next_texture | 0x7F));
-            w_u16(packet + 36u, (uint16)next_texture);
-            w_u16(second + 36u, (uint16)next_texture);
-            w_u16(second + 28u, (uint16)(next_texture | 0x7F));
-            w_u16(second + 22u, 60u);
-            w_u16(packet + 22u, 60u);
-            w_u16(second + 14u, 0x7FF1u);
-            w_u16(packet + 14u, 0x7FF1u);
-            link_word = r_u32(link);
-            w_u32(packet, link_word | 0x09000000u);
-            w_u32(link, packet);
-            link_word = r_u32(link);
-            w_u32(second, link_word | 0x09000000u);
-            w_u32(link, second);
+            packet->x2 = (sint16)(uint16)((uint32)screens[0]);
+            packet->y2 = (sint16)(uint16)((uint32)((uint32)screens[0]) >> 16);
+            packet->x3 = (sint16)(uint16)((uint32)screens[1]);
+            packet->y3 = (sint16)(uint16)((uint32)((uint32)screens[1]) >> 16);
+            second->x3 = (sint16)(uint16)((uint32)screens[1]);
+            second->y3 = (sint16)(uint16)((uint32)((uint32)screens[1]) >> 16);
+            second->x2 = (sint16)(uint16)((uint32)screens[2]);
+            second->y2 = (sint16)(uint16)((uint32)((uint32)screens[2]) >> 16);
+            packet->r0 = (uint8)((uint32)(color));
+            packet->g0 = (uint8)((uint32)(color) >> 8);
+            packet->b0 = (uint8)((uint32)(color) >> 16);
+            packet->code = (uint8)((uint32)(color) >> 24);
+            second->r0 = (uint8)((uint32)(color));
+            second->g0 = (uint8)((uint32)(color) >> 8);
+            second->b0 = (uint8)((uint32)(color) >> 16);
+            second->code = (uint8)((uint32)(color) >> 24);
+            packet->u2 = (uint8)((uint16)(next_texture | 0x7F));
+            packet->v2 = (uint8)((uint16)((uint16)(next_texture | 0x7F)) >> 8);
+            packet->u3 = (uint8)((uint16)next_texture);
+            packet->v3 = (uint8)((uint16)((uint16)next_texture) >> 8);
+            second->u3 = (uint8)((uint16)next_texture);
+            second->v3 = (uint8)((uint16)((uint16)next_texture) >> 8);
+            second->u2 = (uint8)((uint16)(next_texture | 0x7F));
+            second->v2 = (uint8)((uint16)((uint16)(next_texture | 0x7F)) >> 8);
+            second->tpage = 60u;
+            packet->tpage = 60u;
+            second->clut = 0x7FF1u;
+            packet->clut = 0x7FF1u;
+            packet->tag = *link | 0x09000000u;
+            AddPrim(link, packet);
+            second->tag = *link | 0x09000000u;
+            AddPrim(link, second);
             texture = next_texture;
-            packet += 80u;
+            packet_offset += 2u * sizeof(*packet);
         }
         previous_left = screens[0];
         previous_center = screens[1];
         previous_right = screens[2];
     }
-    w_u8(packet + 3u, 2u);
-    draw_x = r_u8(0x800B3F1Cu) >> 3;
-    draw_width = ((uint32)(uint8)(0u - (uint32)(sint16)r_u16(0x800B3F20u))) >> 3;
-    draw_y = r_u8(0x800B3F1Eu) >> 3;
-    draw_height = ((uint32)(uint8)(0u - (uint32)(sint16)r_u16(0x800B3F22u))) >> 3;
-    w_u32(packet + 4u, 0xE2000000u | (draw_y << 15) | (draw_x << 10) | (draw_height << 5) | draw_width);
-    w_u32(packet + 8u, 0u);
-    packet_word = r_u32(packet);
-    link_word = r_u32(link);
-    w_u32(packet, (packet_word & 0xFF000000u) | (link_word & 0xFFFFFFu));
-    link_word = r_u32(link);
-    link_word = (link_word & 0xFF000000u) | (packet & 0xFFFFFFu);
-    packet += 12u;
-    w_u32(0x800B6C00u, packet);
-    w_u32(link, link_word);
-    return link_word;
+    packet_offset = trail_emit_window(packet_offset, link, 0x800B3F1Cu);
+    render_packet_publish(packet_offset);
+    return *link;
 }
 
 sint32 trail_init_tex_templates8(void)
@@ -807,19 +821,15 @@ sint32 trail_init_tex_templates8(void)
     FUNCTION_MARKER(0x800323FCu, "MAIN.EXE");
     for (index = 0; index < 8; ++index)
     {
-        uint32 entry = 0x800CA460u + (uint32)index * 16u;
+        TRAIL_QUAD_TEXTURE *texture = &trail_flare_textures[index];
         sint32 u = 4 * texture_x;
         texture_x += 4;
-        w_u8(entry, (uint8)u);
-        w_u8(entry + 8u, (uint8)u);
-        w_u16(entry + 6u, 60u);
-        w_u16(entry + 2u, 31985u);
-        w_u8(entry + 1u, (uint8)texture_y);
-        w_u8(entry + 4u, (uint8)(u + 15));
-        w_u8(entry + 5u, (uint8)texture_y);
-        w_u8(entry + 9u, (uint8)(texture_y + 31));
-        w_u8(entry + 12u, (uint8)(u + 15));
-        w_u8(entry + 13u, (uint8)(texture_y + 31));
+        texture->u0 = texture->u2 = (uint8)u;
+        texture->tpage = 60u;
+        texture->clut = 31985u;
+        texture->v0 = texture->v1 = (uint8)texture_y;
+        texture->u1 = texture->u3 = (uint8)(u + 15);
+        texture->v2 = texture->v3 = (uint8)(texture_y + 31);
         if (index == 3)
         {
             texture_x -= 16;
@@ -829,13 +839,13 @@ sint32 trail_init_tex_templates8(void)
     return 0;
 }
 
-sint32 trail_render_flare(BOAT *boat, uint32 ordering_table, uint32 depth_limit)
+sint32 trail_render_flare(BOAT *boat, uint32 *ot, uint32 depth_limit)
 {
-    uint32 source;
-    uint32 packet;
-    uint32 template;
-    uint32 packed;
-    uint32 value;
+    uint32 model;
+    SVECTOR origin;
+    uint32 offset;
+    POLY_FT4 *packet;
+    const TRAIL_QUAD_TEXTURE *texture;
     sint32 age;
     sint32 height;
     sint32 width;
@@ -852,10 +862,12 @@ sint32 trail_render_flare(BOAT *boat, uint32 ordering_table, uint32 depth_limit)
     height = (sint32)((uint32)height + (global_fn_8006e9d8() & 3u));
     width = age >= 74 ? (sint32)(90u - (uint32)age) / 2 : 8;
     side = 0;
-    template = 0x800CA460u + ((4u * r_u16(0x800B3D94u)) & 0x70u);
-    packet = r_u32(0x800B6C00u) & 0xFFFFFFu;
-    value = boat->setup.model_index;
-    source = 0x80089948u + value * 8u;
+    texture = &trail_flare_textures[(game_timing.ticks >> 2u) & 7u];
+    offset = render_packet_offset();
+    model = boat->setup.model_index;
+    if (model >= sizeof(trail_flare_origins) / sizeof(trail_flare_origins[0]))
+        abort();
+    origin = trail_flare_origins[model];
     do
     {
         SVECTOR base;
@@ -867,12 +879,8 @@ sint32 trail_render_flare(BOAT *boat, uint32 ordering_table, uint32 depth_limit)
         sint32 flags;
         sint32 average;
 
-        packed = r_u32(source);
-        base.vx = (sint16)(uint16)packed;
-        base.vy = (sint16)(uint16)(packed >> 16u);
-        packed = r_u32(source + 4u);
-        base.vz = (sint16)(uint16)packed;
-        base.pad = (sint16)(uint16)(packed >> 16u);
+        packet = render_packet_at(offset, sizeof(*packet));
+        base = origin;
         base_depth = gte_project_full_depth(&base, &base_screen, &flags);
 
         points[0] = base;
@@ -881,39 +889,45 @@ sint32 trail_render_flare(BOAT *boat, uint32 ordering_table, uint32 depth_limit)
         points[1].vz = (sint16)(uint16)((uint32)(uint16)base.vz - (uint32)height);
         points[2] = points[1];
         points[2].vx = points[0].vx;
-        w_u32(packet + 8u, (uint32)base_screen);
+        packet->x0 = (sint16)(uint16)base_screen;
+        packet->y0 = (sint16)(uint16)((uint32)base_screen >> 16);
 
         gte_project3_full_depth(points, screen, depths, &flags);
 
-        value = r_u32(template);
-        w_u32(packet + 12u, value);
-        value = r_u32(template + 4u);
-        w_u32(packet + 20u, value);
-        value = r_u16(template + 8u);
-        w_u16(packet + 28u, (uint16)value);
-        value = r_u16(template + 12u);
-        w_u32(packet + 4u, 0x2E808080u);
-        w_u16(packet + 36u, (uint16)value);
-        w_u32(packet + 16u, (uint32)screen[0]);
-        w_u32(packet + 24u, (uint32)screen[1]);
-        w_u32(packet + 32u, (uint32)screen[2]);
+        packet->u0 = texture->u0;
+        packet->v0 = texture->v0;
+        packet->clut = texture->clut;
+        packet->u1 = texture->u1;
+        packet->v1 = texture->v1;
+        packet->tpage = texture->tpage;
+        packet->u2 = texture->u2;
+        packet->v2 = texture->v2;
+        packet->u3 = texture->u3;
+        packet->v3 = texture->v3;
+        packet->code = 0x2E;
+        packet->r0 = packet->g0 = packet->b0 = 128;
+        packet->x1 = (sint16)(uint16)screen[0];
+        packet->y1 = (sint16)(uint16)((uint32)screen[0] >> 16);
+        packet->x2 = (sint16)(uint16)screen[1];
+        packet->y2 = (sint16)(uint16)((uint32)screen[1] >> 16);
+        packet->x3 = (sint16)(uint16)screen[2];
+        packet->y3 = (sint16)(uint16)((uint32)screen[2] >> 16);
 
         average = AverageZ4(base_depth, depths[0], depths[1], depths[2]);
-        average = (sint32)((uint32)average + r_u32(0x800B69F0u));
+        average = (sint32)((uint32)average + (uint32)render_order.bias);
         if ((uint32)average < depth_limit)
         {
-            uint32 link = ordering_table + (uint32)average * 4u;
+            uint32 *link = ot + (uint32)average;
 
-            w_u32(packet, r_u32(link) | 0x09000000u);
-            w_u32(link, packet);
-            packet += 40u;
+            packet->tag = *link | 0x09000000u;
+            AddPrim(link, packet);
+            offset += sizeof(*packet);
         }
-        value = r_u16(source);
         side++;
-        w_u16(source, (uint16)(0u - value));
+        origin.vx = (sint16)(uint16)(0u - (uint32)(uint16)origin.vx);
         width = (sint32)(0u - (uint32)width);
     } while (side < 2);
-    w_u32(0x800B6C00u, packet);
+    render_packet_publish(offset);
     return 0;
 }
 

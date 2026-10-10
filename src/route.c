@@ -1,90 +1,294 @@
-#include "vehicle.h"
-#include <string.h>
-#include <stdint.h>
-#include <stdlib.h>
+#include "name.h"
+#include "race_events.h"
 #include "route.h"
+#include "vehicle.h"
+#include "render.h"
+#include "game.h"
 #include "global.h"
-#include "motion.h"
 #include "xport_trace.h"
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
 
-static sint32 route_sample_geom_values(uint32 base, sint32 index, sint32 apply_height, sint32 output[4])
+ROUTE_RESOURCES route_resources;
+ROUTE_BOUNDARIES route_boundaries;
+ROUTE_SEGMENT route_showcase_seg;
+
+void route_init_showcase(void)
 {
-    uint32 record = base + (uint32)index * 14u;
-    uint32 first_index = (uint32)r_u8(record + 34u);
-    uint32 phase = r_u16(0x800B3D94u);
-    uint32 table_selector = (uint32)r_u8(record + 36u);
-    uint32 first_table = 0x800F0508u + (table_selector & 0x0Fu) * 512u;
-    uint32 second_index;
-    uint32 second_table;
+    route_showcase_seg.next.seg = &route_showcase_seg;
+    route_showcase_seg.prev.seg = &route_showcase_seg;
+    route_showcase_seg.origin[0] = 0;
+    route_showcase_seg.origin[1] = 0;
+    route_showcase_seg.origin[2] = -20000;
+    memset(route_showcase_seg.commands, 6, sizeof(route_showcase_seg.commands));
+    route_resources.count = 1u;
+    route_resources.owned_count = 0u;
+    route_resources.segments[0] = &route_showcase_seg;
+}
+
+
+// Immutable defaults and material transitions from the original generator
+const ROUTE_GEN_DEFAULTS route_gen_defaults = {
+    0x01000100u,
+    0x00000000u,
+    0x00000000u,
+    0x01000100u,
+    0x00000000u,
+    0x00180000u,
+    0x00E10000u,
+    0x003200FAu,
+    0x05050301u,
+    0x0A0A0700u,
+    0x5A461400u,
+    0x00000000u,
+    0x00000000u,
+};
+const uint8 route_gen_commands[14] = {4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 6, 6};
+const uint8 route_gen_sources[15] = {0, 8, 4, 0, 1, 1, 1, 1, 1, 1, 2, 6, 10, 10, 10};
+const uint8 route_gen_materials[12][3] = {
+    {0, 0, 16},
+    {0, 16, 2},
+    {0, 0, 8},
+    {0, 0, 12},
+    {0, 8, 2},
+    {0, 12, 2},
+    {0, 16, 2},
+    {0, 0, 0},
+    {16, 2, 2},
+    {2, 2, 2},
+    {8, 2, 2},
+    {12, 2, 2},
+};
+const uint8 route_gen_patterns[12][4] = {
+    {3, 3, 7, 7},
+    {2, 2, 5, 6},
+    {0, 3, 7, 3},
+    {1, 2, 5, 6},
+    {1, 2, 5, 6},
+    {4, 8, 11, 8},
+    {1, 2, 5, 2},
+    {0, 3, 3, 0},
+    {4, 11, 11, 4},
+    {9, 9, 10, 10},
+    {4, 8, 4, 11},
+    {9, 10, 9, 10},
+};
+
+
+
+
+// Import identity exists only while resolving disk offsets and directory links
+typedef struct
+{
+    uint32 offset;
+    uint16 next;
+    uint16 previous;
+} ROUTE_IMPORT;
+
+static ROUTE_IMPORT route_imports[ROUTE_SEGMENT_CAPACITY];
+static uint32 route_import_map[131072];
+
+static uint16 route_read_u16(const uint8 *data)
+{
+    return (uint16)((uint32)data[0] | ((uint32)data[1] << 8));
+}
+
+static uint32 route_read_u32(const uint8 *data)
+{
+    return (uint32)data[0] | ((uint32)data[1] << 8) | ((uint32)data[2] << 16) | ((uint32)data[3] << 24);
+}
+
+static void route_decode_vertex(ROUTE_VERTEX *vertex, const uint8 *data)
+{
+    vertex->position[0] = data[0];
+    vertex->position[1] = data[1];
+    vertex->position[2] = data[2];
+    vertex->flags = data[3];
+    vertex->phase[0] = data[4];
+    vertex->phase[1] = data[5];
+    vertex->curve = data[6];
+    vertex->texture_phase = data[7];
+    vertex->deformation[0] = (sint8)data[8];
+    vertex->deformation[1] = (sint8)data[9];
+    vertex->impact_tick = route_read_u16(data + 10);
+    vertex->lane = data[12];
+    vertex->shade = data[13];
+}
+
+ROUTE_DECODE_RESULT route_decode_archive(const uint8 *data, size_t size, ROUTE_RESOURCES *archive)
+{
+    uint32 version;
+    uint32 count;
+    uint32 records;
+    uint32 directory = 0u;
+    uint32 index;
+
+    if (!data || !archive || size < 8u || route_read_u16(data) != 0xBABEu)
+        return ROUTE_DECODE_HEADER;
+    version = route_read_u16(data + 2);
+    if (version < 4u || version > 7u)
+        return ROUTE_DECODE_HEADER;
+    records = version == 4u ? 8u : version == 5u ? 16u : 20u;
+    if (size < records)
+        return ROUTE_DECODE_BOUNDS;
+    count = route_read_u16(data + 6);
+    if (version >= 6u)
+    {
+        uint32 words = route_read_u32(data + 8);
+        if (words > 0x3FFFFFFFu || (size_t)words > size / 4u)
+            return ROUTE_DECODE_BOUNDS;
+        directory = words * 4u;
+        if ((size_t)count * 4u > size - directory)
+            return ROUTE_DECODE_BOUNDS;
+    }
+    archive->count = 0u;
+    archive->owned_count = 0u;
+    memset(route_import_map, 0, sizeof(route_import_map));
+    for (index = 0u; index < count; ++index)
+    {
+        uint32 relative = version < 6u ? index * 226u : route_read_u32(data + directory + 4u * index);
+        uint32 offset;
+        uint32 hash;
+        uint32 owned;
+        uint32 vertices;
+        uint32 vertex;
+        const uint8 *source;
+        ROUTE_SEGMENT *segment;
+
+        if (relative > 0xFFFFFFFFu - records || (size_t)relative > size - records || size - records - relative < 30u)
+            return ROUTE_DECODE_BOUNDS;
+        offset = records + relative;
+        hash = (offset * 2654435761u) & 131071u;
+        while (route_import_map[hash] != 0u && route_imports[route_import_map[hash] - 1u].offset != offset)
+            hash = (hash + 1u) & 131071u;
+        if (route_import_map[hash] != 0u)
+        {
+            archive->segments[index] = &archive->storage[route_import_map[hash] - 1u];
+            continue;
+        }
+        source = data + offset;
+        vertices = version < 6u ? 14u : source[7];
+        if (vertices > ROUTE_VERTEX_CAPACITY)
+            return ROUTE_DECODE_VERTICES;
+        if (size - offset - 30u < 14u * vertices)
+            return ROUTE_DECODE_BOUNDS;
+        owned = archive->owned_count++;
+        route_imports[owned].offset = offset;
+        route_imports[owned].next = route_read_u16(source);
+        route_imports[owned].previous = route_read_u16(source + 2);
+        route_import_map[hash] = owned + 1u;
+        segment = &archive->storage[owned];
+        memset(segment, 0, sizeof(*segment));
+        segment->palette = version == 4u ? 0u : route_read_u16(source + 4);
+        segment->lighting = version == 4u ? 0u : source[6];
+        segment->vertex_count = version < 6u ? 12u : source[7];
+        for (vertex = 0u; vertex < 3u; ++vertex)
+            segment->origin[vertex] = (sint16)route_read_u16(source + 8u + 2u * vertex);
+        segment->join[0] = source[14] >> 4;
+        segment->join[1] = source[14] & 15u;
+        segment->section = source[15];
+        memcpy(segment->commands, source + 16, 14);
+        for (vertex = 0u; vertex < vertices; ++vertex)
+            route_decode_vertex(&segment->vertices[vertex], source + 30u + 14u * vertex);
+        archive->segments[index] = segment;
+    }
+    for (index = 0u; index < archive->owned_count; ++index)
+    {
+        if (route_imports[index].next >= count || route_imports[index].previous >= count)
+            return ROUTE_DECODE_LINK;
+        archive->storage[index].next.seg = archive->segments[route_imports[index].next];
+        archive->storage[index].next.idx = route_imports[index].next;
+        archive->storage[index].prev.seg = archive->segments[route_imports[index].previous];
+        archive->storage[index].prev.idx = route_imports[index].previous;
+    }
+    archive->count = count;
+    return ROUTE_DECODE_OK;
+}
+
+
+
+sint32 route_sample_geom(const ROUTE_SEGMENT *src, sint32 idx, sint32 apply_height, sint32 dst[4])
+{
+    const ROUTE_VERTEX *vertex = &src->vertices[idx];
+    uint32 idx0 = (uint32)vertex->phase[0];
+    uint32 phase = game_timing.ticks;
+    uint32 curve_sel = (uint32)vertex->curve;
+    const uint8 *curve0 = render_curve[curve_sel & 0x0Fu];
+    uint32 idx1;
+    const uint8 *curve1;
     sint32 correction;
     uint32 wobble_phase;
     sint32 result;
 
-    correction = -(sint32)r_u8(first_table + ((2u * first_index + phase) & 0x1FFu));
-    second_index = (uint32)r_u8(record + 35u);
-    second_table = 0x800F0508u + (table_selector >> 4) * 512u;
-    correction -= (sint32)r_u8(second_table + ((2u * second_index + phase) & 0x1FFu));
-    wobble_phase = (uint16)(phase - r_u16(record + 40u));
+    correction = -(sint32)curve0[(2u * idx0 + phase) & 0x1FFu];
+    idx1 = (uint32)vertex->phase[1];
+    curve1 = render_curve[curve_sel >> 4];
+    correction -= (sint32)curve1[(2u * idx1 + phase) & 0x1FFu];
+    wobble_phase = (uint16)(phase - vertex->impact_tick);
     if (wobble_phase < 256u)
     {
-        sint32 wobble = math_sra_signed((sint32)(2u * r_u8(0x800F2308u + wobble_phase)) - 63, 1u);
+        sint32 wobble = math_sra_signed((sint32)(2u * render_curve[15][wobble_phase]) - 63, 1u);
 
         correction -= wobble;
         if (correction < -127)
             correction = -127;
     }
     {
-        uint32 coordinate = (uint32)r_u8(record + 30u);
+        uint32 coordinate = (uint32)vertex->position[0];
 
-        output[0] = (sint16)r_u16(base + 8u) + 16 * (sint32)coordinate;
+        dst[0] = (sint16)src->origin[0] + 16 * (sint32)coordinate;
     }
     {
-        uint32 coordinate = (uint32)r_u8(record + 31u);
+        uint32 coordinate = (uint32)vertex->position[1];
 
-        output[1] = (sint16)r_u16(base + 10u) + 16 * (sint32)coordinate;
+        dst[1] = (sint16)src->origin[1] + 16 * (sint32)coordinate;
     }
     {
-        uint32 coordinate = (uint32)r_u8(record + 32u);
+        uint32 coordinate = (uint32)vertex->position[2];
 
-        output[2] = (sint16)r_u16(base + 12u) + 16 * (sint32)coordinate;
+        dst[2] = (sint16)src->origin[2] + 16 * (sint32)coordinate;
     }
-    output[3] = (sint32)(2u * ((uint32)r_u8(record + 33u) & 0x1Fu));
+    dst[3] = (sint32)(2u * ((uint32)vertex->flags & 0x1Fu));
     if (apply_height)
-        output[1] -= correction;
-    result = (sint8)r_u8(record + 38u);
-    if (result != 0 || (result = (sint8)r_u8(record + 39u)) != 0)
+        dst[1] -= correction;
+    result = (sint8)vertex->deformation[0];
+    if (result != 0 || (result = (sint8)vertex->deformation[1]) != 0)
     {
         if (correction < 0)
         {
             if (!apply_height)
-                output[1] -= correction;
-            output[0] += math_sra_signed(correction * (sint8)r_u8(record + 38u), 5u);
-            result = output[2] + math_sra_signed(correction * (sint8)r_u8(record + 39u), 5u);
-            output[2] = result;
+                dst[1] -= correction;
+            dst[0] += math_sra_signed(correction * (sint8)vertex->deformation[0], 5u);
+            result = dst[2] + math_sra_signed(correction * (sint8)vertex->deformation[1], 5u);
+            dst[2] = result;
         }
     }
     return result;
 }
 
-static volatile sint32 rr_route_trap_line;
-static volatile uintptr_t rr_route_trap_state;
-static volatile uint32 rr_route_trap_object;
-static volatile uint32 rr_route_trap_type;
-static volatile uint32 rr_route_trap_crossings;
-static volatile VECTOR rr_route_trap_vertices[4];
-static volatile VECTOR rr_route_trap_position;
-static volatile sint32 rr_route_trap_transitions;
-static volatile uint32 rr_route_trace_count;
-static volatile uint32 rr_route_trace_object[16];
-static volatile uint32 rr_route_trace_entry[16];
-static volatile uint32 rr_route_trace_type[16];
-static volatile uint32 rr_route_trace_crossings[16];
-static volatile sint32 rr_route_trace_action[16];
-static volatile VECTOR rr_route_trace_vertices[4][4];
+
+extern sint32 route_sample_geom(const ROUTE_SEGMENT *, sint32, sint32, sint32 [4]);
+
+static volatile sint32 route_trap_line;
+static volatile uintptr_t route_trap_state;
+static volatile uintptr_t route_trap_object;
+static volatile uint32 route_trap_type;
+static volatile uint32 route_trap_crossings;
+static volatile VECTOR route_trap_vertices[4];
+static volatile VECTOR route_trap_position;
+static volatile sint32 route_trap_transitions;
+static volatile uint32 route_trace_count;
+static volatile uintptr_t route_trace_object[16];
+static volatile uint32 route_trace_entry[16];
+static volatile uint32 route_trace_type[16];
+static volatile uint32 route_trace_crossings[16];
+static volatile sint32 route_trace_action[16];
+static volatile VECTOR route_trace_vertices[4][4];
 
 static void route_contact_trap_at(sint32 line)
 {
-    rr_route_trap_line = line;
+    route_trap_line = line;
     abort();
 }
 
@@ -127,26 +331,11 @@ static uint32 route_contact_lzcr(uint32 value)
     return count;
 }
 
-sint32 route_sample_geom(uint32 base, sint32 index, sint32 apply_height, uint32 output)
-{
-    sint32 values[4];
-    sint32 result;
 
-    FUNCTION_MARKER(0x8001A3B8u, "MAIN.EXE");
-    result = route_sample_geom_values(base, index, apply_height, values);
-    w_u32(output, (uint32)values[0]);
-    w_u32(output + 4u, (uint32)values[1]);
-    w_u32(output + 8u, (uint32)values[2]);
-    w_u32(output + 12u, (uint32)values[3]);
-    return result;
-}
-
-static sint32 route_contact_position(sint32 output[3], sint32 object_index, sint32 entry)
+static sint32 route_contact_pos(sint32 output[3], ROUTE_SEGMENT *seg, sint32 entry)
 {
-    uint32 table;
-    uint32 slot;
-    uint32 object;
-    uint32 linked;
+    ROUTE_SEGMENT *object;
+    ROUTE_SEGMENT *linked;
     uint32 linked_index;
     uint32 packed;
     uint32 left_index;
@@ -162,109 +351,101 @@ static sint32 route_contact_position(sint32 output[3], sint32 object_index, sint
     sint32 result;
 
     FUNCTION_MARKER(0x8001A57Cu, "MAIN.EXE");
-    table = r_u32(0x800B6B80u);
-    slot = table + (uint32)(sint16)object_index * 4u;
-    object = r_u32(slot);
-    packed = r_u8(object + 14u);
+    object = seg;
+    packed = ((uint32)object->join[0] << 4 | object->join[1]);
     left_index = packed >> 4;
     right_index = packed & 0x0Fu;
     for (cursor = 0; cursor < (sint16)entry; ++cursor)
     {
-        uint32 type = (uint32)r_u8(object + 16u + (uint32)cursor) & 3u;
+        uint32 type = (uint32)object->commands[cursor] & 3u;
 
         if (type != 2u)
             ++left_index;
         if (type != 1u)
             ++right_index;
     }
-    left_offset = left_index * 14u;
-    right_offset = right_index * 14u;
-    table = r_u32(0x800B6B80u);
-    slot = table + (uint32)(sint16)object_index * 4u;
-    object = r_u32(slot);
-    linked_index = r_u16(object + 2u);
-    linked = r_u32(table + linked_index * 4u);
-    value = r_u8(object + left_offset + 30u);
-    value += r_u8(linked + right_offset + 30u);
+    left_offset = left_index;
+    right_offset = right_index;
+    object = seg;
+    linked_index = object->prev.idx;
+    linked = object->prev.seg;
+    value = object->vertices[left_offset].position[0];
+    value += linked->vertices[right_offset].position[0];
     x = (uint16)(value << 4);
-    object = r_u32(slot);
-    linked_index = r_u16(object + 2u);
-    linked = r_u32(table + linked_index * 4u);
-    value = r_u8(object + left_offset + 31u);
-    value += r_u8(linked + right_offset + 31u);
+    object = seg;
+    linked_index = object->prev.idx;
+    linked = object->prev.seg;
+    value = object->vertices[left_offset].position[1];
+    value += linked->vertices[right_offset].position[1];
     y = (uint16)(value << 4);
-    object = r_u32(slot);
-    linked_index = r_u16(object + 2u);
-    linked = r_u32(table + linked_index * 4u);
-    value = r_u8(object + left_offset + 32u);
-    value += r_u8(linked + right_offset + 32u);
+    object = seg;
+    linked_index = object->prev.idx;
+    linked = object->prev.seg;
+    value = object->vertices[left_offset].position[2];
+    value += linked->vertices[right_offset].position[2];
     z = (uint16)(value << 4);
-    object = r_u32(slot);
-    if (((uint32)r_u8(object + 16u + (uint32)(sint16)entry) & 3u) != 2u)
+    object = seg;
+    if (((uint32)object->commands[(sint16)entry] & 3u) != 2u)
     {
-        left_offset = (left_index + 1u) * 14u;
-        x = (uint16)(x + ((uint32)r_u8(object + left_offset + 30u) << 4));
-        object = r_u32(slot);
-        y = (uint16)(y + ((uint32)r_u8(object + left_offset + 31u) << 4));
-        object = r_u32(slot);
-        z = (uint16)(z + ((uint32)r_u8(object + left_offset + 32u) << 4));
+        left_offset = left_index + 1u;
+        x = (uint16)(x + ((uint32)object->vertices[left_offset].position[0] << 4));
+        object = seg;
+        y = (uint16)(y + ((uint32)object->vertices[left_offset].position[1] << 4));
+        object = seg;
+        z = (uint16)(z + ((uint32)object->vertices[left_offset].position[2] << 4));
         ++count;
-        object = r_u32(slot);
+        object = seg;
     }
-    if (((uint32)r_u8(object + 16u + (uint32)(sint16)entry) & 3u) != 1u)
+    if (((uint32)object->commands[(sint16)entry] & 3u) != 1u)
     {
-        right_offset = (right_index + 1u) * 14u;
-        linked_index = r_u16(object + 2u);
-        linked = r_u32(table + linked_index * 4u);
-        x = (uint16)(x + ((uint32)r_u8(linked + right_offset + 30u) << 4));
-        object = r_u32(slot);
-        linked_index = r_u16(object + 2u);
-        linked = r_u32(table + linked_index * 4u);
-        y = (uint16)(y + ((uint32)r_u8(linked + right_offset + 31u) << 4));
-        object = r_u32(slot);
-        linked_index = r_u16(object + 2u);
-        linked = r_u32(table + linked_index * 4u);
+        right_offset = right_index + 1u;
+        linked_index = object->prev.idx;
+        linked = object->prev.seg;
+        x = (uint16)(x + ((uint32)linked->vertices[right_offset].position[0] << 4));
+        object = seg;
+        linked_index = object->prev.idx;
+        linked = object->prev.seg;
+        y = (uint16)(y + ((uint32)linked->vertices[right_offset].position[1] << 4));
+        object = seg;
+        linked_index = object->prev.idx;
+        linked = object->prev.seg;
         ++count;
-        z = (uint16)(z + ((uint32)r_u8(linked + right_offset + 32u) << 4));
+        z = (uint16)(z + ((uint32)linked->vertices[right_offset].position[2] << 4));
     }
     result = (sint16)x / count;
-    object = r_u32(slot);
-    result = (sint16)(result + (sint32)r_u16(object + 8u));
+    object = seg;
+    result = (sint16)(result + (sint32)(uint16)object->origin[0]);
     output[0] = result;
     result = (sint16)y / count;
-    object = r_u32(slot);
-    result = (sint16)(result + (sint32)r_u16(object + 10u));
+    object = seg;
+    result = (sint16)(result + (sint32)(uint16)object->origin[1]);
     output[1] = result;
     result = (sint16)z / count;
-    object = r_u32(slot);
-    result = (sint16)(result + (sint32)r_u16(object + 12u));
+    object = seg;
+    result = (sint16)(result + (sint32)(uint16)object->origin[2]);
     output[2] = result;
     return result;
 }
 
-void route_contact_init(ROUTE_CONTACT *state, sint32 object_index, sint32 entry)
+void route_contact_init(ROUTE_CONTACT *state, ROUTE_SEGMENT *seg, sint32 entry)
 {
-    uint32 table;
-    uint32 slot;
-    uint32 object;
+    ROUTE_SEGMENT *object;
     uint32 packed;
     uint32 left;
     uint32 right;
     sint32 cursor;
 
     FUNCTION_MARKER(0x8001A920u, "MAIN.EXE");
-    table = r_u32(0x800B6B80u);
-    slot = table + (uint32)(sint16)object_index * 4u;
-    object = r_u32(slot);
+    object = seg;
     state->entry = (uint32)(sint16)entry;
-    state->object = object;
-    object = r_u32(slot);
-    packed = r_u8(object + 14u);
+    state->seg = object;
+    object = seg;
+    packed = ((uint32)object->join[0] << 4 | object->join[1]);
     left = packed >> 4;
     right = packed & 0x0Fu;
     for (cursor = 0; cursor < (sint16)entry; ++cursor)
     {
-        uint32 type = (uint32)r_u8(object + 16u + (uint32)cursor) & 3u;
+        uint32 type = (uint32)object->commands[cursor] & 3u;
 
         if (type != 2u)
             ++left;
@@ -273,7 +454,7 @@ void route_contact_init(ROUTE_CONTACT *state, sint32 object_index, sint32 entry)
     }
     state->left = left;
     state->right = right;
-    route_contact_position(state->position, (sint16)object_index, (sint16)entry);
+    route_contact_pos(state->position, seg, (sint16)entry);
     state->height = 0;
     state->penetration = 0;
 }
@@ -291,11 +472,11 @@ sint32 route_contact_update(ROUTE_CONTACT *state)
     sint32 count;
     sint32 plane;
     uint32 mode;
-    uint32 object;
+    ROUTE_SEGMENT *object;
     uint32 type;
 
     FUNCTION_MARKER(0x8001A9FCu, "MAIN.EXE");
-    rr_route_trace_count = 0u;
+    route_trace_count = 0u;
     RotTrans(&state->sample, &position, &flags);
     position.vx = route_contact_sub(position.vx, (sint32)state->position[0]);
     position.vy = route_contact_sub(position.vy, (sint32)state->position[1]);
@@ -309,15 +490,15 @@ sint32 route_contact_update(ROUTE_CONTACT *state)
         sint32 index;
         sint32 action = 0;
 
-        object = state->object;
-        type = (uint32)r_u8(object + state->entry + 16u);
+        object = state->seg;
+        type = (uint32)object->commands[state->entry];
         low_type = type & 3u;
         if ((type & 0x0Cu) == 0x0Cu)
             route_contact_trap();
 
         {
-            uint16 first = r_u16(object);
-            uint16 route = first != 0u ? (uint16)(first - 1u) : (uint16)(r_u16(object + 2u) + 1u);
+            uint16 first = object->next.idx;
+            uint16 route = first != 0u ? (uint16)(first - 1u) : (uint16)(object->prev.idx + 1u);
 
             key = (sint16)(((route & 0xFFu) << 8) + (uint16)state->entry);
         }
@@ -332,36 +513,34 @@ sint32 route_contact_update(ROUTE_CONTACT *state)
 
         count = 0;
         {
-            uint32 current = state->object;
+            ROUTE_SEGMENT *current = state->seg;
             sint32 left = (sint32)state->left;
 
-            route_sample_geom_host(current, left, low_type == 0u, (sint32 *)&vertices[count++]);
+            route_sample_geom(current, left, low_type == 0u, (sint32 *)&vertices[count++]);
         }
         if (low_type != 2u)
         {
             sint32 left = (sint32)state->left;
-            uint32 current = state->object;
+            ROUTE_SEGMENT *current = state->seg;
 
-            route_sample_geom_host(current, route_contact_add(left, 1), low_type == 0u, (sint32 *)&vertices[count++]);
+            route_sample_geom(current, route_contact_add(left, 1), low_type == 0u, (sint32 *)&vertices[count++]);
         }
         if (low_type != 1u)
         {
-            uint32 current = state->object;
-            uint32 table = r_u32(0x800B6B80u);
-            uint16 link_index = r_u16(current + 2u);
+            ROUTE_SEGMENT *current = state->seg;
+            uint16 link_index = current->prev.idx;
             sint32 right = (sint32)state->right;
-            uint32 linked = r_u32(table + (uint32)link_index * 4u);
+            ROUTE_SEGMENT *linked = current->prev.seg;
 
-            route_sample_geom_host(linked, route_contact_add(right, 1), low_type == 0u, (sint32 *)&vertices[count++]);
+            route_sample_geom(linked, route_contact_add(right, 1), low_type == 0u, (sint32 *)&vertices[count++]);
         }
         {
-            uint32 current = state->object;
+            ROUTE_SEGMENT *current = state->seg;
             sint32 right = (sint32)state->right;
-            uint16 link_index = r_u16(current + 2u);
-            uint32 table = r_u32(0x800B6B80u);
-            uint32 linked = r_u32(table + (uint32)link_index * 4u);
+            uint16 link_index = current->prev.idx;
+            ROUTE_SEGMENT *linked = current->prev.seg;
 
-            route_sample_geom_host(linked, right, low_type == 0u, (sint32 *)&vertices[count++]);
+            route_sample_geom(linked, right, low_type == 0u, (sint32 *)&vertices[count++]);
         }
 
         for (index = 0; index < count; ++index)
@@ -465,39 +644,39 @@ sint32 route_contact_update(ROUTE_CONTACT *state)
                     action = route_contact_nclip(vertices[1].vx, vertices[1].vz, position.vx, position.vz, 0, 0) >= 0 ? 3 : 4;
                     break;
                 default:
-                    rr_route_trap_state = (uintptr_t)state;
-                    rr_route_trap_object = object;
-                    rr_route_trap_type = type;
-                    rr_route_trap_crossings = crossings;
-                    rr_route_trap_position = position;
-                    rr_route_trap_transitions = transitions;
+                    route_trap_state = (uintptr_t)state;
+                    route_trap_object = (uintptr_t)object;
+                    route_trap_type = type;
+                    route_trap_crossings = crossings;
+                    route_trap_position = position;
+                    route_trap_transitions = transitions;
                     for (index = 0; index < 4; ++index)
-                        rr_route_trap_vertices[index] = vertices[index];
+                        route_trap_vertices[index] = vertices[index];
                     route_contact_trap();
             }
         }
-        if (rr_route_trace_count < 16u)
+        if (route_trace_count < 16u)
         {
-            uint32 trace_index = rr_route_trace_count++;
+            uint32 trace_index = route_trace_count++;
 
-            rr_route_trace_object[trace_index] = object;
-            rr_route_trace_entry[trace_index] = state->entry;
-            rr_route_trace_type[trace_index] = type;
-            rr_route_trace_crossings[trace_index] = crossings;
-            rr_route_trace_action[trace_index] = action;
+            route_trace_object[trace_index] = (uintptr_t)object;
+            route_trace_entry[trace_index] = state->entry;
+            route_trace_type[trace_index] = type;
+            route_trace_crossings[trace_index] = crossings;
+            route_trace_action[trace_index] = action;
             if (trace_index < 4u)
             {
                 for (index = 0; index < 4; ++index)
-                    rr_route_trace_vertices[trace_index][index] = vertices[index];
+                    route_trace_vertices[trace_index][index] = vertices[index];
             }
         }
         if (action == 2 && (type & 4u) == 0u)
         {
             uint32 previous = state->entry - 1u;
             state->entry = previous;
-            if ((r_u8(state->object + previous + 16u) & 3u) != 2u)
+            if ((state->seg->commands[previous] & 3u) != 2u)
                 state->left = (uint32)state->left - (1u);
-            if ((r_u8(state->object + state->entry + 16u) & 3u) != 1u)
+            if ((state->seg->commands[state->entry] & 3u) != 1u)
                 state->right = (uint32)state->right - (1u);
             continue;
         }
@@ -512,20 +691,19 @@ sint32 route_contact_update(ROUTE_CONTACT *state)
         }
         if (action == 4)
         {
-            uint32 old_object = state->object;
-            uint16 link_index = r_u16(old_object);
-            uint32 table = r_u32(0x800B6B80u);
-            uint32 candidate = r_u32(table + (uint32)link_index * 4u);
-            uint32 header = (uint32)r_u8(candidate + 14u);
+            ROUTE_SEGMENT *old_object = state->seg;
+            uint16 link_index = old_object->next.idx;
+            ROUTE_SEGMENT *candidate = old_object->next.seg;
+            uint32 header = (uint32)((uint32)candidate->join[0] << 4 | candidate->join[1]);
             uint32 left = header >> 4;
             uint32 right = header & 0x0Fu;
             sint32 entry = 0;
 
             ++transitions;
-            state->object = candidate;
-            while ((r_u8(candidate + (uint32)entry + 16u) & 0x0Cu) != 0x0Cu)
+            state->seg = candidate;
+            while ((candidate->commands[entry] & 0x0Cu) != 0x0Cu)
             {
-                uint32 candidate_type = (uint32)r_u8(candidate + (uint32)entry + 16u) & 3u;
+                uint32 candidate_type = (uint32)candidate->commands[entry] & 3u;
                 if (candidate_type == 1u)
                     ++left;
                 else
@@ -538,7 +716,7 @@ sint32 route_contact_update(ROUTE_CONTACT *state)
                 }
                 ++entry;
             }
-            if ((r_u8(candidate + (uint32)entry + 16u) & 0x0Cu) != 0x0Cu)
+            if ((candidate->commands[entry] & 0x0Cu) != 0x0Cu)
             {
                 uint32 old_left = state->left;
                 state->left = left;
@@ -547,7 +725,7 @@ sint32 route_contact_update(ROUTE_CONTACT *state)
                 continue;
             }
             --transitions;
-            state->object = old_object;
+            state->seg = old_object;
             state->surface = 1u;
             direction.vx = route_contact_sub(vertices[0].vx, vertices[1].vx);
             direction.vy = route_contact_sub(vertices[0].vy, vertices[1].vy);
@@ -556,20 +734,19 @@ sint32 route_contact_update(ROUTE_CONTACT *state)
         }
         else if (action == 5)
         {
-            uint32 old_object = state->object;
-            uint16 link_index = r_u16(old_object + 2u);
-            uint32 table = r_u32(0x800B6B80u);
-            uint32 candidate = r_u32(table + (uint32)link_index * 4u);
-            uint32 header = (uint32)r_u8(candidate + 14u);
+            ROUTE_SEGMENT *old_object = state->seg;
+            uint16 link_index = old_object->prev.idx;
+            ROUTE_SEGMENT *candidate = old_object->prev.seg;
+            uint32 header = (uint32)((uint32)candidate->join[0] << 4 | candidate->join[1]);
             uint32 left = header >> 4;
             uint32 right = header & 0x0Fu;
             sint32 entry = 0;
 
             --transitions;
-            state->object = candidate;
-            while ((r_u8(candidate + (uint32)entry + 16u) & 0x0Cu) != 0x0Cu)
+            state->seg = candidate;
+            while ((candidate->commands[entry] & 0x0Cu) != 0x0Cu)
             {
-                uint32 candidate_type = (uint32)r_u8(candidate + (uint32)entry + 16u) & 3u;
+                uint32 candidate_type = (uint32)candidate->commands[entry] & 3u;
                 if (candidate_type == 2u)
                     ++right;
                 else
@@ -582,7 +759,7 @@ sint32 route_contact_update(ROUTE_CONTACT *state)
                 }
                 ++entry;
             }
-            if ((r_u8(candidate + (uint32)entry + 16u) & 0x0Cu) != 0x0Cu)
+            if ((candidate->commands[entry] & 0x0Cu) != 0x0Cu)
             {
                 uint32 old_right = state->right;
                 state->right = right;
@@ -591,7 +768,7 @@ sint32 route_contact_update(ROUTE_CONTACT *state)
                 continue;
             }
             ++transitions;
-            state->object = old_object;
+            state->seg = old_object;
             state->surface = 1u;
             if (((type + 1u) & 3u) < 2u)
             {
@@ -636,14 +813,14 @@ sint32 route_contact_update(ROUTE_CONTACT *state)
         {
             sint32 other_vertex;
             sint32 third_vertex;
-            uint32 header = (uint32)r_u8(object + 14u);
+            uint32 header = (uint32)((uint32)object->join[0] << 4 | object->join[1]);
             uint32 left = header >> 4;
             uint32 right = header & 0x0Fu;
             sint32 entry_limit = (sint32)state->entry;
 
             for (index = 0; index < entry_limit; ++index)
             {
-                uint32 entry = (uint32)r_u8(object + (uint32)index + 16u);
+                uint32 entry = (uint32)object->commands[index];
                 uint32 entry_type = entry & 3u;
 
                 if (entry_type != 2u)
@@ -655,7 +832,7 @@ sint32 route_contact_update(ROUTE_CONTACT *state)
             }
             if (state->left != left || state->right != right)
                 route_contact_trap();
-            state->surface = low_type != 0u ? r_u32(0x800F2594u + 32u * (type >> 4)) : 0u;
+            state->surface = low_type != 0u ? render_material(2u * (type >> 4))->surface : 0u;
             if (((type + 1u) & 3u) >= 2u)
             {
                 base_vertex = 0;
@@ -725,11 +902,11 @@ sint32 route_contact_update(ROUTE_CONTACT *state)
             sint32 height = (sint32)state->height;
             if (height < 0)
                 height = 0;
-            sint32 projected = route_contact_sub(plane, route_contact_mul((sint16)state->normal.vx, position.vx));
+            sint32 proj = route_contact_sub(plane, route_contact_mul((sint16)state->normal.vx, position.vx));
 
-            projected = route_contact_sub(projected, route_contact_mul((sint16)state->normal.vy, route_contact_add(height, position.vy)));
-            projected = route_contact_sub(projected, route_contact_mul((sint16)state->normal.vz, position.vz));
-            state->penetration = (uint32)(projected >> 12);
+            proj = route_contact_sub(proj, route_contact_mul((sint16)state->normal.vy, route_contact_add(height, position.vy)));
+            proj = route_contact_sub(proj, route_contact_mul((sint16)state->normal.vz, position.vz));
+            state->penetration = (uint32)(proj >> 12);
         }
         else
         {
@@ -773,322 +950,168 @@ sint32 route_contact_update(ROUTE_CONTACT *state)
     }
 }
 
-sint32 route_calc_boundary_direction(uint32 object, SVECTOR *output)
+
+
+sint32 route_advance_target(BOAT_ROUTE_STATE *route, const ROUTE_RESOURCES *archive)
 {
-    uint32 cursor;
-    uint32 position;
-    uint32 first = 0;
-    uint32 last = 0;
-    sint32 found = 0;
-    uint32 first_value;
-    uint32 last_value;
-    VECTOR normal;
-
-    FUNCTION_MARKER(0x8001BA08u, "MAIN.EXE");
-    if ((r_u8(object + 16u) & 0x0Cu) == 0x0Cu)
-    {
-        output->vz = 0;
-        output->vy = 0;
-        output->vx = 0;
-        return 12;
-    }
-    cursor = object;
-    position = (uint32)r_u8(object + 14u) >> 4;
-    do
-    {
-        uint32 type = (uint32)r_u8(cursor + 16u) & 3u;
-
-        if (type == 0u)
-        {
-            if (found)
-                last = position;
-            else
-            {
-                first = position;
-                found = 1;
-            }
-        }
-        type = (uint32)r_u8(cursor + 16u) & 3u;
-        ++cursor;
-        if (type != 2u)
-            ++position;
-    } while ((r_u8(cursor + 16u) & 0x0Cu) != 0x0Cu);
-    first_value = r_u8(object + first * 14u + 32u);
-    last_value = r_u8(object + last * 14u + 32u);
-    normal.vy = 0;
-    normal.vx = (sint32)(first_value - last_value);
-    first_value = r_u8(object + first * 14u + 30u);
-    last_value = r_u8(object + last * 14u + 30u);
-    normal.vz = (sint32)(last_value - first_value);
-    return VectorNormalS(&normal, output);
-}
-
-sint32 route_sample_geom_host(uint32 base, sint32 index, sint32 apply_height, sint32 output[4])
-{
-    FUNCTION_MARKER_ALIAS(0x8001A3B8u, "MAIN.EXE");
-    return route_sample_geom_values(base, index, apply_height, output);
-}
-
-sint32 route_build_boundary_vec(void)
-{
-    uint32 first = 0x800F3FD8u;
-    uint32 second = first + 24u;
-    sint32 mode = 0;
-    sint32 object_index = 0;
-    sint32 segment_state = 1;
+    uint32 target = (uint32)(uint16)route->segment + (uint32)(uint16)route->lookahead;
+    uint32 current = (uint16)route->target_segment;
+    ROUTE_SEGMENT *const *table = archive->segments;
+    const ROUTE_SEGMENT *object = table[(uint32)(uint16)route->target_segment];
+    sint32 delta = (sint32)(current - (uint16)target);
     sint32 result;
 
-    FUNCTION_MARKER(0x8001BC3Cu, "MAIN.EXE");
-    while (object_index < (sint32)r_u32(0x800B6A98u))
+    FUNCTION_MARKER(0x8002F5C0u, "MAIN.EXE");
+    if (delta >= 21)
+        target += (uint16)archive->count;
+    else if (delta < -20)
+        current += (uint16)archive->count;
+    if ((uint16)current == (uint16)target)
+        return 0;
+    if ((uint16)current < (uint16)target)
     {
-        uint32 table = r_u32(0x800B6B80u);
-        uint32 object = r_u32(table + (uint32)object_index * 4u);
-        uint32 linked_index = r_u16(object + 2u);
-        uint32 left_offset = (uint32)r_u8(object + 14u) >> 4;
-        uint8 edge = r_u8(object + 14u);
-        uint32 cursor = object + 16u;
-        uint8 flags = r_u8(cursor);
-        uint32 linked = r_u32(table + linked_index * 4u);
-        uint32 right_offset = (uint32)edge & 0x0Fu;
-        uint32 previous = 0;
-        sint32 transitions = 0;
+        do
+        {
+            const uint8 *cursor;
+            uint32 left;
+            uint32 right;
 
-        left_offset = left_offset * 14u + 30u;
-        right_offset = right_offset * 14u + 30u;
-        if ((flags & 0x0Cu) != 0x0Cu)
-            w_u8(cursor, (uint8)(flags | 4u));
-        if ((r_u8(cursor) & 0x0Cu) != 0x0Cu)
+            object = object->next.seg;
+            left = object->join[0];
+            right = object->join[1];
+            cursor = object->commands;
+            if (right != (uint16)route->target_lane)
+            {
+                for (;;)
+                {
+                    uint8 desc = *cursor;
+                    uint8 type = desc & 3u;
+
+                    if ((desc & 12u) == 12u)
+                    {
+                        route->target_lane = (uint16)((uint16)(left - 1u));
+                        break;
+                    }
+                    if (type != 2u)
+                        ++left;
+                    ++cursor;
+                    if (type != 1u)
+                        ++right;
+                    if ((sint32)(uint16)right == (sint16)(uint16)route->target_lane)
+                        break;
+                }
+            }
+            ++current;
+            route->target_lane = (uint16)((uint16)left);
+        } while ((uint16)current != (uint16)target);
+    }
+    else
+    {
+        do
+        {
+            const uint8 *cursor;
+            uint32 left;
+            uint32 right;
+
+            object = object->prev.seg;
+            left = object->join[0];
+            right = object->join[1];
+            cursor = object->commands;
+            if (left != (uint16)route->target_lane)
+            {
+                for (;;)
+                {
+                    uint8 desc = *cursor;
+                    uint8 type = desc & 3u;
+
+                    if ((desc & 12u) == 12u)
+                    {
+                        route->target_lane = (uint16)((uint16)(right - 1u));
+                        break;
+                    }
+                    if (type != 2u)
+                        ++left;
+                    ++cursor;
+                    if (type != 1u)
+                        ++right;
+                    if ((sint32)(uint16)left == (sint16)(uint16)route->target_lane)
+                        break;
+                }
+            }
+            current += 0xFFFFu;
+            route->target_lane = (uint16)((uint16)right);
+        } while ((uint16)current != (uint16)target);
+    }
+    result = (sint32)(uint16)target < (sint32)archive->count;
+    route->target_segment = (uint16)((uint16)target);
+    if (!result)
+    {
+        result = (sint32)(target - (uint16)archive->count);
+        route->target_segment = (uint16)((uint16)result);
+    }
+    return result;
+}
+
+sint32 route_init_steps(BOAT *boat, const ROUTE_SEGMENT *seg)
+{
+    BOAT_ROUTE_STATE *route = &boat->route;
+    const ROUTE_SEGMENT *object = seg;
+    sint32 result = (sint16)(uint16)route->lookahead;
+    uint32 lane = (uint8)boat->contacts.points[0].left;
+    uint32 count = 0;
+
+    FUNCTION_MARKER(0x8002F7DCu, "MAIN.EXE");
+    route->hazard = (uint16)(0u);
+    if (result <= 0)
+        return result;
+    for (;;)
+    {
+        const uint8 *cursor;
+        uint32 left;
+        uint32 right;
+        uint8 hazard;
+
+        object = object->next.seg;
+        left = object->join[0];
+        right = object->join[1];
+        cursor = object->commands;
+        if ((uint8)right != (uint8)lane)
         {
             for (;;)
             {
-                uint32 type;
+                uint8 desc = *cursor;
+                uint8 type = desc & 3u;
 
-                if (segment_state != 1 || (r_u8(cursor) & 3u) != 0u)
-                {
-                    if (!segment_state)
-                    {
-                        flags = r_u8(cursor);
-                        if ((flags & 3u) != 0u)
-                        {
-                            segment_state = 1;
-                            if (mode == 2 && transitions == 1)
-                                w_u8(cursor, (uint8)(flags | 8u));
-                            ++transitions;
-                        }
-                    }
-                }
-                else
-                {
-                    segment_state = 0;
-                    if (mode == 2 && transitions == 2 && previous != 0u)
-                        w_u8(previous, (uint8)(r_u8(previous) | 4u));
-                    ++transitions;
-                }
-                if (mode == 1 && transitions == 2)
-                {
-                    w_u32(first, linked);
-                    w_u32(second - 20u, linked + right_offset);
-                }
-                else if (mode == 2 && transitions == 2)
-                {
-                    w_u32(first, object);
-                    w_u32(second - 20u, object + left_offset);
-                }
-                type = (uint32)r_u8(cursor) & 3u;
+                if ((desc & 12u) == 12u)
+                    break;
                 if (type != 2u)
-                    left_offset += 14u;
-                previous = cursor;
-                if (type != 1u)
-                    right_offset += 14u;
+                    ++left;
                 ++cursor;
-                if ((r_u8(cursor) & 0x0Cu) == 0x0Cu)
+                if (type != 1u)
+                    ++right;
+                if ((uint8)right == (uint8)lane)
                     break;
             }
         }
-        if (previous != 0u)
+        ++count;
+        lane = left;
+        hazard = object->vertices[(uint8)lane].lane;
+        if (hazard == 0u)
         {
-            flags = r_u8(previous);
-            if ((flags & 4u) == 0u)
-                w_u8(previous, (uint8)(flags | 8u));
+            route->hazard = (uint16)(8u);
+            return 8;
         }
-        if (!segment_state)
-            ++transitions;
-        if (transitions == 2)
-        {
-            if (mode == 2)
-            {
-                mode = 1;
-                w_u32(second, 1);
-                second += 32u;
-                first += 32u;
-            }
-            if (mode == 0)
-                mode = 1;
-        }
-        else
-        {
-            if (transitions >= 5 || mode == 0)
-                abort();
-            if (mode == 1)
-            {
-                mode = 2;
-                w_u32(second, 0);
-                second += 32u;
-                first += 32u;
-                --object_index;
-            }
-        }
-        ++object_index;
-        segment_state = 1;
+        if (hazard == 1u)
+            route->hazard = (uint16)(7u);
+        result = (sint32)(uint8)count < (sint16)(uint16)route->lookahead;
+        if (!result)
+            return result;
     }
-    w_u32(first, 0);
-    w_u32(first + 4u, 0);
-    first = 0x800F3FD8u;
-    second = first + 4u;
-    result = (sint32)r_u32(second);
-    while (result != 0)
-    {
-        uint32 object = r_u32(first);
-        sint32 last = (sint32)r_u16(object) - 1;
-        uint32 record;
-        uint32 geometry;
-        sint32 coordinate;
-        uint8 cell;
-        VECTOR direction;
-        uint16 normal_x;
-        uint16 normal_z;
-
-        if (last < 0)
-            last = (sint32)r_u16(object + 2u) + 1;
-        record = r_u32(second);
-        w_u32(second + 24u, (uint32)last);
-        geometry = r_u32(first);
-        cell = r_u8(record + 14u);
-        coordinate = (sint16)r_u16(geometry + 8u);
-        direction.vx = coordinate + 16 * (sint32)cell;
-        cell = r_u8(record + 15u);
-        coordinate = (sint16)r_u16(geometry + 10u);
-        direction.vy = coordinate + 16 * (sint32)cell;
-        cell = r_u8(record + 16u);
-        coordinate = (sint16)r_u16(geometry + 12u);
-        direction.vz = coordinate + 16 * (sint32)cell;
-        record = r_u32(second);
-        cell = r_u8(record);
-        coordinate = (sint16)r_u16(geometry + 8u);
-        direction.vx -= coordinate + 16 * (sint32)cell;
-        record = r_u32(second);
-        cell = r_u8(record + 1u);
-        coordinate = (sint16)r_u16(geometry + 10u);
-        direction.vy -= coordinate + 16 * (sint32)cell;
-        record = r_u32(second);
-        coordinate = (sint16)r_u16(geometry + 12u);
-        cell = r_u8(record + 2u);
-        direction.vy = 0;
-        direction.vz -= coordinate + 16 * (sint32)cell;
-        VectorNormalS(&direction, (SVECTOR *)psx_addr(first + 8u, sizeof(SVECTOR)));
-        normal_x = r_u16(second + 8u);
-        normal_z = r_u16(second + 4u);
-        w_u16(second + 14u, 0);
-        w_u16(second + 12u, (uint16)(0u - normal_x));
-        w_u16(second + 16u, normal_z);
-        first += 32u;
-        second += 32u;
-        result = (sint32)r_u32(second);
-    }
-    return result;
 }
 
-sint32 route_sample_dist_slot(const BOAT *boat, uint32 descriptor, uint32 output)
+sint32 route_init_lookahead(BOAT *boat, const ROUTE_SEGMENT *seg, uint32 segment_count)
 {
-    uint32 frame;
-    sint32 end;
-    sint32 start;
-    sint32 difference;
-    sint32 index;
-    uint16 value;
-    sint16 delta_x;
-    sint16 delta_z;
-    VECTOR delta;
-    VECTOR squared;
-    sint32 result;
-
-    FUNCTION_MARKER(0x80026CB8u, "MAIN.EXE");
-    frame = guest_stack_push(0x30u);
-    end = (sint32)r_u32(descriptor + 4u);
-    start = (sint32)r_u32(descriptor);
-    difference = (sint32)((uint32)end - 30u - (uint32)start);
-    index = math_sra_s32((uint32)math_mul_lo_s32(difference, (sint32)0xB6DB6DB7u), 1u);
-    route_sample_geom((uint32)start, index, 1, output);
-    value = (uint16)((uint16)boat->motion.position[0] - r_u16(output));
-    w_u16(frame + 16u, value);
-    delta_x = (sint16)value;
-    value = (uint16)((uint16)boat->motion.position[1] - r_u16(output + 4u));
-    w_u16(frame + 18u, value);
-    value = (uint16)((uint16)boat->motion.position[2] - r_u16(output + 8u));
-    w_u16(frame + 20u, value);
-    delta_z = (sint16)value;
-    w_u16(frame + 18u, 0u);
-    delta.vx = delta_x;
-    delta.vy = 0;
-    delta.vz = delta_z;
-    delta.pad = 0;
-    Square12(&delta, &squared);
-    w_u32(frame + 24u, (uint32)(((sint64)delta_x * delta_x >> 12) + ((sint64)delta_z * delta_z >> 12)));
-    result = (sint32)(frame + 24u);
-    guest_stack_pop(0x30u);
-    return result;
-}
-
-sint32 route_aim(BOAT *boat)
-{
-    uint32 first = (uint32)boat->contacts.points[0].object;
-    uint16 first_index = r_u16(first);
-    uint32 table = r_u32(0x800B6B80u);
-    uint32 second = r_u32(table + 4u * (uint32)first_index);
-    sint16 route_index = (sint16)(uint16)boat->route.target_lane;
-    uint16 second_index = r_u16(second);
-    uint32 position_x = (uint32)boat->contacts.points[0].position[0];
-    uint32 object = r_u32(table + 4u * (uint32)second_index);
-    uint32 vertex = object + 14u * (uint32)(sint32)route_index + 30u;
-    uint8 vertex_x = r_u8(vertex);
-    sint32 base_x = (sint16)r_u16(object + 8u);
-    sint32 x = (sint32)((uint32)base_x + ((uint32)vertex_x << 4) - position_x);
-    uint32 x_square;
-    uint8 vertex_z;
-    uint32 position_z;
-    sint32 base_z;
-    sint32 z;
-    uint32 z_square;
-    sint32 length;
-    sint32 normalized_x;
-    sint32 normalized_z;
-
-    FUNCTION_MARKER(0x8002D1DCu, "MAIN.EXE");
-    boat->route_target.vector[0] = (sint32)((uint32)x);
-    x = (sint32)(uint32)boat->route_target.vector[0];
-    x_square = (uint32)x * (uint32)x;
-    vertex_z = r_u8(vertex + 2u);
-    position_z = (uint32)boat->contacts.points[0].position[2];
-    base_z = (sint16)r_u16(object + 12u);
-    z = (sint32)((uint32)base_z + ((uint32)vertex_z << 4) - position_z);
-    z_square = (uint32)z * (uint32)z;
-    boat->route_target.vector[2] = (sint32)((uint32)z);
-    length = (sint32)SquareRoot0((sint32)(x_square + z_square));
-    x = (sint32)(uint32)boat->route_target.vector[0];
-    normalized_x = math_div_s32((sint32)((uint32)x << 12), length);
-    boat->route_target.length = (sint32)((uint32)length);
-    z = (sint32)(uint32)boat->route_target.vector[2];
-    length = (sint32)(uint32)boat->route_target.length;
-    normalized_z = math_div_s32((sint32)((uint32)z << 12), length);
-    boat->route.speed = (sint32)(7168u);
-    boat->route_target.vector[0] = (sint32)((uint32)normalized_x);
-    boat->route_target.vector[2] = (sint32)((uint32)normalized_z);
-    return normalized_z;
-}
-
-sint32 route_init_lookahead(BOAT *boat)
-{
-    uint32 descriptor = (uint32)boat->contacts.points[0].object;
+    const ROUTE_SEGMENT *desc = seg;
     sint32 segment;
     sint32 next;
     sint32 count;
@@ -1098,31 +1121,318 @@ sint32 route_init_lookahead(BOAT *boat)
     boat->route.behavior = (uint16)(0u);
     boat->route.lookahead = (uint16)(5u);
     boat->route.steering = (uint16)(0u);
-    segment = (sint32)r_u16(descriptor) - 1;
+    segment = (sint32)desc->next.idx - 1;
     if (segment < 0)
-        segment = (sint32)r_u16(descriptor + 2u) + 1;
+        segment = (sint32)desc->prev.idx + 1;
     else
-        segment = (sint32)r_u16(descriptor) - 1;
+        segment = (sint32)desc->next.idx - 1;
     next = (sint32)((uint32)segment + (uint16)boat->route.lookahead);
     boat->route.target_segment = (uint16)((uint16)next);
     next = (uint16)boat->route.target_segment;
-    count = (sint32)r_u32(0x800B6A98u);
+    count = (sint32)segment_count;
     boat->route.segment = (uint16)((uint16)segment);
     if (next >= count)
-        boat->route.target_segment = (uint16)((uint16)(next - (sint32)r_u16(0x800B6A98u)));
+        boat->route.target_segment = (uint16)((uint16)(next - (sint32)(uint16)segment_count));
     boat->route.target_lane = (uint16)(4u);
     boat->race.mode = (uint16)(8u);
     boat->route.ticks = (uint32)(0u);
     return 8;
 }
 
-sint32 route_select_direction_vec(BOAT *boat)
+sint32 route_calc_boundary_dir(const ROUTE_SEGMENT *src, SVECTOR *dst)
+{
+    const uint8 *cursor;
+    uint32 position;
+    uint32 idx0 = 0;
+    uint32 idx1 = 0;
+    sint32 found = 0;
+    uint32 first_value;
+    uint32 last_value;
+    VECTOR normal;
+
+    FUNCTION_MARKER(0x8001BA08u, "MAIN.EXE");
+    if ((src->commands[0] & 0x0Cu) == 0x0Cu)
+    {
+        dst->vz = 0;
+        dst->vy = 0;
+        dst->vx = 0;
+        return 12;
+    }
+    cursor = src->commands;
+    position = (uint32)((uint32)src->join[0] << 4 | src->join[1]) >> 4;
+    do
+    {
+        uint32 type = (uint32)*cursor & 3u;
+
+        if (type == 0u)
+        {
+            if (found)
+                idx1 = position;
+            else
+            {
+                idx0 = position;
+                found = 1;
+            }
+        }
+        type = (uint32)*cursor & 3u;
+        ++cursor;
+        if (type != 2u)
+            ++position;
+    } while ((*cursor & 0x0Cu) != 0x0Cu);
+    first_value = src->vertices[idx0].position[2];
+    last_value = src->vertices[idx1].position[2];
+    normal.vy = 0;
+    normal.vx = (sint32)(first_value - last_value);
+    first_value = src->vertices[idx0].position[0];
+    last_value = src->vertices[idx1].position[0];
+    normal.vz = (sint32)(last_value - first_value);
+    return VectorNormalS(&normal, dst);
+}
+
+
+
+sint32 route_init_lanes(ROUTE_RESOURCES *archive, uint32 mode)
+{
+    sint32 count = (sint32)archive->count;
+    sint32 idx;
+    sint32 result;
+
+    FUNCTION_MARKER(0x8002FF48u, "MAIN.EXE");
+    if (count > 0)
+    {
+        idx = 0;
+        do
+        {
+            ROUTE_SEGMENT *seg = archive->segments[(uint32)idx];
+            uint8 vtx_count = seg->vertex_count;
+            ROUTE_SEGMENT *prev = seg->prev.seg;
+            sint32 vtx_idx;
+            sint32 left;
+            sint32 right;
+            sint32 in_span;
+            ROUTE_VERTEX *vtx_l;
+            ROUTE_VERTEX *vtx_r;
+            uint8 *cmd;
+
+            vtx_idx = 0;
+            if (vtx_count != 0u)
+            {
+                do
+                {
+                    ROUTE_VERTEX *vtx = &seg->vertices[vtx_idx];
+
+                    if (vtx->lane != 3u)
+                        vtx->lane = 2u;
+                    ++vtx_idx;
+                    vtx_count = seg->vertex_count;
+                } while (vtx_idx < vtx_count);
+            }
+            left = seg->join[0];
+            vtx_l = &seg->vertices[left];
+            for (vtx_idx = left; vtx_idx > 0; --vtx_idx)
+            {
+                --vtx_l;
+                vtx_l->lane = 0u;
+            }
+            vtx_l = &seg->vertices[left];
+            right = seg->join[1];
+            vtx_r = &prev->vertices[right];
+            for (vtx_idx = right; vtx_idx > 0; --vtx_idx)
+            {
+                --vtx_r;
+                vtx_r->lane = 0u;
+            }
+            vtx_r = &prev->vertices[right];
+            cmd = seg->commands;
+            in_span = 0;
+            vtx_idx = 0;
+            do
+            {
+                uint8 flags = *cmd;
+                uint8 type;
+
+                if ((flags & 12u) == 12u)
+                {
+                    vtx_idx = 14;
+                    if (in_span)
+                    {
+                        if (vtx_l[-1].lane != 0u)
+                            vtx_l[-1].lane = 1u;
+                        in_span = 0;
+                        if (vtx_r[-1].lane != 0u)
+                            vtx_r[-1].lane = 1u;
+                    }
+                    vtx_r->lane = 0u;
+                    vtx_l->lane = 0u;
+                }
+                else
+                {
+                    type = flags & 3u;
+                    if (type != 0u)
+                    {
+                        if (in_span)
+                        {
+                            if (vtx_l[-1].lane != 0u)
+                                vtx_l[-1].lane = 1u;
+                            in_span = 0;
+                            if (vtx_r[-1].lane != 0u)
+                                vtx_r[-1].lane = 1u;
+                        }
+                        vtx_r->lane = 0u;
+                        vtx_l->lane = 0u;
+                        type = *cmd & 3u;
+                        if (type != 2u)
+                        {
+                            ++vtx_l;
+                            ++left;
+                        }
+                        if (type != 1u)
+                        {
+                            ++vtx_r;
+                            ++right;
+                        }
+                        vtx_r->lane = 0u;
+                        vtx_l->lane = 0u;
+                    }
+                    else if (!in_span)
+                    {
+                        vtx_r->lane = 0u;
+                        vtx_l->lane = 0u;
+                        ++vtx_l;
+                        ++left;
+                        ++vtx_r;
+                        ++right;
+                        in_span = 1;
+                        vtx_r->lane = 1u;
+                        vtx_l->lane = 1u;
+                    }
+                    else
+                    {
+                        ++vtx_l;
+                        ++left;
+                        ++vtx_r;
+                        ++right;
+                    }
+                }
+                ++vtx_idx;
+                ++cmd;
+            } while (vtx_idx < 14);
+            while (left < seg->vertex_count)
+            {
+                ++left;
+                vtx_l->lane = 0u;
+                ++vtx_l;
+            }
+            while (right < prev->vertex_count)
+            {
+                ++right;
+                vtx_r->lane = 0u;
+                ++vtx_r;
+            }
+            count = (sint32)archive->count;
+            ++idx;
+        } while (idx < count);
+        count = (sint32)archive->count;
+    }
+    if (count > 0)
+    {
+        idx = 0;
+        do
+        {
+            ROUTE_SEGMENT *seg = archive->segments[(uint32)idx];
+            uint8 *cmd = seg->commands;
+            ROUTE_VERTEX *vtx_l = &seg->vertices[seg->join[0]];
+            ROUTE_SEGMENT *prev = seg->prev.seg;
+            ROUTE_VERTEX *vtx_r = &prev->vertices[seg->join[1]];
+            sint32 vtx_idx = 0;
+
+            do
+            {
+                uint8 value = vtx_l->lane;
+
+                if (value == 0u)
+                {
+                    value = vtx_r->lane;
+                    if (value == 2u)
+                    {
+                        vtx_r->lane = 1u;
+                        value = vtx_r->lane;
+                    }
+                }
+                else
+                    value = vtx_r->lane;
+                if (value == 0u)
+                {
+                    value = vtx_l->lane;
+                    if (value == 2u)
+                        vtx_l->lane = 1u;
+                }
+                value = *cmd;
+                if ((value & 12u) == 12u)
+                    vtx_idx = 14;
+                else
+                {
+                    value &= 3u;
+                    if (value != 2u)
+                        ++vtx_l;
+                    if (value != 1u)
+                        ++vtx_r;
+                }
+                ++vtx_idx;
+                ++cmd;
+            } while (vtx_idx < 14);
+            count = (sint32)archive->count;
+            ++idx;
+        } while (idx < count);
+    }
+    result = 5;
+    if (mode != 5u)
+        return result;
+    count = (sint32)archive->count;
+    if (count <= 0)
+        return count;
+    idx = 0;
+    do
+    {
+        ROUTE_SEGMENT *seg = archive->segments[(uint32)idx];
+        sint32 vertices = seg->vertex_count;
+        sint32 vtx_idx;
+        ROUTE_VERTEX *v0 = NULL;
+        ROUTE_VERTEX *v1 = NULL;
+        ROUTE_VERTEX *entry = seg->vertices;
+        uint32 minimum = 256u;
+
+        for (vtx_idx = 0; vtx_idx < vertices; ++vtx_idx, ++entry)
+        {
+            uint32 priority = entry->position[1];
+
+            if (priority < minimum && entry->lane == 2u)
+            {
+                minimum = priority;
+                v1 = v0;
+                v0 = entry;
+            }
+        }
+        if (v0 != NULL)
+            v0->lane = 3u;
+        ++idx;
+        if (v1 != NULL)
+            v1->lane = 3u;
+        count = (sint32)archive->count;
+        result = idx < count;
+    } while (result != 0);
+    return result;
+}
+
+
+
+sint32 route_select_dir(BOAT *boat, const ROUTE_RESOURCES *archive)
 {
     BOAT_ROUTE_STATE *route = &boat->route;
-    BOAT_ROUTE_TARGET *output = &boat->route_target;
-    uint32 object;
-    uint32 table;
-    uint32 settings;
+    const AI_ROUTE_CFG *cfg = route->settings;
+    BOAT_ROUTE_TARGET *dst = &boat->route_target;
+    const ROUTE_SEGMENT *seg;
+    ROUTE_SEGMENT *const *table;
     sint32 indices[5];
     sint32 weights[5];
     sint32 candidate_x[5] = {0};
@@ -1135,51 +1445,50 @@ sint32 route_select_direction_vec(BOAT *boat)
     sint32 z;
     sint32 length;
     sint32 yaw;
-    sint32 index;
+    sint32 idx;
     sint32 component;
 
     FUNCTION_MARKER(0x8002EBDCu, "MAIN.EXE");
 
-    index = (uint16)route->target_segment;
-    table = r_u32(0x800B6B80u);
-    settings = (uint32)route->settings;
+    idx = (uint16)route->target_segment;
+    table = archive->segments;
     current = (sint16)(uint16)route->target_lane;
-    object = r_u32(table + (uint32)index * 4u);
+    seg = table[(uint32)idx];
     if (current < 0)
         route->target_lane = (uint16)(0u);
-    else if (current >= r_u8(object + 7u))
-        route->target_lane = (uint16)((uint16)(r_u8(object + 7u) - 1u));
+    else if (current >= seg->vertex_count)
+        route->target_lane = (uint16)((uint16)(seg->vertex_count - 1u));
     current = (sint16)(uint16)route->target_lane;
     indices[2] = current;
-    indices[3] = current + 1 < r_u8(object + 7u) ? current + 1 : -1;
-    indices[4] = current + 2 < r_u8(object + 7u) ? current + 2 : -1;
+    indices[3] = current + 1 < seg->vertex_count ? current + 1 : -1;
+    indices[4] = current + 2 < seg->vertex_count ? current + 2 : -1;
     indices[1] = current - 1 >= 0 ? current - 1 : -1;
     indices[0] = current - 2 >= 0 ? current - 2 : -1;
-    for (index = 0; index < 5; ++index)
+    for (idx = 0; idx < 5; ++idx)
     {
-        uint32 vertex;
+        const ROUTE_VERTEX *vtx;
         uint8 type;
 
-        weights[index] = 0;
-        if (indices[index] < 0)
+        weights[idx] = 0;
+        if (indices[idx] < 0)
             continue;
-        vertex = object + (uint32)indices[index] * 14u + 30u;
-        if (r_u8(vertex) == 255u && r_u8(vertex + 2u) == 255u && r_u8(vertex + 1u) == 255u)
+        vtx = &seg->vertices[indices[idx]];
+        if (vtx->position[0] == 255u && vtx->position[2] == 255u && vtx->position[1] == 255u)
         {
-            indices[index] = -1;
+            indices[idx] = -1;
             continue;
         }
-        if ((sint16)(uint16)route->hazard != 8 && (sint16)(uint16)route->behavior == 3 && indices[index] != (sint16)(uint16)route->lane_timer)
-            weights[index] = (sint32)((uint32)weights[index] + r_u8(settings + 24u));
-        type = r_u8(vertex + 12u);
+        if ((sint16)(uint16)route->hazard != 8 && (sint16)(uint16)route->behavior == 3 && indices[idx] != (sint16)(uint16)route->lane_timer)
+            weights[idx] = (sint32)((uint32)weights[idx] + cfg->lane_change);
+        type = vtx->lane;
         if (type == 1u)
-            weights[index] = (sint32)((uint32)weights[index] + 1u);
+            weights[idx] = (sint32)((uint32)weights[idx] + 1u);
         else if (type == 2u)
-            weights[index] = (sint32)((uint32)weights[index] + r_u8(settings + 29u));
+            weights[idx] = (sint32)((uint32)weights[idx] + cfg->lane2);
         else if (type == 3u)
-            weights[index] = (sint32)((uint32)weights[index] + r_u8(settings + 28u));
+            weights[idx] = (sint32)((uint32)weights[idx] + cfg->lane3);
         else
-            weights[index] = 0;
+            weights[idx] = 0;
     }
     if (indices[1] < 0)
         indices[1] = indices[0];
@@ -1191,32 +1500,32 @@ sint32 route_select_direction_vec(BOAT *boat)
     x = (sint16)(uint16)boat->motion.transform.pose.m[0][2];
     z = (sint16)(uint16)boat->motion.transform.pose.m[2][2];
     heading = ratan2(x, z);
-    index = (uint16)route->target_segment;
-    table = r_u32(0x800B6B80u);
-    object = r_u32(table + (uint32)index * 4u);
-    for (index = 1; index <= 3; ++index)
+    idx = (uint16)route->target_segment;
+    table = archive->segments;
+    seg = table[(uint32)idx];
+    for (idx = 1; idx <= 3; ++idx)
     {
-        uint32 vertex;
+        const ROUTE_VERTEX *vtx;
         sint32 angle;
         sint32 turns;
         sint32 delta;
         uint8 coordinate;
 
-        if (indices[index] < 0)
+        if (indices[idx] < 0)
             continue;
-        vertex = object + (uint32)indices[index] * 14u + 30u;
-        coordinate = r_u8(vertex);
-        component = (sint16)r_u16(object + 8u);
-        candidate_x[index] = (sint32)((uint32)component + ((uint32)coordinate << 4) - (uint32)boat->contacts.points[0].position[0]);
-        coordinate = r_u8(vertex + 2u);
-        component = (sint16)r_u16(object + 12u);
-        candidate_z[index] = (sint32)((uint32)component + ((uint32)coordinate << 4) - (uint32)boat->contacts.points[0].position[2]);
-        angle = ratan2(candidate_x[index], candidate_z[index]);
+        vtx = &seg->vertices[indices[idx]];
+        coordinate = vtx->position[0];
+        component = seg->origin[0];
+        candidate_x[idx] = (sint32)((uint32)component + ((uint32)coordinate << 4) - (uint32)boat->contacts.points[0].position[0]);
+        coordinate = vtx->position[2];
+        component = seg->origin[2];
+        candidate_z[idx] = (sint32)((uint32)component + ((uint32)coordinate << 4) - (uint32)boat->contacts.points[0].position[2]);
+        angle = ratan2(candidate_x[idx], candidate_z[idx]);
         turns = math_sra_s32((uint32)angle + (angle < 0 ? 4095u : 0u), 12u);
         delta = (sint32)((uint32)heading - ((uint32)angle - ((uint32)turns << 12)));
-        candidate_yaw[index] = delta;
-        if (math_abs_s32(delta) < (sint16)r_u16(settings + 22u) && r_u8(vertex + 12u) >= 2u)
-            weights[index] = (sint32)((uint32)weights[index] + r_u8(settings + 30u));
+        candidate_yaw[idx] = delta;
+        if (math_abs_s32(delta) < cfg->yaw_limit && vtx->lane >= 2u)
+            weights[idx] = (sint32)((uint32)weights[idx] + cfg->heading);
     }
     if (weights[3] < weights[1])
         selected = weights[2] < weights[1] ? 1 : 2;
@@ -1246,52 +1555,881 @@ sint32 route_select_direction_vec(BOAT *boat)
         exit(1);
     x = candidate_x[selected];
     z = candidate_z[selected];
-    output->vector[0] = (sint32)((uint32)x);
-    output->vector[2] = (sint32)((uint32)z);
+    dst->vector[0] = (sint32)((uint32)x);
+    dst->vector[2] = (sint32)((uint32)z);
     if ((uint32)x + 6096u >= 12193u || (uint32)z + 6096u >= 12193u)
     {
-        output->vector[2] = (sint32)(0u);
-        output->vector[1] = (sint32)(0u);
-        output->vector[0] = (sint32)(0u);
+        dst->vector[2] = (sint32)(0u);
+        dst->vector[1] = (sint32)(0u);
+        dst->vector[0] = (sint32)(0u);
         return 0;
     }
     length = (sint32)SquareRoot0((uint32)math_mul_lo_s32(x, x) + (uint32)math_mul_lo_s32(z, z));
-    output->length = (sint32)((uint32)length);
+    dst->length = (sint32)((uint32)length);
     if (length == 0)
     {
-        output->vector[2] = (sint32)(0u);
-        output->vector[0] = (sint32)(0u);
+        dst->vector[2] = (sint32)(0u);
+        dst->vector[0] = (sint32)(0u);
     }
-    output->vector[0] = (sint32)((uint32)math_div_s32((sint32)((uint32)x << 12), length));
-    output->vector[2] = (sint32)((uint32)math_div_s32((sint32)((uint32)z << 12), length));
+    dst->vector[0] = (sint32)((uint32)math_div_s32((sint32)((uint32)x << 12), length));
+    dst->vector[2] = (sint32)((uint32)math_div_s32((sint32)((uint32)z << 12), length));
     yaw = candidate_yaw[selected];
     if (yaw >= 2049)
         yaw = (sint32)((uint32)yaw - 4096u);
     else if (yaw < -2048)
         yaw = (sint32)((uint32)yaw + 4096u);
-    output->vector[1] = (sint32)((uint32)yaw);
+    dst->vector[1] = (sint32)((uint32)yaw);
     route->target_lane = (uint16)((uint16)indices[selected]);
     return indices[selected];
 }
 
-sint32 route_update_speed_ctrl(const BOAT *source, BOAT *boat)
+
+
+sint32 route_aim(BOAT *boat, const ROUTE_SEGMENT *seg)
+{
+    const ROUTE_SEGMENT *target = seg->next.seg->next.seg;
+    sint16 lane = (sint16)(uint16)boat->route.target_lane;
+    uint32 pos_x = (uint32)boat->contacts.points[0].position[0];
+    const ROUTE_VERTEX *vtx = &target->vertices[lane];
+    uint8 vertex_x = vtx->position[0];
+    sint32 base_x = target->origin[0];
+    sint32 x = (sint32)((uint32)base_x + ((uint32)vertex_x << 4) - pos_x);
+    uint32 x_square;
+    uint8 vertex_z;
+    uint32 pos_z;
+    sint32 base_z;
+    sint32 z;
+    uint32 z_square;
+    sint32 length;
+    sint32 normalized_x;
+    sint32 normalized_z;
+
+    FUNCTION_MARKER(0x8002D1DCu, "MAIN.EXE");
+    boat->route_target.vector[0] = (sint32)((uint32)x);
+    x = (sint32)(uint32)boat->route_target.vector[0];
+    x_square = (uint32)x * (uint32)x;
+    vertex_z = vtx->position[2];
+    pos_z = (uint32)boat->contacts.points[0].position[2];
+    base_z = target->origin[2];
+    z = (sint32)((uint32)base_z + ((uint32)vertex_z << 4) - pos_z);
+    z_square = (uint32)z * (uint32)z;
+    boat->route_target.vector[2] = (sint32)((uint32)z);
+    length = (sint32)SquareRoot0((sint32)(x_square + z_square));
+    x = (sint32)(uint32)boat->route_target.vector[0];
+    normalized_x = math_div_s32((sint32)((uint32)x << 12), length);
+    boat->route_target.length = (sint32)((uint32)length);
+    z = (sint32)(uint32)boat->route_target.vector[2];
+    length = (sint32)(uint32)boat->route_target.length;
+    normalized_z = math_div_s32((sint32)((uint32)z << 12), length);
+    boat->route.speed = (sint32)(7168u);
+    boat->route_target.vector[0] = (sint32)((uint32)normalized_x);
+    boat->route_target.vector[2] = (sint32)((uint32)normalized_z);
+    return normalized_z;
+}
+
+
+
+sint32 route_build_boundaries(ROUTE_RESOURCES *route, ROUTE_BOUNDARIES *dst)
+{
+    ROUTE_BOUNDARY *entry = dst->entries;
+    sint32 mode = 0;
+    sint32 object_index = 0;
+    sint32 segment_state = 1;
+
+    FUNCTION_MARKER(0x8001BC3Cu, "MAIN.EXE");
+    while (object_index < (sint32)route->count)
+    {
+        ROUTE_SEGMENT *const *table = route->segments;
+        ROUTE_SEGMENT *object = table[(uint32)object_index];
+        uint32 left_idx = object->join[0];
+                uint8 *cursor = object->commands;
+        uint8 flags = *cursor;
+        ROUTE_SEGMENT *linked = object->prev.seg;
+        uint32 right_idx = object->join[1];
+        uint8 *prev = NULL;
+        sint32 transitions = 0;
+
+        if ((flags & 0x0Cu) != 0x0Cu)
+            *cursor = (uint8)(flags | 4u);
+        if ((*cursor & 0x0Cu) != 0x0Cu)
+        {
+            for (;;)
+            {
+                uint32 type;
+
+                if (segment_state != 1 || (*cursor & 3u) != 0u)
+                {
+                    if (!segment_state)
+                    {
+                        flags = *cursor;
+                        if ((flags & 3u) != 0u)
+                        {
+                            segment_state = 1;
+                            if (mode == 2 && transitions == 1)
+                                *cursor = (uint8)(flags | 8u);
+                            ++transitions;
+                        }
+                    }
+                }
+                else
+                {
+                    segment_state = 0;
+                    if (mode == 2 && transitions == 2 && prev != NULL)
+                        *prev = (uint8)(*prev | 4u);
+                    ++transitions;
+                }
+                if (mode == 1 && transitions == 2)
+                {
+                    entry->seg = linked;
+                    entry->vertex_idx = right_idx;
+                }
+                else if (mode == 2 && transitions == 2)
+                {
+                    entry->seg = object;
+                    entry->vertex_idx = left_idx;
+                }
+                type = (uint32)*cursor & 3u;
+                if (type != 2u)
+                    ++left_idx;
+                prev = cursor;
+                if (type != 1u)
+                    ++right_idx;
+                ++cursor;
+                if ((*cursor & 0x0Cu) == 0x0Cu)
+                    break;
+            }
+        }
+        if (prev != NULL)
+        {
+            flags = *prev;
+            if ((flags & 4u) == 0u)
+                *prev = (uint8)(flags | 8u);
+        }
+        if (!segment_state)
+            ++transitions;
+        if (transitions == 2)
+        {
+            if (mode == 2)
+            {
+                mode = 1;
+                entry->mode = 1;
+                ++entry;
+            }
+            if (mode == 0)
+                mode = 1;
+        }
+        else
+        {
+            if (transitions >= 5 || mode == 0)
+                abort();
+            if (mode == 1)
+            {
+                mode = 2;
+                entry->mode = 0;
+                ++entry;
+                --object_index;
+            }
+        }
+        ++object_index;
+        segment_state = 1;
+    }
+    entry->seg = NULL;
+    entry->vertex_idx = 0;
+    dst->count = (uint32)(entry - dst->entries);
+    for (entry = dst->entries; entry->seg != NULL; ++entry)
+    {
+        const ROUTE_VERTEX *v0 = &entry->seg->vertices[entry->vertex_idx];
+        const ROUTE_VERTEX *v1 = v0 + 1;
+        VECTOR dir;
+        sint32 last = (sint32)entry->seg->next.idx - 1;
+
+        if (last < 0)
+            last = (sint32)entry->seg->prev.idx + 1;
+        entry->route_idx = (uint32)last;
+        dir.vx = 16 * ((sint32)v1->position[0] - (sint32)v0->position[0]);
+        dir.vy = 0;
+        dir.vz = 16 * ((sint32)v1->position[2] - (sint32)v0->position[2]);
+        dir.pad = 0;
+        VectorNormalS(&dir, &entry->dir);
+        entry->normal.vx = (sint16)(uint16)(0u - (uint16)entry->dir.vz);
+        entry->normal.vy = 0;
+        entry->normal.vz = entry->dir.vx;
+    }
+    return 0;
+}
+sint32 route_init_cmds(ROUTE_RESOURCES *route)
+{
+    sint32 count = (sint32)route->count;
+    sint32 index = 0;
+    sint32 result = count;
+
+    FUNCTION_MARKER(0x8001BB04u, "MAIN.EXE");
+    if (count <= 0)
+        return result;
+    do
+    {
+        uint8 *object = route->segments[(uint32)index]->commands;
+        uint8 *end = object + 14u;
+
+        do
+        {
+            uint8 old_value = *object;
+            uint32 value = (uint32)old_value & 6u;
+            uint8 next = old_value & 0xF0u;
+
+            *object = next;
+            if (value == 6u)
+            {
+                *object = 0xFFu;
+            }
+            else if ((old_value & 8u) != 0u)
+            {
+                if (value != 4u)
+                    abort();
+                *object = *object;
+            }
+            else if (value == 0u)
+            {
+                *object = (uint8)(next | 1u);
+            }
+            else if (value == 2u)
+            {
+                *object = (uint8)(*object | 2u);
+            }
+            else if (value == 4u)
+            {
+                *object = (uint8)(*object | 3u);
+            }
+            ++object;
+        } while (object < end);
+        count = (sint32)route->count;
+        index = (sint32)((uint32)index + 1u);
+        result = index < count;
+    } while (result != 0);
+    return result;
+}
+
+
+extern sint32 route_sample_geom(const ROUTE_SEGMENT *, sint32, sint32, sint32 [4]);
+void route_sample_boundary(const sint32 position[3], const ROUTE_BOUNDARY *src)
+{
+    sint32 output[4];
+    VECTOR delta;
+    VECTOR squared;
+
+    FUNCTION_MARKER_ALIAS(0x80026CB8u, "MAIN.EXE");
+    route_sample_geom(src->seg, (sint32)src->vertex_idx, 1, output);
+    delta.vx = (sint16)(uint16)((uint16)position[0] - (uint16)output[0]);
+    delta.vy = 0;
+    delta.vz = (sint16)(uint16)((uint16)position[2] - (uint16)output[2]);
+    delta.pad = 0;
+    Square0(&delta, &squared);
+}
+void vehicle_sample_boundary(BOAT *boat, const ROUTE_BOUNDARIES *boundaries)
+{
+    const sint32 slots[3] = {1, 3, 4};
+    BOAT_CONTACTS *contacts = &boat->contacts;
+    sint32 current = contacts->boundary_section;
+    sint32 previous = (sint32)((uint32)current - 1u);
+    sint32 next = (sint32)((uint32)current + 1u);
+    const ROUTE_BOUNDARY *desc = &boundaries->entries[current];
+    const ROUTE_BOUNDARY *cursor = desc;
+    SVECTOR transformed;
+
+    FUNCTION_MARKER(0x80026DC0u, "MAIN.EXE");
+    if (boat->control.driver - 2u >= 2u)
+        return;
+    SetRotMatrix(&boat->motion.transform.pose);
+    SetTransMatrix(&boat->motion.transform.pose);
+    for (sint32 index = 0; index < 3; ++index)
+        RotTransSV(&contacts->points[slots[index]].sample, &transformed, NULL);
+    if (desc->seg == NULL)
+        return;
+    if (previous < 0)
+    {
+        do
+        {
+            ++cursor;
+            ++previous;
+        } while (cursor->seg != NULL);
+    }
+    if (cursor[1].seg == NULL)
+        next = 0;
+    route_sample_boundary(boat->motion.position, &boundaries->entries[previous]);
+    route_sample_boundary(boat->motion.position, desc);
+    route_sample_boundary(boat->motion.position, &boundaries->entries[next]);
+    // Original equal stack-pointer returns exclude every correction path
+}
+
+
+static sint16 route_geometry_lo_s16(uint32 value)
+{
+    return (sint16)(uint16)value;
+}
+static sint16 route_geometry_hi_s16(uint32 value)
+{
+    return (sint16)(uint16)(value >> 16);
+}
+static uint32 route_geometry_set_lo_u16(uint32 value, sint32 low)
+{
+    return (value & 0xFFFF0000u) | (uint16)low;
+}
+static sint32 route_geometry_mul_shift12(sint32 v0, sint32 v1)
+{
+    return (sint32)(((sint64)v0 * (sint64)v1) >> 12);
+}
+static uint8 route_geometry_clamp_byte(sint32 value)
+{
+    if (value < 0)
+        return 0u;
+    if (value >= 256)
+        return 255u;
+    return (uint8)value;
+}
+static sint16 route_vertices_lo_s16(uint32 value)
+{
+    return (sint16)(uint16)value;
+}
+static sint16 route_vertices_hi_s16(uint32 value)
+{
+    return (sint16)(uint16)(value >> 16);
+}
+static uint32 route_vertices_set_lo_s16(uint32 value, sint32 low)
+{
+    return (value & 0xFFFF0000u) | (uint16)low;
+}
+static uint32 route_vertices_set_hi_s16(uint32 value, sint32 high)
+{
+    return (value & 0x0000FFFFu) | ((uint32)(uint16)high << 16);
+}
+static sint8 route_vertices_slope_clamp(sint32 numerator, sint32 denominator)
+{
+    sint32 value = numerator / denominator;
+
+    if (value < -127)
+        value = -127;
+    else if (value >= 128)
+        value = 127;
+    return (sint8)value;
+}
+void route_gen_geom(ROUTE_SEGMENT *records, sint32 count)
+{
+    uint32 turn_step = route_gen_defaults.turn_step;
+    uint32 turn_amount = route_gen_defaults.turn_amount;
+    uint32 turn_phase = route_gen_defaults.turn_phase;
+    uint32 slope_step = route_gen_defaults.slope_step;
+    uint32 slope_amount = route_gen_defaults.slope_amount;
+    uint32 slope_phase = route_gen_defaults.slope_phase;
+    uint32 left_offsets = route_gen_defaults.left_offsets;
+    uint32 outer_offsets = route_gen_defaults.outer_offsets;
+    uint32 random_ranges = route_gen_defaults.random_ranges;
+    uint32 color_ranges = route_gen_defaults.color_ranges;
+    uint32 color_bases = route_gen_defaults.color_bases;
+    uint32 right_offsets = left_offsets;
+    uint32 right_outer_offsets = outer_offsets;
+    uint32 right_random_ranges = random_ranges;
+    uint32 right_color_ranges = color_ranges;
+    uint32 right_color_bases = color_bases;
+    ROUTE_SEGMENT *current_record = records;
+    sint32 straight = 1;
+    sint32 previous_rise = 0;
+    sint32 previous_fall = 0;
+    uint16 width = 256u;
+    uint16 width_delta = 1u;
+    uint8 pattern = 0u;
+    sint32 index;
+
+    FUNCTION_MARKER(0x8003DA8Cu, "MAIN.EXE");
+    if (count > 0)
+    {
+        ROUTE_SEGMENT *last = &records[count - 1];
+        sint32 point;
+
+        last->origin[0] = 0u;
+        last->origin[1] = 0u;
+        last->origin[2] = 0u;
+        for (point = 0; point < 14; ++point)
+            last->vertices[point].texture_phase = (uint8)global_fn_8006e9d8();
+    }
+    for (index = 0; index < count; ++index)
+    {
+        sint32 radius[14];
+        sint16 x[14];
+        sint16 y[14];
+        sint16 z[14];
+        sint32 remaining;
+        sint32 curve;
+        sint32 slope = 0;
+        sint32 rise = 0;
+        sint32 fall = 0;
+        sint32 prior_rise = previous_rise;
+        sint32 prior_fall = previous_fall;
+        sint32 angle;
+        sint32 cosine;
+        sint32 sine;
+        sint16 minimum_x;
+        sint16 minimum_y;
+        sint16 minimum_z;
+        sint32 point;
+
+        remaining = count - index - 1;
+        if (route_geometry_lo_s16(turn_phase) / 4096 == 1)
+        {
+            if ((sint16)remaining < 65)
+            {
+                turn_phase = route_geometry_set_lo_u16(turn_phase, 0);
+                turn_step = 0x00200020u;
+                turn_amount = route_geometry_set_lo_u16(turn_amount, 0);
+            }
+            else
+            {
+                sint32 bounded = remaining >= 129 ? 128 : remaining;
+                sint32 half = bounded / 2;
+                sint32 length = half + global_fn_8006e9d8() % half;
+                sint32 quarter = length / 4;
+                sint32 eighth = length / 8;
+                sint32 v0 = eighth + global_fn_8006e9d8() % quarter;
+                sint32 first_divisor = 2048 / v0;
+                sint32 first_duration = 2048 / first_divisor;
+                sint32 second_divisor = 2048 / (length - first_duration);
+                sint32 second_duration = 2048 / second_divisor;
+
+                straight = 0;
+                turn_step = (uint32)(uint16)first_divisor | ((uint32)(uint16)second_divisor << 16);
+                turn_amount = route_geometry_set_lo_u16(turn_amount, 8 * second_duration);
+                if (route_geometry_lo_s16(turn_amount) / first_duration >= 65)
+                    turn_amount = route_geometry_set_lo_u16(turn_amount, first_duration << 6);
+                turn_phase = route_geometry_set_lo_u16(turn_phase, 0);
+            }
+        }
+        else
+        {
+            sint32 phase = route_geometry_lo_s16(turn_phase);
+            phase += phase < 2048 ? route_geometry_lo_s16(turn_step) : route_geometry_hi_s16(turn_step);
+            turn_phase = route_geometry_set_lo_u16(turn_phase, phase);
+        }
+        curve = route_geometry_mul_shift12(rcos(route_geometry_lo_s16(turn_phase)) - 4096, route_geometry_lo_s16(turn_amount));
+
+        if (route_geometry_lo_s16(slope_phase) / 4096 == 1)
+        {
+            if ((sint16)remaining < 49)
+            {
+                straight = 1;
+                slope_step = 0x00200020u;
+                slope_amount = 0u;
+                slope_phase = 0x00180000u;
+            }
+            else
+            {
+                sint32 bounded = remaining >= 129 ? 128 : remaining;
+                sint32 half = bounded / 2;
+                sint32 length = bounded / 4 + global_fn_8006e9d8() % half;
+                sint32 quarter = length / 4;
+                sint32 v0 = quarter + global_fn_8006e9d8() % quarter;
+                sint32 first_divisor = 2048 / v0;
+                sint32 first_duration = 2048 / first_divisor;
+                sint32 second_divisor = 2048 / (length - first_duration);
+                sint32 second_duration = 2048 / second_divisor;
+                sint32 phase_divisor;
+
+                slope_step = (uint32)(uint16)first_divisor | ((uint32)(uint16)second_divisor << 16);
+                slope_amount = route_geometry_set_lo_u16(slope_amount, 32 * (first_duration + global_fn_8006e9d8() % first_duration));
+                phase_divisor = second_duration + global_fn_8006e9d8() % second_duration;
+                slope_amount = (slope_amount & 0x0000FFFFu) | ((uint32)(uint16)(32 * phase_divisor) << 16);
+                phase_divisor = global_fn_8006e9d8();
+                phase_divisor = phase_divisor - 8 * (phase_divisor / 8) + 24;
+                slope_phase = ((uint32)(uint16)phase_divisor << 16);
+            }
+        }
+        else if (route_geometry_lo_s16(slope_phase) < 2048)
+        {
+            slope_phase = route_geometry_set_lo_u16(slope_phase, route_geometry_lo_s16(slope_phase) + route_geometry_lo_s16(slope_step));
+            slope = route_geometry_mul_shift12(rsin(route_geometry_lo_s16(slope_phase)), route_geometry_lo_s16(slope_amount));
+            if (route_geometry_lo_s16(slope_phase) >= 1024)
+                fall = 1;
+        }
+        else
+        {
+            slope_phase = route_geometry_set_lo_u16(slope_phase, route_geometry_lo_s16(slope_phase) + route_geometry_hi_s16(slope_step));
+            slope = route_geometry_mul_shift12(rsin(route_geometry_lo_s16(slope_phase)), route_geometry_hi_s16(slope_amount));
+            if (route_geometry_lo_s16(slope_phase) >= 3072)
+                rise = 1;
+        }
+
+        if (straight)
+        {
+            if (width == 256u)
+                width_delta = 0u;
+            else
+            {
+                width_delta = 1u;
+                if (width > 256u)
+                    width_delta = 0xFFFFu;
+            }
+        }
+        else if (width_delta == 0u)
+            width_delta = 1u;
+        if (width >= 301u)
+            width_delta = (uint16) - (global_fn_8006e9d8() & 3);
+        else if (width < 140u)
+            width_delta = (uint16)(global_fn_8006e9d8() & 3);
+        width = (uint16)(width + width_delta);
+
+        radius[0] = slope + 21500;
+        for (point = 1; point < 14; ++point)
+            radius[point] = radius[point - 1] + (sint16)width;
+        if (straight)
+        {
+            radius[0] -= route_geometry_hi_s16(outer_offsets);
+            radius[1] -= route_geometry_lo_s16(outer_offsets);
+            radius[2] -= route_geometry_hi_s16(left_offsets);
+            radius[3] -= route_geometry_lo_s16(left_offsets);
+        }
+        else if (rise == 1)
+        {
+            sint32 random = global_fn_8006e9d8() % (sint8)(random_ranges >> 16);
+
+            radius[2] -= route_geometry_hi_s16(left_offsets);
+            radius[1] = radius[2];
+            radius[0] = radius[2] - (sint16)width - route_geometry_lo_s16(outer_offsets) - (random << 6);
+        }
+        else
+        {
+            radius[0] -= route_geometry_hi_s16(outer_offsets) + ((global_fn_8006e9d8() % (sint8)(random_ranges >> 24)) << 6);
+            radius[1] -= route_geometry_lo_s16(outer_offsets) + ((global_fn_8006e9d8() % (sint8)(random_ranges >> 16)) << 6);
+            radius[2] -= route_geometry_hi_s16(left_offsets) + ((global_fn_8006e9d8() % (sint8)(random_ranges >> 8)) << 6);
+        }
+        if (straight)
+        {
+            radius[9] += route_geometry_lo_s16(right_offsets);
+            radius[10] += route_geometry_hi_s16(right_offsets);
+            radius[11] += route_geometry_lo_s16(right_outer_offsets);
+            radius[12] += route_geometry_hi_s16(right_outer_offsets);
+        }
+        else if (fall == 1)
+        {
+            sint32 random = global_fn_8006e9d8() % (sint8)(right_random_ranges >> 16);
+
+            radius[10] += route_geometry_hi_s16(right_offsets);
+            radius[11] = radius[10];
+            radius[12] = radius[10] + (sint16)width + route_geometry_lo_s16(right_outer_offsets) + (random << 6);
+        }
+        else
+        {
+            radius[10] += route_geometry_hi_s16(right_offsets) + ((global_fn_8006e9d8() % (sint8)(right_random_ranges >> 8)) << 6);
+            radius[11] += route_geometry_lo_s16(right_outer_offsets) + ((global_fn_8006e9d8() % (sint8)(right_random_ranges >> 16)) << 6);
+            radius[12] += route_geometry_hi_s16(right_outer_offsets) + ((global_fn_8006e9d8() % (sint8)(right_random_ranges >> 24)) << 6);
+        }
+
+        angle = (index << 12) / count;
+        cosine = rcos(angle);
+        sine = rsin(angle);
+        if (straight)
+        {
+            for (point = 0; point < 14; ++point)
+                y[point] = (sint16)curve;
+        }
+        else if (route_geometry_lo_s16(slope_phase) >= 2049)
+        {
+            for (point = 13; point >= 0; --point)
+            {
+                if (point >= 9)
+                    y[point] = (sint16)curve;
+                else if (point < 3)
+                    y[point] = y[point + 1];
+                else if (route_geometry_lo_s16(slope_phase) >= 3073)
+                    y[point] = (sint16)(y[point + 1] + (4096 - route_geometry_lo_s16(slope_phase)) / route_geometry_hi_s16(slope_phase));
+                else
+                    y[point] = (sint16)(y[point + 1] + (route_geometry_lo_s16(slope_phase) - 2048) / route_geometry_hi_s16(slope_phase));
+            }
+        }
+        else
+        {
+            for (point = 0; point < 14; ++point)
+            {
+                if (point < 4)
+                    y[point] = (sint16)curve;
+                else if (point >= 10)
+                    y[point] = y[point - 1];
+                else if (route_geometry_lo_s16(slope_phase) >= 1025)
+                    y[point] = (sint16)(y[point - 1] + (2048 - route_geometry_lo_s16(slope_phase)) / route_geometry_hi_s16(slope_phase));
+                else
+                    y[point] = (sint16)(y[point - 1] + route_geometry_lo_s16(slope_phase) / route_geometry_hi_s16(slope_phase));
+            }
+        }
+        for (point = 0; point < 14; ++point)
+        {
+            x[point] = (sint16)route_geometry_mul_shift12(cosine, radius[point]);
+            z[point] = (sint16)route_geometry_mul_shift12(sine, radius[point]);
+        }
+        minimum_x = x[0];
+        minimum_y = y[0];
+        minimum_z = z[0];
+        for (point = 1; point < 14; ++point)
+        {
+            if (x[point] < minimum_x)
+                minimum_x = x[point];
+            if (y[point] < minimum_y)
+                minimum_y = y[point];
+            if (z[point] < minimum_z)
+                minimum_z = z[point];
+        }
+        current_record->origin[0] = (uint16)minimum_x;
+        current_record->origin[1] = (uint16)minimum_y;
+        current_record->origin[2] = (uint16)minimum_z;
+        for (point = 0; point < 14; ++point)
+        {
+            ROUTE_VERTEX *packed = &current_record->vertices[point];
+
+            packed->position[0] = route_geometry_clamp_byte(((sint32)x[point] - minimum_x) >> 4);
+            packed->position[1] = route_geometry_clamp_byte(((sint32)y[point] - minimum_y) >> 4);
+            packed->position[2] = route_geometry_clamp_byte(((sint32)z[point] - minimum_z) >> 4);
+        }
+        current_record->vertex_count = 14u;
+        current_record->next.seg = &records[index + 1]; current_record->next.idx = (uint16)(index + 1);
+        current_record->prev.seg = index > 0 ? &records[index - 1] : NULL; current_record->prev.idx = (uint16)(index - 1);
+        current_record->join[0] = current_record->join[1] = 0u;
+        current_record->section = 1u;
+        current_record->vertices[12].position[1] = 0u;
+
+        current_record->vertices[1].position[1] = (uint8)(current_record->vertices[1].position[1] + (uint8)(color_bases >> 16) + global_fn_8006e9d8() % (sint8)(color_ranges >> 16));
+        if (straight)
+        {
+            current_record->vertices[2].position[1] = (uint8)(current_record->vertices[2].position[1] + 20u + current_record->vertices[3].position[1]);
+            current_record->vertices[0].position[1] = (uint8)(current_record->vertices[0].position[1] + (uint8)(color_bases >> 24) + global_fn_8006e9d8() % (sint8)(color_ranges >> 24));
+        }
+        else if (rise == 1)
+        {
+            uint8 value;
+
+            current_record->vertices[2].position[1] = (uint8)(current_record->vertices[2].position[1] + (uint8)(color_bases >> 8));
+            value = (uint8)(current_record->vertices[2].position[1] + 20u);
+            current_record->vertices[0].position[1] = current_record->vertices[1].position[1];
+            current_record->vertices[1].position[1] = value;
+        }
+        else
+        {
+            current_record->vertices[2].position[1] = (uint8)(current_record->vertices[2].position[1] + (uint8)(color_bases >> 8) + global_fn_8006e9d8() % (sint8)(color_ranges >> 8));
+            current_record->vertices[0].position[1] = (uint8)(current_record->vertices[0].position[1] + (uint8)(color_bases >> 24) + global_fn_8006e9d8() % (sint8)(color_ranges >> 24));
+        }
+
+        current_record->vertices[11].position[1] = (uint8)(current_record->vertices[11].position[1] + (uint8)(right_color_bases >> 16) + global_fn_8006e9d8() % (sint8)(right_color_ranges >> 16));
+        if (straight)
+        {
+            current_record->vertices[10].position[1] = (uint8)(current_record->vertices[9].position[1] + 20u);
+            current_record->vertices[12].position[1] = (uint8)(current_record->vertices[12].position[1] + (uint8)(right_color_bases >> 24) + global_fn_8006e9d8() % (sint8)(right_color_ranges >> 24));
+        }
+        else if (fall == 1)
+        {
+            uint8 value;
+
+            current_record->vertices[10].position[1] = (uint8)(current_record->vertices[10].position[1] + (uint8)(right_color_bases >> 8));
+            value = (uint8)(current_record->vertices[10].position[1] + 20u);
+            current_record->vertices[12].position[1] = current_record->vertices[11].position[1];
+            current_record->vertices[11].position[1] = value;
+        }
+        else
+        {
+            current_record->vertices[10].position[1] = (uint8)(current_record->vertices[10].position[1] + (uint8)(right_color_bases >> 8) + global_fn_8006e9d8() % (sint8)(right_color_ranges >> 8));
+            current_record->vertices[12].position[1] = (uint8)(current_record->vertices[12].position[1] + (uint8)(right_color_bases >> 24) + global_fn_8006e9d8() % (sint8)(right_color_ranges >> 24));
+        }
+
+        pattern = route_gen_patterns[pattern][(uint32)global_fn_8006e9d8() & 3u];
+        for (point = 0; point < 14; ++point)
+        {
+            uint8 src = route_gen_sources[point + 1];
+            uint8 material;
+            const uint8 *choices = route_gen_materials[pattern];
+
+            if ((src & 1u) != 0u)
+                material = 1u;
+            else if ((src & 2u) != 0u)
+            {
+                if ((straight && point == 9) || (!straight && fall == 1 && prior_fall == 1 && point == 10))
+                    material = 24u;
+                else
+                {
+                    uint8 choice = (uint8)(src - 2u);
+
+                    if (!straight && fall == 1 && prior_fall == 1 && point >= 11)
+                        choice = (uint8)(route_gen_sources[point] - 2u);
+                    material = choices[choice >> 2];
+                }
+                if (material >= 7u)
+                    material = (uint8)(material + 2u);
+            }
+            else if (straight && point == 2)
+                material = 24u;
+            else if (!straight && rise == 1 && prior_rise == 1 && point == 1)
+                material = 24u;
+            else
+            {
+                uint8 choice = (!straight && rise == 1 && prior_rise == 1 && point == 0) ? route_gen_sources[2] : src;
+                material = choices[choice >> 2];
+            }
+            current_record->commands[point] = (uint8)(route_gen_commands[point] | (uint8)(material << 3));
+        }
+        previous_rise = rise;
+        previous_fall = fall;
+        ++current_record;
+    }
+    if (count > 0)
+    {
+        records->prev.seg = &records[count - 1]; records->prev.idx = (uint16)(count - 1);
+        records[count - 1].next.seg = records; records[count - 1].next.idx = 0;
+    }
+
+}
+sint32 route_gen_vertices(ROUTE_SEGMENT *record, sint32 count)
+{
+    ROUTE_SEGMENT *previous = record->prev.seg;
+    uint32 control = route_gen_defaults.control;
+    uint32 delta = route_gen_defaults.delta;
+    sint16 decoration_gap = 0;
+    sint32 index;
+    sint32 point;
+
+    FUNCTION_MARKER(0x8003F164u, "MAIN.EXE");
+    for (point = 0; point < 14; ++point)
+    {
+        previous->vertices[point].phase[0] = 32u;
+        previous->vertices[point].phase[1] = 32u;
+        previous->vertices[point].curve = 72u;
+    }
+    for (index = 0; index < count; ++index)
+    {
+        if (route_vertices_lo_s16(control) != 0)
+        {
+            control = route_vertices_set_lo_s16(control, route_vertices_lo_s16(control) - 1);
+            control = route_vertices_set_hi_s16(control, route_vertices_hi_s16(control) + route_vertices_lo_s16(delta));
+        }
+        else if (count - index < 65)
+        {
+            delta = route_vertices_set_lo_s16(delta, -2);
+            control = route_vertices_set_lo_s16(control, route_vertices_hi_s16(control) / 2);
+        }
+        else
+        {
+            sint32 value;
+
+            delta = route_vertices_set_hi_s16(delta, (global_fn_8006e9d8() & 3) + 10);
+            value = global_fn_8006e9d8() % 64 - route_vertices_hi_s16(control) / 2;
+            if ((sint16)value < 0)
+            {
+                control = route_vertices_set_lo_s16(control, -(sint16)value);
+                delta = route_vertices_set_lo_s16(delta, -2);
+            }
+            else
+            {
+                control = route_vertices_set_lo_s16(control, (sint16)value);
+                delta = route_vertices_set_lo_s16(delta, 2);
+            }
+        }
+
+        record->vertices[0].texture_phase = (uint8)(previous->vertices[0].texture_phase - 94u);
+        record->vertices[1].texture_phase = (uint8)(previous->vertices[1].texture_phase - 94u);
+        record->vertices[2].texture_phase = (uint8)(previous->vertices[2].texture_phase - 94u);
+        record->vertices[3].texture_phase = (uint8)(previous->vertices[3].texture_phase - 59u);
+        record->vertices[4].texture_phase = (uint8)(previous->vertices[4].texture_phase - 27u);
+        record->vertices[5].texture_phase = (uint8)(previous->vertices[5].texture_phase - 16u);
+        record->vertices[6].texture_phase = (uint8)(previous->vertices[6].texture_phase - 40u);
+        record->vertices[7].texture_phase = (uint8)(previous->vertices[7].texture_phase - 67u);
+        record->vertices[8].texture_phase = (uint8)(previous->vertices[8].texture_phase - 98u);
+        record->vertices[9].texture_phase = (uint8)(previous->vertices[9].texture_phase - 98u);
+        record->vertices[10].texture_phase = (uint8)(previous->vertices[10].texture_phase - 84u);
+        record->vertices[11].texture_phase = (uint8)(previous->vertices[11].texture_phase - 84u);
+        record->vertices[12].texture_phase = (uint8)(previous->vertices[12].texture_phase - 84u);
+        record->vertices[13].texture_phase = (uint8)(previous->vertices[13].texture_phase - 84u);
+        for (point = 0; point < 14; ++point)
+        {
+            ROUTE_VERTEX *entry = &record->vertices[point];
+            sint32 control_high = route_vertices_hi_s16(control);
+            sint32 delta_high = route_vertices_hi_s16(delta);
+            sint32 high_div16 = control_high / 16;
+
+            entry->flags = 14u;
+            entry->phase[0] = (uint8)(control_high / 2 + previous->vertices[point].phase[0]);
+            entry->phase[1] = (uint8)(point * ((uint8)(control >> 16) + 32u));
+            entry->curve = (uint8)((16 * ((delta_high - high_div16) / 2)) | ((delta_high - (high_div16 - 4)) / 2));
+            entry->deformation[0] = 0u;
+            entry->deformation[1] = 0u;
+            entry->impact_tick = (uint16)-256;
+            entry->lane = 2u;
+        }
+        {
+            sint32 denominator = 16 * ((sint32)record->vertices[2].position[1] - (sint32)record->vertices[3].position[1]);
+            sint8 x_slope = route_vertices_slope_clamp(((sint32)record->vertices[2].position[0] - (sint32)record->vertices[3].position[0]) << 9, denominator);
+            sint8 z_slope = route_vertices_slope_clamp(((sint32)record->vertices[2].position[2] - (sint32)record->vertices[3].position[2]) << 9, denominator);
+
+            record->vertices[3].deformation[0] = (uint8)-x_slope;
+            record->vertices[3].deformation[1] = (uint8)-z_slope;
+        }
+        {
+            sint32 denominator = 16 * ((sint32)record->vertices[10].position[1] - (sint32)record->vertices[9].position[1]);
+            sint8 x_slope = route_vertices_slope_clamp(((sint32)record->vertices[10].position[0] - (sint32)record->vertices[9].position[0]) << 9, denominator);
+            sint8 z_slope = route_vertices_slope_clamp(((sint32)record->vertices[10].position[2] - (sint32)record->vertices[9].position[2]) << 9, denominator);
+
+            record->vertices[9].deformation[0] = (uint8)-x_slope;
+            record->vertices[9].deformation[1] = (uint8)-z_slope;
+        }
+
+        previous = record;
+        if (decoration_gap >= 31 && (global_fn_8006e9d8() & 0xEu) != 0)
+        {
+            sint32 placed = 0;
+            sint16 position = (sint16)((global_fn_8006e9d8() & 3) | 4);
+
+            while (position < 9 && placed < 3)
+            {
+                sint32 random = global_fn_8006e9d8() & 3;
+                sint32 kind = random + 2;
+
+                if (random == 1)
+                    kind = 4;
+                else if (random == 3)
+                {
+                    if ((global_fn_8006e9d8() & 7) == 0)
+                    {
+                        if ((global_fn_8006e9d8() & 1) != 0)
+                            break;
+                        decoration_gap = 0;
+                    }
+                    else
+                        kind = 2;
+                }
+                else if (kind >= 6)
+                    break;
+                decoration_gap = 0;
+                record->vertices[position].flags = (uint8)(record->vertices[position].flags | (uint8)(kind << 5));
+                ++placed;
+                ++position;
+            }
+        }
+        ++decoration_gap;
+        record = previous->next.seg;
+    }
+    return index < count;
+}
+
+
+sint32 route_update_speed_ctrl(const BOAT *src, BOAT *boat, uint32 race_mode)
 {
     sint32 distance;
     sint32 direction;
-    uint32 settings;
+    const AI_ROUTE_CFG *cfg;
     sint32 value;
     sint32 limit;
     sint32 result;
 
     FUNCTION_MARKER(0x8002F3E8u, "MAIN.EXE");
-    if (r_u32(0x80083484u) == 5u)
+    if (race_mode == 5u)
     {
         boat->route.speed_adjust = (uint16)(0u);
         return 5;
     }
     distance = (sint32)(uint32)boat->route.distance >> 12;
     direction = (sint16)(uint16)boat->route.direction;
-    settings = (uint32)boat->route.settings;
+    cfg = boat->route.settings;
     boat->route.behavior = (uint16)(0u);
     if (direction == 1)
     {
@@ -1301,19 +2439,19 @@ sint32 route_update_speed_ctrl(const BOAT *source, BOAT *boat)
         if (distance < 137)
         {
             boat->route.behavior = (uint16)(4u);
-            boat->route.lane_timer = (uint16)((uint16)source->contacts.points[0].left);
+            boat->route.lane_timer = (uint16)((uint16)src->contacts.points[0].left);
         }
-        delta = (sint32)((uint32)distance - (uint32)(sint32)(sint16)r_u16(settings + 2u));
+        delta = (sint32)((uint32)distance - (uint32)(sint32)cfg->gap);
         if (delta < 0)
         {
-            value = math_mul_lo_s32(delta, (sint16)r_u16(settings + 10u));
-            divisor = (sint16)r_u16(settings + 6u);
+            value = math_mul_lo_s32(delta, cfg->max_adjust);
+            divisor = cfg->boost_range;
             value = (sint32)(0u - (uint32)value);
         }
         else
         {
-            value = math_mul_lo_s32(delta, (sint16)r_u16(settings + 8u));
-            divisor = (sint16)r_u16(settings + 4u);
+            value = math_mul_lo_s32(delta, cfg->min_adjust);
+            divisor = cfg->slow_range;
         }
         value = math_div_s32(value, divisor);
         boat->route.speed_adjust = (uint16)((uint16)value);
@@ -1325,458 +2463,85 @@ sint32 route_update_speed_ctrl(const BOAT *source, BOAT *boat)
 
         if (distance < 137)
         {
-            uint16 source_lane = (uint16)source->contacts.points[0].left;
+            uint16 source_lane = (uint16)src->contacts.points[0].left;
 
             boat->route.behavior = (uint16)(3u);
             boat->route.lane_timer = (uint16)(source_lane);
-            if (distance < 51 && (sint16)(uint16)boat->route.lane_timer == (sint32)(uint32)source->contacts.points[0].left)
+            if (distance < 51 && (sint16)(uint16)boat->route.lane_timer == (sint32)(uint32)src->contacts.points[0].left)
                 boat->route.behavior = (uint16)(5u);
         }
-        delta = (sint32)((uint32)distance + (uint32)(sint32)(sint16)r_u16(settings + 2u));
+        delta = (sint32)((uint32)distance + (uint32)(sint32)cfg->gap);
         if (delta < 0)
         {
-            value = math_mul_lo_s32(delta, (sint16)r_u16(settings + 8u));
-            divisor = (sint16)r_u16(settings + 4u);
+            value = math_mul_lo_s32(delta, cfg->min_adjust);
+            divisor = cfg->slow_range;
             value = (sint32)(0u - (uint32)value);
         }
         else
         {
-            value = math_mul_lo_s32(delta, (sint16)r_u16(settings + 10u));
-            divisor = (sint16)r_u16(settings + 6u);
+            value = math_mul_lo_s32(delta, cfg->max_adjust);
+            divisor = cfg->boost_range;
         }
         value = math_div_s32(value, divisor);
         boat->route.speed_adjust = (uint16)((uint16)value);
     }
     else
         boat->route.speed_adjust = (uint16)(0u);
-    limit = (sint16)r_u16(settings + 8u);
+    limit = cfg->min_adjust;
     value = (sint16)(uint16)boat->route.speed_adjust;
     if (value < limit)
     {
         boat->route.speed_adjust = (uint16)((uint16)limit);
         return 1;
     }
-    limit = (sint16)r_u16(settings + 10u);
+    limit = cfg->max_adjust;
     result = limit < value;
     if (result)
         boat->route.speed_adjust = (uint16)((uint16)limit);
     return result;
 }
 
-sint32 route_advance_target(BOAT_ROUTE_STATE *route)
+sint32 route_gen_init(uint32 state)
 {
-    uint32 target = (uint32)(uint16)route->segment + (uint32)(uint16)route->lookahead;
-    uint32 current = (uint16)route->target_segment;
-    uint32 table = r_u32(0x800B6B80u);
-    uint32 object = r_u32(table + (uint32)(uint16)route->target_segment * 4u);
-    sint32 delta = (sint32)(current - (uint16)target);
-    sint32 result;
-
-    FUNCTION_MARKER(0x8002F5C0u, "MAIN.EXE");
-    if (delta >= 21)
-        target += r_u16(0x800B6A98u);
-    else if (delta < -20)
-        current += r_u16(0x800B6A98u);
-    if ((uint16)current == (uint16)target)
-        return 0;
-    if ((uint16)current < (uint16)target)
-    {
-        table = r_u32(0x800B6B80u);
-        do
-        {
-            uint32 cursor;
-            uint32 left;
-            uint32 right;
-
-            object = r_u32(table + (uint32)r_u16(object) * 4u);
-            left = r_u8(object + 14u) >> 4;
-            right = r_u8(object + 14u) & 15u;
-            cursor = object + 16u;
-            if (right != (uint16)route->target_lane)
-            {
-                for (;;)
-                {
-                    uint8 descriptor = r_u8(cursor);
-                    uint8 type = descriptor & 3u;
-
-                    if ((descriptor & 12u) == 12u)
-                    {
-                        route->target_lane = (uint16)((uint16)(left - 1u));
-                        break;
-                    }
-                    if (type != 2u)
-                        ++left;
-                    ++cursor;
-                    if (type != 1u)
-                        ++right;
-                    if ((sint32)(uint16)right == (sint16)(uint16)route->target_lane)
-                        break;
-                }
-            }
-            ++current;
-            route->target_lane = (uint16)((uint16)left);
-        } while ((uint16)current != (uint16)target);
-    }
-    else
-    {
-        table = r_u32(0x800B6B80u);
-        do
-        {
-            uint32 cursor;
-            uint32 left;
-            uint32 right;
-
-            object = r_u32(table + (uint32)r_u16(object + 2u) * 4u);
-            left = r_u8(object + 14u) >> 4;
-            right = r_u8(object + 14u) & 15u;
-            cursor = object + 16u;
-            if (left != (uint16)route->target_lane)
-            {
-                for (;;)
-                {
-                    uint8 descriptor = r_u8(cursor);
-                    uint8 type = descriptor & 3u;
-
-                    if ((descriptor & 12u) == 12u)
-                    {
-                        route->target_lane = (uint16)((uint16)(right - 1u));
-                        break;
-                    }
-                    if (type != 2u)
-                        ++left;
-                    ++cursor;
-                    if (type != 1u)
-                        ++right;
-                    if ((sint32)(uint16)left == (sint16)(uint16)route->target_lane)
-                        break;
-                }
-            }
-            current += 0xFFFFu;
-            route->target_lane = (uint16)((uint16)right);
-        } while ((uint16)current != (uint16)target);
-    }
-    result = (sint32)(uint16)target < (sint32)r_u32(0x800B6A98u);
-    route->target_segment = (uint16)((uint16)target);
-    if (!result)
-    {
-        result = (sint32)(target - r_u16(0x800B6A98u));
-        route->target_segment = (uint16)((uint16)result);
-    }
-    return result;
-}
-
-sint32 route_init_steps(BOAT *boat)
-{
-    BOAT_ROUTE_STATE *route = &boat->route;
-    uint32 object = boat->contacts.points[0].object;
-    sint32 result = (sint16)(uint16)route->lookahead;
-    uint32 lane = (uint8)boat->contacts.points[0].left;
-    uint32 count = 0;
-    uint32 table;
-
-    FUNCTION_MARKER(0x8002F7DCu, "MAIN.EXE");
-    route->hazard = (uint16)(0u);
-    if (result <= 0)
-        return result;
-    table = r_u32(0x800B6B80u);
-    for (;;)
-    {
-        uint32 cursor;
-        uint32 left;
-        uint32 right;
-        uint8 hazard;
-
-        object = r_u32(table + (uint32)r_u16(object) * 4u);
-        left = r_u8(object + 14u) >> 4;
-        right = r_u8(object + 14u) & 15u;
-        cursor = object + 16u;
-        if ((uint8)right != (uint8)lane)
-        {
-            for (;;)
-            {
-                uint8 descriptor = r_u8(cursor);
-                uint8 type = descriptor & 3u;
-
-                if ((descriptor & 12u) == 12u)
-                    break;
-                if (type != 2u)
-                    ++left;
-                ++cursor;
-                if (type != 1u)
-                    ++right;
-                if ((uint8)right == (uint8)lane)
-                    break;
-            }
-        }
-        ++count;
-        lane = left;
-        hazard = r_u8(object + (uint32)(uint8)lane * 14u + 42u);
-        if (hazard == 0u)
-        {
-            route->hazard = (uint16)(8u);
-            return 8;
-        }
-        if (hazard == 1u)
-            route->hazard = (uint16)(7u);
-        result = (sint32)(uint8)count < (sint16)(uint16)route->lookahead;
-        if (!result)
-            return result;
-    }
-}
-
-sint32 route_assign_topology_states(void)
-{
-    sint32 count = (sint32)r_u32(0x800B6A98u);
+    sint32 count;
+    ROUTE_SEGMENT *records = route_resources.storage;
     sint32 index;
-    sint32 result;
 
-    FUNCTION_MARKER(0x8002FF48u, "MAIN.EXE");
-    if (count > 0)
-    {
-        index = 0;
-        do
-        {
-            uint32 table = r_u32(0x800B6B80u);
-            uint32 object = r_u32(table + (uint32)index * 4u);
-            uint16 linked_index = r_u16(object + 2u);
-            uint8 object_vertices = r_u8(object + 7u);
-            uint32 linked = r_u32(table + (uint32)linked_index * 4u);
-            sint32 vertex;
-            sint32 left;
-            sint32 right;
-            sint32 state;
-            uint32 left_status;
-            uint32 right_status;
-            uint32 cursor;
-
-            vertex = 0;
-            if (object_vertices != 0u)
-            {
-                do
-                {
-                    uint32 status = object + 42u + (uint32)vertex * 14u;
-
-                    if (r_u8(status) != 3u)
-                        w_u8(status, 2u);
-                    ++vertex;
-                    object_vertices = r_u8(object + 7u);
-                } while (vertex < object_vertices);
-            }
-            left = r_u8(object + 14u) >> 4;
-            left_status = object + 42u + (uint32)left * 14u;
-            for (vertex = left; vertex > 0; --vertex)
-            {
-                left_status -= 14u;
-                w_u8(left_status, 0u);
-            }
-            left_status = object + 42u + (uint32)left * 14u;
-            right = r_u8(object + 14u) & 15u;
-            right_status = linked + 42u + (uint32)right * 14u;
-            for (vertex = right; vertex > 0; --vertex)
-            {
-                right_status -= 14u;
-                w_u8(right_status, 0u);
-            }
-            right_status = linked + 42u + (uint32)right * 14u;
-            cursor = object + 16u;
-            state = 11;
-            vertex = 0;
-            do
-            {
-                uint8 flags = r_u8(cursor);
-                uint8 type;
-
-                if ((flags & 12u) == 12u)
-                {
-                    vertex = 14;
-                    if (state == 12)
-                    {
-                        if (r_u8(left_status - 14u) != 0u)
-                            w_u8(left_status - 14u, 1u);
-                        state = 11;
-                        if (r_u8(right_status - 14u) != 0u)
-                            w_u8(right_status - 14u, 1u);
-                    }
-                    w_u8(right_status, 0u);
-                    w_u8(left_status, 0u);
-                }
-                else
-                {
-                    type = flags & 3u;
-                    if (type != 0u)
-                    {
-                        if (state == 12)
-                        {
-                            if (r_u8(left_status - 14u) != 0u)
-                                w_u8(left_status - 14u, 1u);
-                            state = 11;
-                            if (r_u8(right_status - 14u) != 0u)
-                                w_u8(right_status - 14u, 1u);
-                        }
-                        w_u8(right_status, 0u);
-                        w_u8(left_status, 0u);
-                        type = r_u8(cursor) & 3u;
-                        if (type != 2u)
-                        {
-                            left_status += 14u;
-                            ++left;
-                        }
-                        if (type != 1u)
-                        {
-                            right_status += 14u;
-                            ++right;
-                        }
-                        w_u8(right_status, 0u);
-                        w_u8(left_status, 0u);
-                    }
-                    else if (state == 11)
-                    {
-                        w_u8(right_status, 0u);
-                        w_u8(left_status, 0u);
-                        left_status += 14u;
-                        ++left;
-                        right_status += 14u;
-                        ++right;
-                        state = 12;
-                        w_u8(right_status, 1u);
-                        w_u8(left_status, 1u);
-                    }
-                    else
-                    {
-                        left_status += 14u;
-                        ++left;
-                        right_status += 14u;
-                        ++right;
-                    }
-                }
-                ++vertex;
-                ++cursor;
-            } while (vertex < 14);
-            while (left < r_u8(object + 7u))
-            {
-                ++left;
-                w_u8(left_status, 0u);
-                left_status += 14u;
-            }
-            while (right < r_u8(linked + 7u))
-            {
-                ++right;
-                w_u8(right_status, 0u);
-                right_status += 14u;
-            }
-            count = r_s32(0x800B6A98u);
-            ++index;
-        } while (index < count);
-        count = r_s32(0x800B6A98u);
-    }
-    if (count > 0)
-    {
-        index = 0;
-        do
-        {
-            uint32 table = r_u32(0x800B6B80u);
-            uint32 object = r_u32(table + (uint32)index * 4u);
-            uint8 endpoints = r_u8(object + 14u);
-            uint32 cursor = object + 16u;
-            uint32 left_status = object + 42u + 14u * (endpoints >> 4);
-            uint32 linked = r_u32(table + 4u * r_u16(object + 2u));
-            uint32 right_status = linked + 42u + 14u * (endpoints & 15u);
-            sint32 vertex = 0;
-
-            do
-            {
-                uint8 value = r_u8(left_status);
-
-                if (value == 0u)
-                {
-                    value = r_u8(right_status);
-                    if (value == 2u)
-                    {
-                        w_u8(right_status, 1u);
-                        value = r_u8(right_status);
-                    }
-                }
-                else
-                    value = r_u8(right_status);
-                if (value == 0u)
-                {
-                    value = r_u8(left_status);
-                    if (value == 2u)
-                        w_u8(left_status, 1u);
-                }
-                value = r_u8(cursor);
-                if ((value & 12u) == 12u)
-                    vertex = 14;
-                else
-                {
-                    value &= 3u;
-                    if (value != 2u)
-                        left_status += 14u;
-                    if (value != 1u)
-                        right_status += 14u;
-                }
-                ++vertex;
-                ++cursor;
-            } while (vertex < 14);
-            count = r_s32(0x800B6A98u);
-            ++index;
-        } while (index < count);
-    }
-    result = 5;
-    if (r_u32(0x800834A0u) != 5u)
-        return result;
-    count = r_s32(0x800B6A98u);
-    if (count <= 0)
-        return count;
-    index = 0;
-    do
-    {
-        uint32 table = r_u32(0x800B6B80u);
-        uint32 object = r_u32(table + (uint32)index * 4u);
-        sint32 vertices = r_u8(object + 7u);
-        sint32 vertex;
-        uint32 first = 0u;
-        uint32 second = 0u;
-        uint32 entry = object + 30u;
-        uint32 minimum = 256u;
-
-        for (vertex = 0; vertex < vertices; ++vertex, entry += 14u)
-        {
-            uint32 priority = r_u8(entry + 1u);
-
-            if (priority < minimum && r_u8(entry + 12u) == 2u)
-            {
-                minimum = priority;
-                second = first;
-                first = entry;
-            }
-        }
-        if (first != 0u)
-            w_u8(first + 12u, 3u);
-        ++index;
-        if (second != 0u)
-            w_u8(second + 12u, 3u);
-        count = r_s32(0x800B6A98u);
-        result = index < count;
-    } while (result != 0);
-    return result;
-}
-
-void route_sample_boundary(const sint32 position[3], uint32 descriptor)
-{
-    sint32 output[4];
-    sint32 start = (sint32)r_u32(descriptor);
-    sint32 end = (sint32)r_u32(descriptor + 4u);
-    sint32 difference = (sint32)((uint32)end - 30u - (uint32)start);
-    sint32 index = math_sra_s32((uint32)math_mul_lo_s32(difference, (sint32)0xB6DB6DB7u), 1u);
-    VECTOR delta;
-    VECTOR squared;
-
-    FUNCTION_MARKER_ALIAS(0x80026CB8u, "MAIN.EXE");
-    route_sample_geom_host((uint32)start, index, 1, output);
-    delta.vx = (sint16)(uint16)((uint16)position[0] - (uint16)output[0]);
-    delta.vy = 0;
-    delta.vz = (sint16)(uint16)((uint16)position[2] - (uint16)output[2]);
-    delta.pad = 0;
-    Square0(&delta, &squared);
+    FUNCTION_MARKER(0x8003D8DCu, "MAIN.EXE");
+    w_u32(0x800D2498u, name_reels.code);
+    count = 600 + 8 * (global_fn_8006e9d8() & 0x31);
+    memset(records, 0, (size_t)count * sizeof(*records));
+    route_resources.owned_count = (uint32)count;
+    route_resources.count = (uint32)count;
+    for (index = 0; index < count; ++index)
+        route_resources.segments[index] = &records[index];
+    route_gen_geom(records, count);
+    route_gen_vertices(records, count);
+    race_events_init_fractal_light(state, count);
+    render_select_lighting(RENDER_LIGHT_NORMAL);
+    w_u32(0x800CB5B4u, 0u);
+    w_u32(0x800CB5A0u, 0u);
+    w_u32(0x800CB594u, 0u);
+    w_u32(0x800CB588u, 0u);
+    w_u32(0x800B68C0u, 0x800CB580u);
+    w_u32(0x800CB5ECu, 0u);
+    w_u32(0x800CB5E0u, 0u);
+    w_u32(0x800CB5D4u, 0u);
+    w_u32(0x800CB5C8u, 0u);
+    w_u32(0x800B68C4u, 0u);
+    w_u8(0x800CB5FCu, 1u);
+    w_u8(0x800CB601u, 30u);
+    w_u8(0x800CB5FEu, 30u);
+    w_u8(0x800CB602u, 15u);
+    w_u8(0x800CB5FFu, 15u);
+    w_u32(0x800CB610u, 0x800B68C0u);
+    w_u32(0x800CB60Cu, 0x800B68C0u);
+    w_u8(0x800CB603u, 0u);
+    w_u8(0x800CB600u, 0u);
+    w_u32(0x800CB614u, 0u);
+    w_u32(0x800CB618u, 0u);
+    w_u8(0x800CB5F9u, 1u);
+    w_u8(0x800CB5FAu, 192u);
+    w_u32(state + 32u, 0x800CB5F8u);
+    return 192;
 }

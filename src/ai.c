@@ -1,3 +1,5 @@
+#include "game.h"
+#include "profile.h"
 #include "ai.h"
 #include "global.h"
 #include "route.h"
@@ -6,6 +8,63 @@
 #include <stdlib.h>
 
 static uint32 ai_settings_alternate;
+
+// Shared control cfg formerly published at MAIN.EXE 800DE0E0
+AI_CONTROL_CFG ai_control_cfg;
+typedef struct
+{
+    uint8 lookahead;
+    uint16 return_base;
+    sint16 return_step;
+} AI_CONTROL_TEMPLATE;
+static const AI_CONTROL_TEMPLATE ai_control_templates[7] = {
+    { 8, 128, -2 },
+    { 6, 128, -2 },
+    { 8, 100, -2 },
+    { 8, 108, -2 },
+    { 8, 128, -2 },
+    { 7, 128, -2 },
+    { 8, 128, -2 },
+};
+static const uint16 ai_control_speeds[7][9][2] = {
+    { { 29020, 1300 }, { 29520, 2200 }, { 30020, 2900 }, { 29520, 2000 }, { 31020, 2900 }, { 32020, 4000 }, { 30020, 2200 }, { 31520, 3000 }, { 32020, 4000 } },
+    { { 26320, 2200 }, { 27020, 2950 }, { 27520, 3300 }, { 27020, 2150 }, { 27520, 2450 }, { 28020, 3100 }, { 27520, 2300 }, { 28020, 3150 }, { 28520, 3300 } },
+    { { 26520, 2500 }, { 27020, 2950 }, { 27520, 3500 }, { 26520, 2300 }, { 26520, 2400 }, { 33020, 4100 }, { 26520, 2600 }, { 27520, 3250 }, { 28020, 4100 } },
+    { { 29220, 1600 }, { 30520, 2200 }, { 31020, 2700 }, { 30520, 2000 }, { 31020, 2500 }, { 32020, 3600 }, { 30520, 2100 }, { 32020, 2600 }, { 33020, 3600 } },
+    { { 27620, 2300 }, { 28170, 2800 }, { 28620, 3600 }, { 28170, 3300 }, { 28620, 3400 }, { 29620, 4200 }, { 28170, 3400 }, { 29620, 3500 }, { 30620, 4200 } },
+    { { 35520, 2600 }, { 40520, 3750 }, { 41070, 4200 }, { 41520, 3400 }, { 42520, 3850 }, { 43520, 4400 }, { 41520, 3500 }, { 42020, 3950 }, { 42520, 4000 } },
+    { { 40020, 3800 }, { 40020, 4000 }, { 40020, 4200 }, { 26320, 2200 }, { 26820, 2700 }, { 27320, 3200 }, { 26820, 2700 }, { 27320, 3200 }, { 27820, 3700 } },
+};
+
+// Mutable route settings and immutable tuning from MAIN.EXE
+static AI_ROUTE_CFG ai_route_cfg[9] = {
+    { 100, 1100, 350, -16, 384, 128, 4, 2, 4, 4, 5400 },
+    { 100, 1100, 350, -32, 512, 156, 1, 4, 3, 2, 5300 },
+    { 50, 1600, 256, -44, 256, 128, 4, 3, 4, 4, 5400 },
+    { 50, 1024, 128, 0, 256, 48, 2, 2, 3, 2, 5300 },
+    { 300, 1600, 350, -38, 256, 156, 2, 3, 3, 4, 5400 },
+    { 50, 600, 400, -32, 384, 106, 2, 2, 4, 3, 5400 },
+    { 100, 1100, 350, -16, 384, 156, 1, 3, 4, 2, 5500 },
+    { 150, 1100, 250, 0, 256, 64, 1, 3, 4, 4, 5500 },
+    { 150, 1100, 250, 0, 256, 64, 1, 3, 4, 1, 5600 }
+};
+static AI_ROUTE_CFG ai_alt_route_cfg[2] = {
+    { 230, 1200, 600, -2024, 2024, 128, 2, 3, 3, 3, 5100 },
+    { 500, 800, 500, -2024, 2024, 128, 1, 3, 1, 3, 5400 }
+};
+typedef struct
+{
+    sint16 min_base, max_base, min_step, max_step;
+} AI_ROUTE_TUNING;
+static const AI_ROUTE_TUNING ai_route_tuning[7] = {
+    { -32, 1024, 8, 4 },
+    { -64, 1256, 16, 4 },
+    { -88, 768, 16, 4 },
+    { 0, 768, 0, 4 },
+    { -76, 768, 16, 4 },
+    { -64, 768, 16, 4 },
+    { -32, 1024, 8, 4 }
+};
 
 static sint32 ai_fn_8002fc28_random(void)
 {
@@ -100,7 +159,7 @@ sint32 ai_update_trailing_pool(uint32 entry)
         count = (sint32)vehicle_racer_count;
         adjacent = *(vehicle_racers + (count - 2));
         numerator = (sint32)((uint32)adjacent->race.progress - 20u);
-        divisor = (sint32)r_u32(0x800B6A98u);
+        divisor = (sint32)route_resources.count;
         (void)math_div_s32(numerator, divisor);
         remainder = numerator % divisor;
         state->race.progress = (sint32)((uint32)numerator);
@@ -161,7 +220,7 @@ sint32 ai_update_trailing_pool(uint32 entry)
     state = *(vehicle_racers);
     state->race.progress = (sint32)((uint32)numerator);
     state = *(vehicle_racers);
-    divisor = (sint32)r_u32(0x800B6A98u);
+    divisor = (sint32)route_resources.count;
     numerator = (sint32)(uint32)state->race.progress;
     (void)math_div_s32(numerator, divisor);
     remainder = numerator % divisor;
@@ -193,7 +252,7 @@ sint32 ai_place(BOAT *boat, sint16 segment)
     sint32 count;
 
     FUNCTION_MARKER(0x8002D714u, "MAIN.EXE");
-    route_contact_init(&boat->contacts.points[0], segment, 4);
+    route_contact_init(&boat->contacts.points[0], route_resources.segments[(uint32)segment], 4);
 
     x = (sint16)(uint16)boat->contacts.points[0].sample.vx;
     first = (uint32)boat->contacts.points[0].position[0];
@@ -225,11 +284,11 @@ sint32 ai_place(BOAT *boat, sint16 segment)
     next = (sint32)((uint32)(sint32)segment + 2u);
     boat->route.target_segment = (uint16)((uint16)next);
     next = (uint16)boat->route.target_segment;
-    count = (sint32)r_u32(0x800B6A98u);
+    count = (sint32)route_resources.count;
     boat->route.lane_timer = (uint16)(0u);
     if (next >= count)
     {
-        next = (sint32)((uint32)next - r_u16(0x800B6A98u));
+        next = (sint32)((uint32)next - (uint16)route_resources.count);
         boat->route.target_segment = (uint16)((uint16)next);
     }
     first = (uint16)boat->contacts.points[0].left;
@@ -604,7 +663,7 @@ sint32 ai_update_racer(uint32 entry)
 
 sint32 ai_random_mode(BOAT *boat)
 {
-    uint32 descriptor;
+    const ROUTE_SEGMENT *seg;
     sint32 segment;
     sint32 next;
     sint32 count;
@@ -612,20 +671,20 @@ sint32 ai_random_mode(BOAT *boat)
     FUNCTION_MARKER(0x8002E33Cu, "MAIN.EXE");
     boat->route.speed = (sint32)(1024u);
     next = ai_fn_8002fc28_random();
-    descriptor = (uint32)boat->contacts.points[0].object;
+    seg = boat->contacts.points[0].seg;
     boat->route.behavior = (uint16)((uint16)(12u + ((uint32)next & 1u)));
     boat->route.lane_timer = (uint16)(0u);
     boat->route.lookahead = (uint16)(2u);
-    segment = (sint32)r_u16(descriptor) - 1;
+    segment = (sint32)seg->next.idx - 1;
     if (segment < 0)
-        segment = (sint32)(uint16)r_u16(descriptor + 2u) + 1;
+        segment = (sint32)(uint16)seg->prev.idx + 1;
     next = segment + 2;
     boat->route.target_segment = (uint16)((uint16)next);
     next = (uint16)boat->route.target_segment;
-    count = (sint32)r_u32(0x800B6A98u);
+    count = (sint32)route_resources.count;
     if (next >= count)
     {
-        next = (sint32)((uint32)next - r_u16(0x800B6A98u));
+        next = (sint32)((uint32)next - (uint16)route_resources.count);
         boat->route.target_segment = (uint16)((uint16)next);
     }
     boat->route.target_lane = (uint16)(4u);
@@ -641,12 +700,12 @@ sint32 ai_choose_route_target(BOAT *boat)
     BOAT_ROUTE_TARGET *output = &boat->route_target;
     sint32 choices[3];
     sint32 weights[3] = {0};
-    uint32 table;
+    ROUTE_SEGMENT *const *table;
     uint32 route_index;
     sint32 current;
     sint32 selected;
     sint32 index;
-    uint32 object;
+    const ROUTE_SEGMENT *object;
     sint32 choice;
     sint32 weight;
     sint32 x;
@@ -657,10 +716,10 @@ sint32 ai_choose_route_target(BOAT *boat)
 
     FUNCTION_MARKER(0x8002E494u, "MAIN.EXE");
     route_index = (uint16)route->target_segment;
-    table = r_u32(0x800B6B80u);
+    table = route_resources.segments;
     current = (sint16)(uint16)route->target_lane;
-    object = r_u32(table + route_index * 4u);
-    if (current < 0 || current >= (sint32)r_u8(object + 7u))
+    object = table[route_index];
+    if (current < 0 || current >= (sint32)object->vertex_count)
     {
         ai_fn_800304fc();
         route->target_lane = (uint16)(4u);
@@ -668,7 +727,7 @@ sint32 ai_choose_route_target(BOAT *boat)
     current = (sint16)(uint16)route->target_lane;
     choices[1] = current;
     choice = (sint32)((uint32)current + 1u);
-    choices[2] = choice < (sint32)r_u8(object + 7u) ? choice : -1;
+    choices[2] = choice < (sint32)object->vertex_count ? choice : -1;
     choice = (sint32)((uint32)current - 1u);
     choices[0] = choice >= 0 ? choice : -1;
     for (index = 0; index < 3; ++index)
@@ -677,16 +736,16 @@ sint32 ai_choose_route_target(BOAT *boat)
         choice = choices[index];
         if (choice != -1)
         {
-            uint32 vertex = object + (uint32)choice * 14u + 30u;
+            const ROUTE_VERTEX *vertex = &object->vertices[(uint32)choice];
             uint8 type;
 
-            type = r_u8(vertex);
-            if (type == 255u && r_u8(vertex + 2u) == type && r_u8(vertex + 1u) == type)
+            type = vertex->position[0];
+            if (type == 255u && vertex->position[2] == type && vertex->position[1] == type)
             {
                 choices[index] = -1;
                 continue;
             }
-            type = r_u8(vertex + 12u);
+            type = vertex->lane;
             if (type == 2u)
             {
                 weight = weights[index];
@@ -778,8 +837,8 @@ sint32 ai_choose_route_target(BOAT *boat)
         }
     }
     route_index = (uint16)route->target_segment;
-    table = r_u32(0x800B6B80u);
-    object = r_u32(table + route_index * 4u);
+    table = route_resources.segments;
+    object = table[route_index];
     choice = choices[selected];
     if (choice == -1)
     {
@@ -789,17 +848,17 @@ sint32 ai_choose_route_target(BOAT *boat)
         return (sint32)((uint32)choice << 3);
     }
     {
-        uint32 vertex = object + (uint32)choice * 14u + 30u;
-        uint32 coordinate = r_u8(vertex);
-        sint32 base = (sint16)r_u16(object + 8u);
+        const ROUTE_VERTEX *vertex = &object->vertices[(uint32)choice];
+        uint32 coordinate = vertex->position[0];
+        sint32 base = object->origin[0];
         uint32 position = (uint32)boat->contacts.points[0].position[0];
         sint32 first_square;
         sint32 second_square;
 
         x = (sint32)((uint32)base + (coordinate << 4) - position);
         output->vector[0] = (sint32)((uint32)x);
-        coordinate = r_u8(vertex + 2u);
-        base = (sint16)r_u16(object + 12u);
+        coordinate = vertex->position[2];
+        base = object->origin[2];
         position = (uint32)boat->contacts.points[0].position[2];
         x = (sint32)(uint32)output->vector[0];
         z = (sint32)((uint32)base + (coordinate << 4) - position);
@@ -836,83 +895,63 @@ sint32 ai_choose_route_target(BOAT *boat)
     return choice;
 }
 
-sint32 ai_config_template_desc(sint32 index, uint32 variation)
+sint32 ai_config_template_desc(sint32 idx, uint32 variation)
 {
     sint32 selected = variation >= 5u ? 4 : (sint32)variation;
-    sint32 offset = 0;
     sint32 row;
-    sint32 product;
-    sint32 result;
-    uint32 source = 0x80089894u + (uint32)index * 16u;
-    uint32 source0;
-    uint32 source4;
-    uint32 source8;
     uint32 mode;
-    uint8 course;
+    uint8 profile = profile_selection.slot;
+    const AI_CONTROL_TEMPLATE *src;
 
     FUNCTION_MARKER(0x8002F8D4u, "MAIN.EXE");
+    if ((uint32)idx >= 7u || profile >= 3u)
+        abort();
     w_u32(0x800B6820u, 0u);
     mode = r_u32(0x8008348Cu);
-    if (mode != 1u)
-        offset = mode == 2u ? 3 : 6;
-    course = r_u8(0x800E0595u);
-    row = offset + course;
+    row = (mode == 1u ? 0 : mode == 2u ? 3 : 6) + profile;
     if (r_u32(0x800834A0u) == 6u)
     {
-        selected = course;
+        selected = profile;
         row = selected;
     }
-    source0 = r_u32(source);
-    source4 = r_u32(source + 4u);
-    source8 = r_u32(source + 8u);
-    w_u32(0x800DE0E0u, source0);
-    w_u32(0x800DE0E4u, source4);
-    w_u32(0x800DE0E8u, source8);
-    w_u32(0x800DE0ECu, r_u32(source + 12u));
-    w_u16(0x800DE0E4u, r_u16(0x80089798u + (uint32)(9 * index + row) * 4u));
-    w_u16(0x800DE0E6u, r_u16(0x8008979Au + (uint32)(9 * index + row) * 4u));
-    product = (sint16)r_u16(0x80089904u + (uint32)index * 8u) * selected;
-    result = (sint32)((uint32)r_u16(0x800DE0E8u) + (uint32)product);
-    w_u16(0x800DE0E8u, (uint16)result);
-    product = (sint16)r_u16(0x80089906u + (uint32)index * 8u) * selected;
-    result = (sint32)((uint32)r_u16(0x800DE0EAu) + (uint32)product);
-    w_u16(0x800DE0EAu, (uint16)result);
-    product = (sint16)r_u16(0x80089908u + (uint32)index * 8u) * selected;
-    result = (sint32)((uint32)r_u16(0x800DE0ECu) + (uint32)product);
-    w_u16(0x800DE0ECu, (uint16)result);
-    return result;
+    src = &ai_control_templates[idx];
+    ai_control_cfg.lookahead = src->lookahead;
+    ai_control_cfg.max_speed = ai_control_speeds[idx][row][0];
+    ai_control_cfg.target_speed = ai_control_speeds[idx][row][1];
+    return (sint32)((uint32)src->return_base + (uint32)(src->return_step * selected));
 }
 
-sint32 ai_init_race(BOAT *boat, sint16 segment, uint32 settings)
+sint32 ai_init_race(BOAT *boat, sint16 segment, sint32 cfg_idx)
 {
     uint32 player_index = r_u32(0x800834A0u);
-    uint32 values = 0x80089750u + player_index * 8u;
-    sint32 variant = player_index == 6u ? r_u8(0x800E0595u) + 3 : r_u8(0x800E0596u);
+    const AI_ROUTE_TUNING *tuning = &ai_route_tuning[player_index];
+    AI_ROUTE_CFG *cfg;
+    sint32 variant = player_index == 6u ? profile_selection.slot + 3 : race_selection.ai_variant;
     sint32 result;
 
     FUNCTION_MARKER(0x8002FA94u, "MAIN.EXE");
     if (r_u32(0x80083478u) == 1u)
     {
-        sint32 settings_index = math_sra_s32(settings - 0x800895F0u, 5u);
         sint32 product;
         uint16 value;
 
-        if ((uint32)settings_index >= 9u)
-            settings = 0x800896D0u;
-        product = (sint16)r_u16(values + 4u) * variant;
-        value = (uint16)(r_u16(values) + (uint32)product);
-        w_u16(settings + 8u, value);
+        if ((uint32)cfg_idx >= 9u)
+            cfg_idx = 7;
+        cfg = &ai_route_cfg[cfg_idx];
+        product = tuning->min_step * variant;
+        value = (uint16)((uint16)tuning->min_base + (uint32)product);
+        cfg->min_adjust = (sint16)value;
         if ((sint16)value > 0)
-            w_u16(settings + 8u, 0u);
-        product = (sint16)r_u16(values + 6u) * variant;
-        value = (uint16)(r_u16(values + 2u) + (uint32)product);
-        w_u16(settings + 10u, value);
+            cfg->min_adjust = 0;
+        product = tuning->max_step * variant;
+        value = (uint16)((uint16)tuning->max_base + (uint32)product);
+        cfg->max_adjust = (sint16)value;
     }
     else
     {
         uint32 alternate = 1u - ai_settings_alternate;
 
-        settings = 0x80089710u + alternate * 32u;
+        cfg = &ai_alt_route_cfg[alternate];
         ai_settings_alternate = alternate;
     }
     boat->control.force_arm[2] = 100;
@@ -926,15 +965,15 @@ sint32 ai_init_race(BOAT *boat, sint16 segment, uint32 settings)
         uint32 next;
 
         boat->route.lane_timer = (uint16)(4u);
-        object_count = (sint32)r_u32(0x800B6A98u);
+        object_count = (sint32)route_resources.count;
         boat->route.speed_adjust = (uint16)(0u);
         boat->route.hazard = (uint16)(0u);
         boat->route.behavior = (uint16)(0u);
-        boat->route.settings = (uint32)(settings);
+        boat->route.settings = cfg;
         boat->route.target_segment = (uint16)((uint16)((uint16)segment + advance));
         next = (uint16)boat->route.target_segment;
         if ((sint32)next >= object_count)
-            boat->route.target_segment = (uint16)((uint16)(next - r_u16(0x800B6A98u)));
+            boat->route.target_segment = (uint16)((uint16)(next - (uint16)route_resources.count));
     }
     boat->route.segment = (uint16)((uint16)segment);
     boat->route.target_lane = (uint16)((uint16)boat->contacts.points[0].left);
@@ -1000,10 +1039,16 @@ sint32 ai_assign_ctrl_states(uint32 group, uint32 second_group)
             ++index;
             count = (sint32)vehicle_racer_count;
         }
-        nearest->race.phase = (uint16)(1u);
-        next_nearest->race.phase = (uint16)(2u);
-        next_nearest->race.mode = (uint16)(4u);
-        nearest->race.mode = (uint16)(4u);
+        if (nearest != NULL)
+        {
+            nearest->race.phase = (uint16)(1u);
+            nearest->race.mode = (uint16)(4u);
+        }
+        if (next_nearest != NULL)
+        {
+            next_nearest->race.phase = (uint16)(2u);
+            next_nearest->race.mode = (uint16)(4u);
+        }
         vehicle_tracks(group)[0] = nearest;
         vehicle_tracks(group)[1] = next_nearest;
         count = (sint32)vehicle_racer_count;

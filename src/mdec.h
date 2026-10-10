@@ -3,9 +3,9 @@
 
 #include "psx.h"
 
-sint32 mdec_stream_play(uint32 descriptor, sint32 (*callback)(void), sint32 mode);
-sint32 mdec_init_stream(uint32 descriptor);
-sint32 mdec_stop_stream(uint32 descriptor);
+sint32 mdec_stream_play(uint32 desc, sint32 (*callback)(void), sint32 mode);
+sint32 mdec_init_stream(uint32 desc);
+sint32 mdec_stop_stream(uint32 desc);
 sint32 mdec_poll_stream_request(void);
 sint32 mdec_decode_request(uint32 request);
 sint32 mdec_wait_output(void);

@@ -1,3 +1,4 @@
+#include "game.h"
 #include "vehicle.h"
 #include "input.h"
 #include "display.h"
@@ -13,6 +14,30 @@
 #include "timer.h"
 #include "xport_trace.h"
 #include <stdlib.h>
+
+// Place scores from MAIN.EXE 80098E08
+const uint8 ranking_points[16] = {10u, 7u, 5u, 4u, 3u, 2u, 1u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u};
+
+enum
+{
+    RANKING_CAPACITY = sizeof(race_selection.ranks) / sizeof(race_selection.ranks[0])
+};
+
+// Participant order from MAIN.EXE 800DCC10
+static uint16 ranking_order[RANKING_CAPACITY];
+
+// Keep the original signed observation within native participant capacity
+static sint16 ranking_count(uint16 value)
+{
+    sint16 count = (sint16)value;
+
+    return count > RANKING_CAPACITY ? RANKING_CAPACITY : count;
+}
+
+uint8 ranking_place_points(uint32 place)
+{
+    return place < sizeof(ranking_points) / sizeof(ranking_points[0]) ? ranking_points[place] : 0u;
+}
 
 static sint32 ranking_write_time(char *output, uint16 first, uint16 second, uint16 third)
 {
@@ -79,7 +104,7 @@ static sint32 ranking_update_peer_times(uint32 peer, TEXT_RECORD *menu, uint32 v
 
 sint32 ranking_find_empty_slot(void)
 {
-    sint32 count = (sint16)r_u16(0x800E1BAEu);
+    sint32 count = ranking_count(result_state.grid_count);
     sint32 index;
 
     FUNCTION_MARKER(0x8005B6B8u, "MAIN.EXE");
@@ -87,7 +112,7 @@ sint32 ranking_find_empty_slot(void)
         return 15;
     for (index = 0; index < count; ++index)
     {
-        if ((sint16)r_u16(0x800DCC10u + 2u * (uint32)index) == 0)
+        if ((sint16)ranking_order[index] == 0)
             return index;
     }
     return 15;
@@ -96,9 +121,9 @@ sint32 ranking_find_empty_slot(void)
 sint32 ranking_player_is_leading(void)
 {
     PROFILE_SERIES *series;
-    sint32 count = (sint16)r_u16(0x800E1BAEu);
-    uint8 values[18];
-    sint16 order[18];
+    sint32 count = ranking_count(result_state.grid_count);
+    uint8 values[RANKING_CAPACITY];
+    sint16 order[RANKING_CAPACITY];
     sint32 index;
     sint32 pass;
 
@@ -107,14 +132,12 @@ sint32 ranking_player_is_leading(void)
     series = profile_get_series();
     if (count < 0)
         count = 0;
-    if (count > 18)
-        count = 18;
     for (index = 0; index < count; ++index)
         values[index] = series->points[(uint32)index];
-    if ((sint16)r_u16(0x800E0580u) == -4 || (sint16)r_u16(0x800E0580u) == -2)
+    if ((sint16)game_selection.selection == -4 || (sint16)game_selection.selection == -2)
     {
         for (index = 0; index < count; ++index)
-            values[index] = (uint8)(values[index] + r_u8(0x80098E08u + r_u8(0x800E059Du + (uint32)index)));
+            values[index] = (uint8)(values[index] + ranking_place_points(race_selection.ranks[(sint32)index]));
     }
     else if (name_player_name_matches(0, 0x800B425Cu) != 0 && count > 0)
         values[0] = (uint8)(values[0] + 15u);
@@ -143,12 +166,12 @@ sint32 ranking_refresh_championship(void)
     PROFILE_SERIES *series = profile_get_series();
     TEXT_RECORD *menu = text_menu;
     sint32 selected = (sint32)profile_data->course - 1;
-    sint32 count = (sint16)r_u16(0x800E1BAEu);
+    sint32 count = ranking_count(result_state.grid_count);
     sint32 index;
 
     FUNCTION_MARKER(0x8005B950u, "MAIN.EXE");
-    w_u8(0x800E05ADu, (uint8)series->grid_row);
-    w_u16(0x800B4238u, r_u8(0x800E05ADu));
+    race_selection.boats[0] = (uint8)series->grid_row;
+    menu_boat_select.boat = race_selection.boats[0];
     for (index = 0; index < 6; ++index)
     {
         uint8 active = (uint8)(index == selected);
@@ -161,56 +184,56 @@ sint32 ranking_refresh_championship(void)
         menu[(3 * (index)) + 22].visible = 0u;
         menu[(3 * (index)) + 23].visible = 0u;
     }
-    if ((sint16)r_u16(0x800E0580u) == -4 || (sint16)r_u16(0x800E0580u) == -2)
+    if ((sint16)game_selection.selection == -4 || (sint16)game_selection.selection == -2)
     {
         for (index = 0; index < count; ++index)
-            series->points[(uint32)index] = (uint8)(series->points[(uint32)index] + r_u8(0x80098E08u + r_u8(0x800E059Du + (uint32)index)));
+            series->points[(uint32)index] = (uint8)(series->points[(uint32)index] + ranking_place_points(race_selection.ranks[(sint32)index]));
     }
     else if (name_player_name_matches(0, 0x800B425Cu) != 0)
         series->points[0] = (uint8)(series->points[0] + 15u);
     else
     {
         for (index = 1; index < count; ++index)
-            series->points[(uint32)index] = (uint8)(series->points[(uint32)index] + r_u8(0x80098E08u + r_u8(0x800E059Du + (uint32)index)));
+            series->points[(uint32)index] = (uint8)(series->points[(uint32)index] + ranking_place_points(race_selection.ranks[(sint32)index]));
     }
     ranking_build_order();
     for (index = 0; index < count; ++index)
     {
-        uint32 descriptor = 0x800E0B40u + 8u * (uint32)index;
-        uint32 position = 3u * r_u8(descriptor) + r_u8(descriptor + 1u);
-        uint32 score = r_u8(0x800E059Du + (uint32)index);
+        const RACE_PARTICIPANT *participant = &race_participants[index];
+        uint32 position = 3u * participant->boat + participant->variant;
+        uint32 score = race_selection.ranks[(sint32)index];
         if (score < 8u)
         {
             menu[position + 21].visible = 1u;
             menu[position + 21].y = (uint16)(12u * score + 78u);
         }
     }
-    if ((sint16)r_u16(0x800E0580u) == -1 || (sint16)r_u16(0x800E0580u) == -3)
+    if ((sint16)game_selection.selection == -1 || (sint16)game_selection.selection == -3)
     {
         for (index = 0; index < 11; ++index)
             menu[index + 49].visible = 0u;
         return 0;
     }
     for (index = 0; index < 3; ++index)
-        profile_format_value_parts3(0x800E18D4u + 6u * (uint32)index, menu[index + 50].text);
+        profile_format_parts(race_lap_times[index], menu[index + 50].text);
     {
         sint32 selection = selected + 6 * profile_data->level;
-        uint32 summary = 0x800E0BC0u + 14u * (uint32)selection;
-        uint32 record = 0x800E0CBCu + 172u * (uint32)selection;
+        PROFILE_SUMMARY *summary = &profile_summaries[selection];
+        PROFILE_RECORD *record = &profile_records[selection];
         sint32 matched = 0;
 
-        profile_format_value_parts3(summary + 8u, menu[54].text);
+        profile_format_parts(summary->race_time, menu[54].text);
         for (index = 0; index < 5; ++index)
             menu[index + 55].visible = 0u;
         for (index = 0; index < 3; ++index)
         {
-            if (time_fields3_compare(record + 2u, 0x800E18D4u + 6u * (uint32)index) != 0)
+            if (time_equal(race_lap_times[index], record->lap.time) != 0)
             {
                 matched = 1;
                 menu[index + 55].visible = 1u;
             }
         }
-        if (time_fields3_compare(record + 50u, summary + 8u) != 0)
+        if (time_equal(record->times[0], summary->race_time) != 0)
             matched = 1;
         if (matched != 0)
             menu[59].visible = 1u;
@@ -221,9 +244,9 @@ sint32 ranking_refresh_championship(void)
 sint32 ranking_refresh_standard(void)
 {
     PROFILE_SERIES *series;
-    uint32 records = r_u32(0x800B6A74u);
+    UI_RECORD *records = sprite_records;
     TEXT_RECORD *menu = text_menu;
-    sint32 count = (sint16)vehicle_racer_count;
+    sint32 count = ranking_count((uint16)vehicle_racer_count);
     sint32 index;
     sint32 result = count;
 
@@ -232,7 +255,7 @@ sint32 ranking_refresh_standard(void)
     series = profile_get_series();
     ranking_build_order();
     for (index = 0; index < 3; ++index)
-        w_u8(records + 88u + 84u * (uint32)index, (uint8)(index == (sint16)r_u16(0x800B4246u)));
+        records[index + 1].type = (uint8)(index == (sint16)menu_course_select.level);
     for (index = 0; index < 9; ++index)
     {
         menu[(3 * (index)) + 10].visible = 0u;
@@ -241,9 +264,9 @@ sint32 ranking_refresh_standard(void)
     }
     for (index = 0; index < count; ++index)
     {
-        sint32 ranked = (sint16)r_u16(0x800DCC10u + 2u * (uint32)index);
-        uint32 descriptor = 0x800E0B40u + 8u * (uint32)ranked;
-        uint32 position = 3u * r_u8(descriptor) + r_u8(descriptor + 1u);
+        sint32 ranked = (sint16)ranking_order[index];
+        const RACE_PARTICIPANT *participant = &race_participants[ranked];
+        uint32 position = 3u * participant->boat + participant->variant;
         uint32 score = series->points[(uint32)ranked];
         char *text = menu[index + 37].text;
 
@@ -261,7 +284,7 @@ sint32 ranking_refresh_standard(void)
 sint32 ranking_refresh_reduced(void)
 {
     PROFILE_SERIES *series;
-    uint32 records = r_u32(0x800B6A74u);
+    UI_RECORD *records = sprite_records;
     TEXT_RECORD *menu = text_menu;
     sint16 count;
     sint32 index;
@@ -273,32 +296,32 @@ sint32 ranking_refresh_reduced(void)
     series = profile_get_series();
     ranking_build_order_desc();
     for (index = 0; index < 3; ++index)
-        w_u8(records + 88u + 84u * (uint32)index, index == (sint16)r_u16(0x800B4246u));
+        records[index + 1].type = index == (sint16)menu_course_select.level;
     for (index = 0; index < 9; ++index)
     {
         menu[(3 * (index)) + 10].visible = 0u;
         menu[(3 * (index)) + 11].visible = 0u;
         menu[(3 * (index)) + 12].visible = 0u;
     }
-    start = r_u8(0x800E059Au) != 0u ? 2 : 4;
+    start = game_options.players_only != 0u ? 2 : 4;
     for (index = start; index < 8; ++index)
     {
         menu[index + 2].visible = 0u;
         menu[index + 37].visible = 0u;
     }
-    count = (sint16)r_u16(0x800E1BB0u);
+    count = ranking_count(result_state.count);
     if (count >= 5)
         count = 4;
     result = count;
     for (index = 0; index < count; ++index)
     {
-        sint16 ranked = (sint16)r_u16(0x800DCC10u + 2u * (uint32)index);
-        uint32 descriptor = 0x800E0B40u + 8u * (uint32)ranked;
-        uint32 grid = 16u * (r_u8(descriptor + 1u) + 3u * r_u8(descriptor));
+        sint16 ranked = (sint16)ranking_order[index];
+        const RACE_PARTICIPANT *participant = &race_participants[ranked];
+        uint32 grid = 16u * (participant->variant + 3u * participant->boat);
         uint8 score = series->points[(sint32)ranked];
         char *text = menu[index + 37].text;
-        menu[r_u8(descriptor + 1) + (3 * (r_u8(descriptor))) + 10].visible = 1u;
-        menu[r_u8(descriptor + 1) + (3 * (r_u8(descriptor))) + 10].y = (uint16)(14 * index + 70);
+        menu[participant->variant + (3 * (participant->boat)) + 10].visible = 1u;
+        menu[participant->variant + (3 * (participant->boat)) + 10].y = (uint16)(14 * index + 70);
         text[0] = score != 0u ? (uint8)(score / 10u + 48u) : 48u;
         text[1u] = score != 0u ? (uint8)(score % 10u + 48u) : 48u;
         menu[index + 37].visible = 1u;
@@ -311,19 +334,19 @@ sint32 ranking_refresh_reduced(void)
 sint32 ranking_refresh(void)
 {
     FUNCTION_MARKER(0x8005C3BCu, "MAIN.EXE");
-    if (r_u8(0x800E058Du) != 0u)
+    if (game_selection.menu_variant != 0u)
         return ranking_refresh_reduced();
     return ranking_refresh_standard();
 }
 
 sint32 ranking_refresh_selection(void)
 {
-    uint32 records = r_u32(0x800B6A74u);
+    UI_RECORD *records = sprite_records;
     sint32 index;
 
     FUNCTION_MARKER(0x8005C3F8u, "MAIN.EXE");
     for (index = 0; index < 3; ++index)
-        w_u8(records + 88u + 84u * (uint32)index, (uint8)(index == (sint16)r_u16(0x800B4246u)));
+        records[index + 1].type = (uint8)(index == (sint16)menu_course_select.level);
     return (sint32)(records + 256u);
 }
 
@@ -338,14 +361,14 @@ sint32 ranking_wrap_selection(sint32 fallback)
     {
         profile_data->course = (uint8)(0u);
         series->phase = (uint16)(0u);
-        if (r_u8(0x800E058Du) != 0u)
+        if (game_selection.menu_variant != 0u)
             result = 4;
         else
         {
             result = 3;
-            if (r_u16(0x800DCC10u) == 0u)
+            if (ranking_order[0] == 0u)
             {
-                w_u16(0x800B4084u, 1u);
+                menu_textures.rebuild = 1u;
                 result = 23;
             }
         }
@@ -369,7 +392,7 @@ sint32 profile_confirm_mode(CONTROLLER_STATE *input)
             result = 14;
             if (profile_unlock(6) != 0)
             {
-                w_u16(0x800B413Eu, 14u);
+                menu_state.phase = 14u;
                 w_u16(0x800B6A80u, 1u);
                 result = 1;
             }
@@ -383,9 +406,9 @@ sint32 profile_init_mode_state(void)
     FUNCTION_MARKER(0x8005C564u, "MAIN.EXE");
     if ((sint16)r_u16(0x800B6A80u) != 0)
     {
-        w_u16(0x800B4264u, 6u);
-        w_u16(0x800B4266u, 6u);
-        w_u16(0x800B6ABEu, 2u);
+        menu_notice.value = 6u;
+        menu_notice.boat = 6u;
+        menu_notice.type = 2u;
         return 2;
     }
     return 6;
@@ -394,7 +417,7 @@ sint32 profile_init_mode_state(void)
 sint32 ranking_build_order(void)
 {
     PROFILE_SERIES *series;
-    sint32 count = (sint16)r_u16(0x800E1BAEu);
+    sint32 count = ranking_count(result_state.grid_count);
     sint32 first;
     sint32 second;
 
@@ -402,17 +425,17 @@ sint32 ranking_build_order(void)
 
     series = profile_get_series();
     for (first = 0; first < count; ++first)
-        w_u16(0x800DCC10u + 2u * (uint32)first, (uint16)first);
+        ranking_order[first] = (uint16)first;
     for (first = 0; first < count; ++first)
     {
         for (second = 0; second < count - 1; ++second)
         {
-            sint16 first_index = (sint16)r_u16(0x800DCC10u + 2u * (uint32)first);
-            sint16 second_index = (sint16)r_u16(0x800DCC10u + 2u * (uint32)second);
+            sint16 first_index = (sint16)ranking_order[first];
+            sint16 second_index = (sint16)ranking_order[second];
             if (first_index != second_index && series->points[(uint32)second_index] < series->points[(uint32)first_index])
             {
-                w_u16(0x800DCC10u + 2u * (uint32)first, (uint16)second_index);
-                w_u16(0x800DCC10u + 2u * (uint32)second, (uint16)first_index);
+                ranking_order[first] = (uint16)second_index;
+                ranking_order[second] = (uint16)first_index;
             }
         }
     }
@@ -426,15 +449,15 @@ sint32 profile_reset_select_state(void)
 
     FUNCTION_MARKER(0x8005C6C8u, "MAIN.EXE");
     text_clear_boat_names();
-    if ((sint16)r_u16(0x800B413Eu) != 3 && r_u8(0x800E058Du) == 0u && (sint16)r_u16(0x800E0582u) == 1)
+    if ((sint16)menu_state.phase != 3 && game_selection.menu_variant == 0u && (sint16)game_selection.mode == 1)
     {
-        selected = r_u8(0x800B4238u);
-        w_u8(0x800E05ADu, selected);
+        selected = (uint8)menu_boat_select.boat;
+        race_selection.boats[0] = selected;
         series->grid_row = (uint16)(selected);
     }
-    if ((sint16)r_u16(0x800B4246u) == 3)
-        w_u16(0x800B4246u, 2u);
-    w_u16(0x800B4248u, 0u);
+    if ((sint16)menu_course_select.level == 3)
+        menu_course_select.level = 2u;
+    menu_course_select.phase = MENU_COURSE_IDLE;
     return 2;
 }
 
@@ -443,7 +466,7 @@ uint32 ranking_init_screen(void)
     uint32 frame;
     PLAYER_PROFILE *profile_data;
     sint16 selection;
-    uint32 data;
+    PROFILE_RECORD *data;
     char *result;
     uint8 profile_row;
     sint32 index;
@@ -453,7 +476,7 @@ uint32 ranking_init_screen(void)
     profile_data = profile_current();
     for (index = 0; index < 6; ++index)
     {
-        uint8 active = (uint8)(index == (sint16)r_u16(0x800B4244u));
+        uint8 active = (uint8)(index == (sint16)menu_course_select.course);
         TEXT_RECORD *menu = text_menu;
 
         menu[(2 * (index))].visible = active;
@@ -462,14 +485,14 @@ uint32 ranking_init_screen(void)
     }
     for (index = 0; index < 3; ++index)
     {
-        uint8 active = (uint8)(index == (sint16)r_u16(0x800B4246u));
-        uint32 records = r_u32(0x800B6A74u);
+        uint8 active = (uint8)(index == (sint16)menu_course_select.level);
+        UI_RECORD *records = sprite_records;
 
-        w_u8(records + 172u + 84u * (uint32)index, active);
+        records[index + 2].type = active;
     }
     profile_row = profile_data->level;
-    selection = (sint16)(profile_row * 6u + r_u16(0x800B4244u));
-    data = 0x800E0CBCu + 172u * (uint32)(sint32)selection;
+    selection = (sint16)(profile_row * 6u + menu_course_select.course);
+    data = &profile_records[selection];
     text_clear_boat_names();
     for (index = 0; index < 9; ++index)
         w_u8(frame + 0x10u + (uint32)index, (uint8)(10 * index));
@@ -482,16 +505,16 @@ uint32 ranking_init_screen(void)
         for (half = 0; half < 2; ++half)
         {
             TEXT_RECORD *menu = text_menu;
-            TEXT_RECORD *descriptor = &menu[(2 * (index)) + half + 13];
+            TEXT_RECORD *desc = &menu[(2 * (index)) + half + 13];
 
-            descriptor[0].y = (uint16)y;
+            desc[0].y = (uint16)y;
             visible = (uint8)(y > 74 && y < 144);
-            descriptor[0].visible = visible;
-            descriptor[0].style = 0u;
+            desc[0].visible = visible;
+            desc[0].style = 0u;
         }
         {
-            TEXT_RECORD *primitives = text_hud;
-            TEXT_RECORD *primitive = &primitives[index + 3];
+            TEXT_RECORD *prims = text_hud;
+            TEXT_RECORD *primitive = &prims[index + 3];
             sint16 lane_index;
             uint32 lane_address;
             uint8 lane;
@@ -499,14 +522,14 @@ uint32 ranking_init_screen(void)
 
             primitive[0].x = 160u;
             primitive[0].centered = 1u;
-            lane_index = (sint16)r_u16(data + 28u + 2u * (uint32)index);
+            lane_index = (sint16)data->boats[index];
             lane_address = frame + 0x10u + (uint32)(sint32)lane_index;
             lane = r_u8(lane_address);
             ranking = &text_hud[lane + 31];
             primitive[0].y = (uint16)y;
             primitive[0].font = 2u;
             primitive[0].visible = visible;
-            primitive[0].text = text_bind(0x800E0D30u + 172u * (uint32)selection + 5u * (uint32)index);
+            primitive[0].text = data->names[index];
             primitive[0].style = 0u;
             ranking[0].x = 345u;
             ranking[0].y = (uint16)y;
@@ -521,17 +544,17 @@ uint32 ranking_init_screen(void)
         TEXT_RECORD *menu = text_menu;
         char *output = menu[(2 * (index)) + 14].text;
 
-        profile_format_value_parts3(data + 50u + 6u * (uint32)index, output);
+        profile_format_parts(data->times[index], output);
     }
     {
         TEXT_RECORD *menu = text_menu;
         char *output = menu[37].text;
 
-        menu[36].text = text_bind(data + 8u);
-        profile_format_value_parts3(data + 2u, output);
+        menu[36].text = data->lap.name;
+        profile_format_parts(data->lap.time, output);
     }
     {
-        sint16 name_index = (sint16)r_u16(data);
+        sint16 name_index = (sint16)data->lap.boat;
         uint32 source = 0x80099720u + 14u * (uint32)name_index;
         TEXT_RECORD *menu = text_menu;
         uint8 character = r_u8(source);
@@ -559,11 +582,11 @@ uint32 ranking_init_screen(void)
         TEXT_RECORD *menu = text_menu;
         char *output = menu[41].text;
 
-        menu[40].text = text_bind(data + 22u);
-        profile_format_value_parts3(data + 16u, output);
+        menu[40].text = data->trial.name;
+        profile_format_parts(data->trial.time, output);
     }
     {
-        sint16 name_index = (sint16)r_u16(data + 14u);
+        sint16 name_index = (sint16)data->trial.boat;
         uint32 source = 0x80099720u + 14u * (uint32)name_index;
         TEXT_RECORD *menu = text_menu;
         uint8 character = r_u8(source);
@@ -598,13 +621,13 @@ uint32 ranking_init_screen(void)
 sint32 ranking_finalize_select(void)
 {
     FUNCTION_MARKER(0x8005CCE4u, "MAIN.EXE");
-    w_u16(0x800B4084u, 1u);
+    menu_textures.rebuild = 1u;
     text_clear_boat_names();
     text_clear_names();
-    if ((sint16)r_u16(0x800B413Eu) == 21)
+    if ((sint16)menu_state.phase == 21)
     {
-        sint16 column = (sint16)r_u16(0x800B4244u);
-        sint16 row = (sint16)r_u16(0x800B4246u);
+        sint16 column = (sint16)menu_course_select.course;
+        sint16 row = (sint16)menu_course_select.level;
 
         return menu_increment_group_offset(column, row);
     }
@@ -624,8 +647,8 @@ sint32 ranking_update_screen_anim(void)
     {
         PLAYER_PROFILE *profile_data = profile_current();
         uint8 profile_row = profile_data->level;
-        sint16 selection = (sint16)(profile_row * 6u + r_u16(0x800B4244u));
-        uint32 data = 0x800E0CBCu + 172u * (uint32)(sint32)selection;
+        sint16 selection = (sint16)(profile_row * 6u + menu_course_select.course);
+        PROFILE_RECORD *data = &profile_records[selection];
         sint32 index;
 
         for (index = 0; index < 9; ++index)
@@ -639,23 +662,23 @@ sint32 ranking_update_screen_anim(void)
             for (half = 0; half < 2; ++half)
             {
                 TEXT_RECORD *menu = text_menu;
-                TEXT_RECORD *descriptor = &menu[(2 * (index)) + half + 13];
-                uint16 old_y = descriptor[0].y;
+                TEXT_RECORD *desc = &menu[(2 * (index)) + half + 13];
+                uint16 old_y = desc[0].y;
                 uint16 delta = r_u16(0x800B6A9Eu);
                 sint16 y = (sint16)(uint16)(old_y - delta);
 
-                descriptor[0].y = (uint16)y;
+                desc[0].y = (uint16)y;
                 visible = (uint8)(y > 74 && y < 144);
-                descriptor[0].visible = visible;
+                desc[0].visible = visible;
                 if (y < 83)
                     clip = (sint8)(83 - y);
                 else if (y > 135)
                     clip = (sint8)(-121 - y);
-                descriptor[0].style = (uint8)clip;
+                desc[0].style = (uint8)clip;
             }
             {
-                TEXT_RECORD *primitives = text_hud;
-                TEXT_RECORD *primitive = &primitives[index + 3];
+                TEXT_RECORD *prims = text_hud;
+                TEXT_RECORD *primitive = &prims[index + 3];
                 uint16 old_y = primitive[0].y;
                 uint16 delta = r_u16(0x800B6A9Eu);
                 sint16 lane_index;
@@ -666,7 +689,7 @@ sint32 ranking_update_screen_anim(void)
                 primitive[0].visible = visible;
                 primitive[0].style = (uint8)clip;
                 primitive[0].y = (uint16)(old_y - delta);
-                lane_index = (sint16)r_u16(data + 28u + 2u * (uint32)index);
+                lane_index = (sint16)data->boats[index];
                 lane_address = frame + 0x10u + (uint32)(sint32)lane_index;
                 lane = r_u8(lane_address);
                 ranking = &text_hud[lane + 31];
@@ -752,23 +775,23 @@ sint32 profile_unlock_progress(uint32 slot)
     return maximum + 1u;
 }
 
-sint32 profile_select_mode(void)
+void profile_select_mode(void)
 {
     PLAYER_PROFILE *profile_data;
     sint32 selection;
     sint32 result;
 
     FUNCTION_MARKER(0x8005D354u, "MAIN.EXE");
-    w_u8(0x800E058Du, 1u);
+    game_selection.menu_variant = 1u;
     profile_data = profile_current();
     selection = (sint16)menu_query_group_value(4, 0);
     if (selection == 0)
     {
         result = 1;
         w_u16(0x800B69CAu, 0u);
-        if ((sint16)r_u16(0x800E0586u) == 1)
-            result = profile_restore_backup();
-        w_u16(0x800E0582u, 0u);
+        if ((sint16)game_selection.previous_mode == 1)
+            profile_restore_backup();
+        game_selection.mode = 0u;
     }
     else
     {
@@ -776,34 +799,33 @@ sint32 profile_select_mode(void)
         sint32 index;
 
         profile_data->level = (uint8)((uint8)(selection - 1));
-        w_u16(0x800E0582u, 1u);
+        game_selection.mode = 1u;
         w_u16(0x800B69CAu, 2u);
         series = profile_get_series();
         if (series->phase != 0u)
         {
-            w_u8(0x800E05ADu, (uint8)series->grid_row);
+            race_selection.boats[0] = (uint8)series->grid_row;
             result = (uint8)series->completed;
             profile_data->course = (uint8)((uint8)result);
         }
         else
         {
-            result = (uint8)r_u16(0x800B4238u);
+            result = (uint8)menu_boat_select.boat;
             series->completed = (uint16)(0u);
             series->phase = (uint16)(1u);
-            w_u8(0x800E05ADu, (uint8)result);
+            race_selection.boats[0] = (uint8)result;
             series->grid_row = (uint16)result;
             for (index = 0; index < 16; ++index)
                 series->points[(uint32)index] = (uint8)(0u);
         }
     }
-    return result;
 }
 
 sint32 profile_refresh_mode_visual(void)
 {
     sint32 selection;
     sint32 record_index = 0;
-    uint32 records = r_u32(0x800B6A74u);
+    UI_RECORD *records = sprite_records;
     sint32 index;
 
     FUNCTION_MARKER(0x8005D464u, "MAIN.EXE");
@@ -816,20 +838,20 @@ sint32 profile_refresh_mode_visual(void)
         record_index = 7;
     else if (selection == 3)
         record_index = 8;
-    w_u8(records + 4u, 1u);
+    records->type = 1u;
     for (index = 6; index < 9; ++index)
-        w_u8(records + 4u + 84u * (uint32)index, 0u);
+        records[index].type = 0u;
     if (record_index != 0)
     {
-        uint32 record = records + 84u * (uint32)record_index;
-        w_u8(record + 4u, 1u);
-        if ((sint16)r_u16(0x800B413Au) != 0)
+        UI_RECORD *record = (records + record_index);
+        record->type = 1u;
+        if ((sint16)menu_state.selection != 0)
             return sprite_apply_prim_vram_mask(record);
         return sprite_disable_semitransparency(record);
     }
-    w_u8(records + 844u, 0u);
-    w_u8(records + 2608u, 0u);
-    w_u8(records + 2692u, 0u);
+    records[10].type = 0u;
+    records[31].type = 0u;
+    records[32].type = 0u;
     return (sint32)records;
 }
 
@@ -855,7 +877,7 @@ sint32 profile_init_slot(sint16 profile_index)
             profile_data->progress.courses[(uint32)row][(uint32)index].result = (uint8)(0u);
         }
     }
-    if (r_u16(0x800E0582u) != 0u)
+    if (game_selection.mode != 0u)
     {
         for (row = 0; row < 3; ++row)
         {
@@ -872,16 +894,16 @@ sint32 profile_init_slot(sint16 profile_index)
 sint32 profile_init_select(void)
 {
     FUNCTION_MARKER(0x8005D74Cu, "MAIN.EXE");
-    w_u8(0x800E058Du, 1u);
-    w_u8(0x800E058Eu, 2u);
-    w_u8(0x800E0595u, 0u);
+    game_selection.menu_variant = 1u;
+    game_selection.players = (uint16)((game_selection.players & 0xFF00u) | (uint8)(2u));
+    profile_selection.slot = 0u;
     if ((sint16)r_u16(0x800B4142u) == 1)
     {
-        w_u16(0x800E0582u, 0u);
-        w_u16(0x800E0586u, 0u);
+        game_selection.mode = 0u;
+        game_selection.previous_mode = 0u;
         menu_update_group_desc_select(4, 0, 0);
     }
-    else if ((sint16)r_u16(0x800E0582u) == 1)
+    else if ((sint16)game_selection.mode == 1)
     {
         menu_update_group_desc_select(4, 0, (sint16)r_u16(0x800B6C04u) + 1);
     }
@@ -913,19 +935,19 @@ sint32 ranking_build_order_desc(void)
     FUNCTION_MARKER(0x8005DCD8u, "MAIN.EXE");
 
     series = profile_get_series();
-    count = (sint16)r_u16(0x800E1BB0u);
+    count = ranking_count(result_state.count);
     for (outer = 0; outer < count; ++outer)
-        w_u16(0x800DCC10u + 2u * (uint32)outer, (uint16)outer);
+        ranking_order[outer] = (uint16)outer;
     for (outer = 0; outer < count; ++outer)
     {
         for (inner = 0; inner < count - 1; ++inner)
         {
-            sint16 outer_index = (sint16)r_u16(0x800DCC10u + 2u * (uint32)outer);
-            sint16 inner_index = (sint16)r_u16(0x800DCC10u + 2u * (uint32)inner);
+            sint16 outer_index = (sint16)ranking_order[outer];
+            sint16 inner_index = (sint16)ranking_order[inner];
             if (outer_index != inner_index && series->points[(sint32)outer_index] >= series->points[(sint32)inner_index])
             {
-                w_u16(0x800DCC10u + 2u * (uint32)outer, (uint16)inner_index);
-                w_u16(0x800DCC10u + 2u * (uint32)inner, (uint16)outer_index);
+                ranking_order[outer] = (uint16)inner_index;
+                ranking_order[inner] = (uint16)outer_index;
             }
         }
     }
@@ -937,12 +959,12 @@ sint32 ranking_refresh_results(void)
     PLAYER_PROFILE *profile = profile_current();
     PROFILE_SERIES *series = profile_get_series();
     TEXT_RECORD *menu = text_menu;
-    sint16 count = (sint16)r_u16(0x800E1BB0u);
-    sint16 mode = (sint16)r_u16(0x800E0580u);
+    sint16 count = ranking_count(result_state.count);
+    sint16 mode = (sint16)game_selection.selection;
     sint32 index;
 
     FUNCTION_MARKER(0x8005DE08u, "MAIN.EXE");
-    w_u16(0x800B4238u, r_u8(0x800E05ADu));
+    menu_boat_select.boat = race_selection.boats[0];
     text_clear_menu_range(1, 12);
     menu[(2 * (profile->course)) + -1].visible = 1u;
     menu[(2 * (profile->course))].visible = 1u;
@@ -958,46 +980,46 @@ sint32 ranking_refresh_results(void)
         {
             if (mode == -1)
             {
-                w_u8(0x800E059Du, 3u);
-                w_u8(0x800E059Eu, 2u);
-                w_u8(0x800E059Fu, 1u);
-                w_u8(0x800E05A0u, 0u);
-                if ((sint16)r_u16(0x800E1BB2u) != 0)
+                race_selection.ranks[0] = 3u;
+                race_selection.ranks[1] = 2u;
+                race_selection.ranks[2] = 1u;
+                race_selection.ranks[3] = 0u;
+                if ((sint16)result_state.quit_player != 0)
                 {
-                    w_u8(0x800E059Du, 2u);
-                    w_u8(0x800E059Eu, 3u);
-                    series->points[0] = (uint8)(series->points[0] + r_u8(0x80098E0Au));
+                    race_selection.ranks[0] = 2u;
+                    race_selection.ranks[1] = 3u;
+                    series->points[0] = (uint8)(series->points[0] + ranking_points[2]);
                 }
                 else
-                    series->points[1] = (uint8)(series->points[1] + r_u8(0x80098E0Au));
-                series->points[2] = (uint8)(series->points[2] + r_u8(0x80098E09u));
-                series->points[3] = (uint8)(series->points[3] + r_u8(0x80098E08u));
+                    series->points[1] = (uint8)(series->points[1] + ranking_points[2]);
+                series->points[2] = (uint8)(series->points[2] + ranking_points[1]);
+                series->points[3] = (uint8)(series->points[3] + ranking_points[0]);
             }
             else
             {
-                uint8 limit = r_u8(0x800E059Du) < r_u8(0x800E059Eu) ? r_u8(0x800E059Du) : r_u8(0x800E059Eu);
+                uint8 limit = race_selection.ranks[0] < race_selection.ranks[1] ? race_selection.ranks[0] : race_selection.ranks[1];
                 for (index = 2; index < 4; ++index)
                 {
-                    uint8 rank = r_u8(0x800E059Du + (uint32)index);
+                    uint8 rank = race_selection.ranks[(sint32)index];
                     if (rank < limit)
-                        series->points[(uint32)index] = (uint8)(series->points[(uint32)index] + r_u8(0x80098E08u + rank));
+                        series->points[(uint32)index] = (uint8)(series->points[(uint32)index] + ranking_place_points(rank));
                 }
             }
         }
         else
         {
-            w_u8(0x800E059Du, 1u);
-            w_u8(0x800E059Eu, 0u);
+            race_selection.ranks[0] = 1u;
+            race_selection.ranks[1] = 0u;
             if (mode == -1)
             {
-                if ((sint16)r_u16(0x800E1BB2u) != 0)
+                if ((sint16)result_state.quit_player != 0)
                 {
-                    w_u8(0x800E059Du, 0u);
-                    w_u8(0x800E059Eu, 1u);
-                    series->points[0] = (uint8)(series->points[0] + r_u8(0x80098E08u));
+                    race_selection.ranks[0] = 0u;
+                    race_selection.ranks[1] = 1u;
+                    series->points[0] = (uint8)(series->points[0] + ranking_points[0]);
                 }
                 else
-                    series->points[1] = (uint8)(series->points[1] + r_u8(0x80098E08u));
+                    series->points[1] = (uint8)(series->points[1] + ranking_points[0]);
             }
         }
     }
@@ -1005,19 +1027,19 @@ sint32 ranking_refresh_results(void)
     {
         for (index = 0; index < count; ++index)
         {
-            uint8 rank = r_u8(0x800E059Du + (uint32)index);
-            series->points[(uint32)index] = (uint8)(series->points[(uint32)index] + r_u8(0x80098E08u + rank));
+            uint8 rank = race_selection.ranks[(sint32)index];
+            series->points[(uint32)index] = (uint8)(series->points[(uint32)index] + ranking_place_points(rank));
         }
     }
     ranking_build_order_desc();
     for (index = 0; index < count; ++index)
     {
-        uint8 rank = r_u8(0x800E059Du + (uint32)index);
-        uint32 descriptor = 0x800E0B40u + 8u * (uint32)index;
+        uint8 rank = race_selection.ranks[(sint32)index];
+        const RACE_PARTICIPANT *participant = &race_participants[index];
         if (rank < count)
         {
-            uint16 type = r_u16(descriptor + 4u);
-            const char *source = type == 2u ? name_player_text(0u) : type == 3u ? name_player_text(1u) : text_bind(0x800A9720u + 14u * r_u8(descriptor));
+            uint16 type = (uint16)participant->mode;
+            const char *source = type == 2u ? name_player_text(0u) : type == 3u ? name_player_text(1u) : text_bind(0x800A9720u + 14u * participant->boat);
             char *text = menu[index + 17].text;
             sint32 character = 0;
             while ((uint8)source[character] != 0u)
@@ -1047,7 +1069,7 @@ sint32 results_enter_best_times_store(uint32 first, uint32 second, uint32 third,
 {
     FUNCTION_MARKER(0x80063A18u, "MAIN.EXE");
     profile_update_best_times(first, second, third, fourth);
-    w_u8(0x800E058Bu, 10u);
-    w_u8(0x800E058Cu, 0u);
+    game_selection.event = 10u;
+    game_selection.event_arg = 0u;
     return 10;
 }

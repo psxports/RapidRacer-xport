@@ -41,7 +41,6 @@ enum
     MC_SAVE_BYTES = MC_SAVE_HEADER_BYTES + MC_SAVE_DATA_BYTES
 };
 
-sint32 mc_parse_checkpoint_data(void);
 void mc_fn_800499e0(void);
 sint32 mc_open_events(void);
 sint32 mc_close_events(void);

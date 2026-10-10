@@ -24,9 +24,9 @@ enum
 
 static uint64 perf_frame_start;
 
-static void perf_add_prim(uint32 ordering_entry, uint32 primitive)
+static void perf_add_prim(uint32 ot_entry, uint32 primitive)
 {
-    AddPrim(psx_addr(ordering_entry, sizeof(uint32)), psx_addr(primitive, sizeof(uint32)));
+    AddPrim(psx_addr(ot_entry, sizeof(uint32)), psx_addr(primitive, sizeof(uint32)));
 }
 
 static uint16 perf_elapsed(void)
@@ -213,15 +213,15 @@ sint16 perf_frame_end(void)
     return value;
 }
 
-static void perf_render_markers(uint32 ordering_entry, sint16 buffer, uint32 base)
+static void perf_render_markers(uint32 ot_entry, sint16 buffer, uint32 base)
 {
     uint32 marker;
 
     for (marker = 0u; marker < r_u16(PERF_MARKER_COUNT); ++marker)
-        perf_add_prim(ordering_entry, base + (uint32)(sint32)buffer * 20u + marker * 40u);
+        perf_add_prim(ot_entry, base + (uint32)(sint32)buffer * 20u + marker * 40u);
 }
 
-static void perf_render_samples(uint32 ordering_entry, sint16 buffer)
+static void perf_render_samples(uint32 ot_entry, sint16 buffer)
 {
     uint32 buffer_offset = (uint32)(sint32)buffer * 36u;
     uint32 count = r_u8(PERF_SAMPLE_COUNT);
@@ -242,31 +242,31 @@ static void perf_render_samples(uint32 ordering_entry, sint16 buffer)
         w_u16(second + 24u, (uint16)(left + 25u));
         w_u16(second + 16u, (uint16)(right + 25u));
         w_u16(second + 32u, (uint16)(right + 25u));
-        perf_add_prim(ordering_entry, first);
-        perf_add_prim(ordering_entry, second);
+        perf_add_prim(ot_entry, first);
+        perf_add_prim(ot_entry, second);
     }
 }
 
-void perf_render_current(uint32 ordering_entry, sint16 buffer)
+void perf_render_current(uint32 ot_entry, sint16 buffer)
 {
     uint32 offset = (uint32)(sint32)buffer * 36u;
     uint16 x = (uint16)(r_u16(PERF_CURRENT) + 25u);
     uint32 first = PERF_CURRENT_BAR_A + offset;
     uint32 second = PERF_CURRENT_BAR_B + offset;
 
-    FUNCTION_MARKER_ARGS(0x80022B84u, "MAIN.EXE", XPORT_CALL_VALUE_SCALAR, 2u, XPORT_CALL_GUEST_POINTER(ordering_entry, 4u), XPORT_CALL_SCALAR((uint32)(sint32)buffer));
+    FUNCTION_MARKER_ARGS(0x80022B84u, "MAIN.EXE", XPORT_CALL_VALUE_SCALAR, 2u, XPORT_CALL_GUEST_POINTER(ot_entry, 4u), XPORT_CALL_SCALAR((uint32)(sint32)buffer));
     w_u16(first + 16u, x);
     w_u16(first + 32u, x);
     w_u16(second + 16u, x);
     w_u16(second + 32u, x);
-    perf_render_markers(ordering_entry, buffer, PERF_MARKERS_B);
-    perf_add_prim(ordering_entry, first);
-    perf_add_prim(ordering_entry, second);
+    perf_render_markers(ot_entry, buffer, PERF_MARKERS_B);
+    perf_add_prim(ot_entry, first);
+    perf_add_prim(ot_entry, second);
 }
 
-void perf_render_graph(uint32 ordering_entry, sint16 buffer)
+void perf_render_graph(uint32 ot_entry, sint16 buffer)
 {
-    FUNCTION_MARKER_ARGS(0x80022948u, "MAIN.EXE", XPORT_CALL_VALUE_SCALAR, 2u, XPORT_CALL_GUEST_POINTER(ordering_entry, 4u), XPORT_CALL_SCALAR((uint32)(sint32)buffer));
-    perf_render_markers(ordering_entry, buffer, PERF_MARKERS_A);
-    perf_render_samples(ordering_entry, buffer);
+    FUNCTION_MARKER_ARGS(0x80022948u, "MAIN.EXE", XPORT_CALL_VALUE_SCALAR, 2u, XPORT_CALL_GUEST_POINTER(ot_entry, 4u), XPORT_CALL_SCALAR((uint32)(sint32)buffer));
+    perf_render_markers(ot_entry, buffer, PERF_MARKERS_A);
+    perf_render_samples(ot_entry, buffer);
 }

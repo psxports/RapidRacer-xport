@@ -1,4 +1,11 @@
+#include "route.h"
+#include "render.h"
+#include "sound.h"
+#include "profile.h"
+#include "game.h"
 #include "effects.h"
+#include "mesh.h"
+#include "vehicle.h"
 #include "menu.h"
 #include "pickup.h"
 #include "scene.h"
@@ -14,6 +21,8 @@
 #include "xport_trace.h"
 #include <stdlib.h>
 #include <string.h>
+
+static uint32 cd_read_file_alloc_span(uint32 path, size_t *span_size);
 
 static uint32 rr_cd_search_parent_lba;
 static uint32 rr_cd_search_parent_index;
@@ -68,13 +77,18 @@ sint32 cd_load_course_assets(uint32 context)
     uint32 suffix = frame + 0x28u;
     uint32 path;
     uint32 data;
+    size_t geometry_size;
     sint32 course;
     sint32 mode;
     sint32 result;
 
     FUNCTION_MARKER(0x8002B664u, "MAIN.EXE");
     runtime_copy_guest_8(0x800D6958u, 0x800B3E74u);
-    cd_load_model_archive();
+    if (!cd_load_model_archive())
+    {
+        result = 0;
+        goto finish;
+    }
     if (r_u32(context + 12u) == 8u)
     {
         runtime_copy_guest_8(0x800D6958u, 0x800B3E7Cu);
@@ -125,18 +139,31 @@ sint32 cd_load_course_assets(uint32 context)
     if (course == 6)
     {
         mode = (sint32)r_u32(0x80083478u);
-        runtime_format_vram_filename(directory, r_s16(0x800E1BA4u), mode != 1);
+        runtime_format_vram_filename(directory, (sint16)race_selection.resource, mode != 1);
         cd_load_archive_assets(directory);
-        pickup_fn_8003d8dc(context);
+        route_gen_init(context);
     }
     else
     {
         cd_load_archive_assets(r_u32(0x80083478u) == 1u ? 0x80080DB4u : 0x80080DC0u);
-        data = cd_load_file_alloc(0x80080DCCu);
-        cd_publish_relocate_recs(data);
-        mode = r_u8(0x800E0595u);
+        data = cd_read_file_alloc_span(runtime_build_cd_path(0x80080DCCu), &geometry_size);
+        if (data == 0u)
+        {
+            result = 0;
+            goto finish;
+        }
+        cd_publish_sections(psx_addr(data, geometry_size), geometry_size);
+        mode = profile_selection.slot;
         path = mode == 0 ? 0x80080DD8u : (mode == 1 ? 0x800B3ED0u : 0x80080DE4u);
-        cd_load_versioned_rec_archive(cd_load_file_alloc(path));
+        {
+            size_t route_size;
+            uint32 route_data = cd_read_file_alloc_span(runtime_build_cd_path(path), &route_size);
+            if (route_data == 0u || !cd_load_versioned_rec_archive((const uint8 *)psx_addr(route_data, route_size), route_size, r_u32(0x8008348Cu) == 2u))
+            {
+                result = 0;
+                goto finish;
+            }
+        }
     }
     scene_process_published_rec_flags();
     course = (sint32)r_u32(context + 40u);
@@ -265,11 +292,11 @@ sint32 cd_load_archive_assets(uint32 path)
     cd_upload_image_clut(request);
     request = cd_find_tima_chunk(data, 2);
     cd_upload_image_clut(request);
-    request = cd_find_tima_chunk(data, 2 * r_u8(0x800E05B7u) + 3);
+    request = cd_find_tima_chunk(data, 2 * menu_state.language + 3);
     cd_upload_image_clut(request);
-    request = cd_find_tima_chunk(data, 2 * r_u8(0x800E05B7u) + 4);
+    request = cd_find_tima_chunk(data, 2 * menu_state.language + 4);
     cd_upload_image_clut(request);
-    if (r_u8(0x800E05B7u) == 2u)
+    if (menu_state.language == 2u)
     {
         request = r_u32(0x80083478u) == 2u ? 0x80089F6Cu : 0x80089E54u;
         cd_upload_image_clut(request);
@@ -285,144 +312,53 @@ sint32 cd_load_archive_assets(uint32 path)
     return result;
 }
 
-sint32 cd_load_versioned_rec_archive(uint32 header)
+sint32 cd_load_versioned_rec_archive(const uint8 *src, size_t size, sint32 mirror)
 {
-    uint32 records;
-    uint32 table;
-    uint32 value;
     uint16 version;
-    sint32 count;
-    sint32 index;
+    size_t light_off = 0u;
+    size_t pal_off = 0u;
+    uint32 light_words;
+    uint32 pal_words;
 
     FUNCTION_MARKER(0x8002BF90u, "MAIN.EXE");
-    if (r_u16(header) != 0xBABEu)
+    if (!src || size < 8u || xport_load_le16(src) != 0xBABEu)
         return 0;
-    version = r_u16(header + 2u);
+    version = xport_load_le16(src + 2u);
     if (version < 4u || version > 7u)
         return 0;
-    version = r_u16(header + 2u);
+    if (version >= 5u)
+    {
+        if (size < (version == 5u ? 16u : 20u))
+            return 0;
+        pal_words = xport_load_le32(src + (version == 5u ? 8u : 12u));
+        light_words = xport_load_le32(src + (version == 5u ? 12u : 16u));
+        if (pal_words > size / 4u || light_words > pal_words)
+            return 0;
+        light_off = (size_t)light_words * 4u;
+        pal_off = (size_t)pal_words * 4u;
+        if ((pal_off - light_off) % 56u != 0u || pal_off == light_off || (pal_off - light_off) / 56u > 256u)
+            return 0;
+    }
+    if (route_decode_archive(src, size, &route_resources) != ROUTE_DECODE_OK)
+        return 0;
     if (version == 4u)
     {
-        count = (sint32)r_u16(header + 6u);
-        w_u32(0x800B6A98u, (uint32)count);
-        records = header + 8u;
-    }
-    else if (version == 5u)
-    {
-        value = r_u32(header + 12u);
-        count = (sint32)r_u16(header + 6u);
-        w_u32(0x800834ACu, header + (value << 2));
-        value = r_u32(header + 8u);
-        w_u32(0x800B6A98u, (uint32)count);
-        w_u32(0x800834B0u, header + (value << 2));
-        records = header + 16u;
+        render_select_lighting(mirror ? RENDER_LIGHT_MIRROR : RENDER_LIGHT_NORMAL);
+        render_select_palette(mirror != 0);
     }
     else
     {
-        value = r_u32(header + 16u);
-        count = (sint32)r_u16(header + 6u);
-        w_u32(0x800834ACu, header + (value << 2));
-        value = r_u32(header + 12u);
-        w_u32(0x800834B0u, header + (value << 2));
-        value = r_u32(header + 8u);
-        records = header + 20u;
-        w_u32(0x800B6A98u, (uint32)count);
-        table = header + (value << 2);
-        w_u32(0x800B6B80u, table);
-    }
-    version = r_u16(header + 2u);
-    if (version < 5u)
-    {
-        if (r_u32(0x8008348Cu) == 2u)
-        {
-            w_u32(0x800834ACu, 0x800895B8u);
-            w_u32(0x800834B0u, 0x8008955Cu);
-        }
-        else
-        {
-            w_u32(0x800834ACu, 0x80089580u);
-            w_u32(0x800834B0u, 0x80089538u);
-        }
-        count = (sint32)r_u32(0x800B6A98u);
-        if (count > 0)
-        {
-            uint32 cursor = records + 6u;
-
-            index = 0;
-            do
-            {
-                w_u16(cursor - 2u, 0u);
-                w_u8(cursor, 0u);
-                count = (sint32)r_u32(0x800B6A98u);
-                ++index;
-                cursor += 226u;
-            } while (index < count);
-        }
-    }
-    version = r_u16(header + 2u);
-    if (version < 6u)
-    {
-        count = (sint32)r_u32(0x800B6A98u);
-        table = game_alloc_arena_bytes((sint32)((uint32)count << 2));
-        count = (sint32)r_u32(0x800B6A98u);
-        w_u32(0x800B6B80u, table);
-        if (count > 0)
-        {
-            uint32 cursor = records;
-
-            index = 0;
-            do
-            {
-                uint32 offset = (uint32)index << 2;
-
-                table = r_u32(0x800B6B80u);
-                ++index;
-                w_u32(table + offset, cursor);
-                w_u8(cursor + 7u, 12u);
-                count = (sint32)r_u32(0x800B6A98u);
-                cursor += 226u;
-            } while (index < count);
-        }
-    }
-    else
-    {
-        count = (sint32)r_u32(0x800B6A98u);
-        if (count > 0)
-        {
-            uint32 cursor = r_u32(0x800B6B80u);
-
-            index = 0;
-            do
-            {
-                value = r_u32(cursor);
-                ++index;
-                w_u32(cursor, records + value);
-                cursor += 4u;
-            } while (index < count);
-        }
+        render_load_lighting(src + light_off, pal_off - light_off);
+        render_load_palette(src + pal_off, size - pal_off);
     }
     return 1;
 }
 
-sint32 cd_publish_relocate_recs(uint32 records)
+sint32 cd_publish_sections(const uint8 *src, size_t size)
 {
-    uint32 offset = 4u;
-    uint32 index = 1u;
-    uint8 count;
-
     FUNCTION_MARKER(0x8002C1D8u, "MAIN.EXE");
-    w_u32(0x80083498u, records);
-    count = r_u8(records + 1u);
-    if (count == 0u)
-        return 0;
-    do
-    {
-        rec_relocate_list_heads(records + offset, (sint32)records);
-        count = r_u8(records + 1u);
-        ++index;
-        offset += 32u;
-    } while (index <= (uint32)count);
-    return 1;
+    scene_load_sections(src, size);
+    return scene_sections.count != 0u;
 }
 
 sint32 cd_wait_stream(void)
@@ -867,7 +803,7 @@ sint32 cd_stop_read(void)
     return 0;
 }
 
-uint32 cd_read_file_alloc(uint32 path)
+static uint32 cd_read_file_alloc_span(uint32 path, size_t *span_size)
 {
     size_t size;
     size_t read_size;
@@ -875,6 +811,8 @@ uint32 cd_read_file_alloc(uint32 path)
     sint32 refreshed_directory;
 
     FUNCTION_MARKER(0x8002CB80u, "MAIN.EXE");
+    if (span_size)
+        *span_size = 0u;
     cd_search_file(path, 0x800B6818u, 0x800B6814u);
     refreshed_directory = cd_search_refreshed();
     w_u32(0x800B6814u, 0u);
@@ -893,7 +831,14 @@ uint32 cd_read_file_alloc(uint32 path)
     w_u16(0x800B6804u, r_u16(0x800B67FCu));
     w_u32(0x800B67ECu, destination);
     cd_stop_read();
+    if (span_size)
+        *span_size = read_size;
     return destination;
+}
+
+uint32 cd_read_file_alloc(uint32 path)
+{
+    return cd_read_file_alloc_span(path, NULL);
 }
 
 uint32 cd_read_file_buf(uint32 path, uint32 buffer)
@@ -958,7 +903,7 @@ sint32 cd_update_audio(sint32 trigger)
             w_u32(0x800B6B28u, (uint32)mode);
         return result;
     }
-    index = r_u32(0x80083484u) == 5u ? 2 : (sint16)r_u16(0x800E05BCu + 2u * r_u32(0x80083740u));
+    index = r_u32(0x80083484u) == 5u ? 2 : (sint16)sound_options.tracks[sound_options.track_slot];
     if (index < 2 || index >= (sint32)r_u32(0x800B6B88u))
         return index < 2;
     if (CdControl(3u, (uint8 *)psx_addr(0x800E1BD8u + 4u * (uint32)index, 4u), 0) == 0)
@@ -976,33 +921,43 @@ sint32 cd_update_audio(sint32 trigger)
 
 sint32 cd_load_model_archive(void)
 {
-    uint32 arena;
-    uint32 archive;
+    uint8 *src = NULL;
     const PLAYER_PROFILE *table;
-    uint32 selector;
+    size_t archive_size, read_size;
+    sint32 players = (sint32)r_u32(0x80083478u);
+    MESH_ARCHIVE decoded = {0};
+    MESH_BOAT_MODELS models[2][16] = {0};
+    MESH_MODEL event_models[4] = {0};
+    sint32 player;
     sint32 record;
 
     FUNCTION_MARKER(0x80042454u, "MAIN.EXE");
-    selector = r_u8(0x800E058Eu);
     table = profile_current();
-    arena = arena_activate_scope();
-    w_u32(0x800B68D4u, arena);
-    w_u32(0x800B68D8u, 0u);
-    cd_load_file_buf(0x80080F84u, arena + 0x80000u);
-    archive = r_u32(0x800B68D4u) + 0x80000u;
-    w_u32(0x800B68D0u, archive);
+    if (!xport_file_size("DATA/BOATS/MODELS.IFF", &archive_size) || archive_size == 0u)
+        goto fail;
+    src = malloc(archive_size);
+    if (!src || !xport_file_read("DATA/BOATS/MODELS.IFF", src, archive_size, &read_size) || read_size != archive_size || !mesh_decode_archive(src, archive_size, &decoded))
+        goto fail;
+    free(src);
+    src = NULL;
+    if (players < 1 || players > 2)
+        goto fail;
     for (record = 15; record >= 0; --record)
     {
-        uint32 descriptor = 0x800E0B40u + (uint32)record * 8u;
-        uint32 kind = r_u32(descriptor + 4u);
+        const RACE_PARTICIPANT *participant = &race_participants[record];
+        uint32 kind = participant->mode;
         sint32 model;
         sint32 player;
 
         if (kind < 2u)
-            model = (sint32)r_u32(0x80093584u + 4u * r_u8(descriptor));
+        {
+            if (participant->boat >= 9u)
+                goto fail;
+            model = vehicle_base_levels[participant->boat];
+        }
         else if (kind < 4u)
         {
-            uint8 row = r_u8(descriptor);
+            uint8 row = participant->boat;
 
             model = profile_get_table_byte(table, row, 0);
         }
@@ -1010,78 +965,43 @@ sint32 cd_load_model_archive(void)
             model = -1;
         if (model <= 0)
             continue;
-        for (player = 0; player < (sint32)r_u32(0x80083478u); ++player)
+        for (player = 0; player < players; ++player)
         {
-            sint32 base_index;
-            uint32 flags = r_u16(0x800E0588u);
-            uint32 slot = (uint32)record * 4u;
-            uint32 model_index = 2u * ((uint32)model - 1u) + 4u;
-            uint32 first;
-            uint32 second;
-
-            if ((flags & 4u) != 0u)
-                base_index = 74;
-            else if ((flags & 8u) != 0u)
-                base_index = 4 * (r_u8(descriptor) % 6u) + 50;
-            else
-                base_index = 4 * (r_u8(descriptor) % 9u) + 14;
-            selector = r_u8(descriptor + 1u);
-            archive = r_u32(0x800B68D0u);
-            if (selector != 0u)
-            {
-                first = effects_load_boat_model_chunk(archive, base_index + 2);
-                archive = r_u32(0x800B68D0u);
-                w_u32(0x80101788u + slot + (uint32)player * 64u, first);
-                second = effects_load_boat_model_chunk(archive, base_index + 3);
-            }
-            else
-            {
-                first = effects_load_boat_model_chunk(archive, base_index);
-                archive = r_u32(0x800B68D0u);
-                w_u32(0x80101788u + slot + (uint32)player * 64u, first);
-                second = effects_load_boat_model_chunk(archive, base_index | 1);
-            }
-            w_u32(0x800E8DA8u + slot + (uint32)player * 64u, second);
-            archive = r_u32(0x800B68D0u);
-            first = effects_load_boat_model_chunk(archive, (sint32)model_index);
-            w_u32(0x800DDD18u + slot + (uint32)player * 128u, first);
-            if (model == 2 || (uint32)(model - 4) < 2u)
-            {
-                archive = r_u32(0x800B68D0u);
-                first = effects_load_boat_model_chunk(archive, (sint32)model_index);
-                w_u32(0x800DDD58u + slot + (uint32)player * 128u, first);
-            }
-            archive = r_u32(0x800B68D0u);
-            first = effects_load_boat_model_chunk(archive, (sint32)(model_index + 1u));
-            w_u32(0x800F0488u + slot + (uint32)player * 64u, first);
+            if (!mesh_load_boat_models(&decoded, participant->boat, model, participant->variant, game_selection.flags, &models[player][record]))
+                goto fail;
         }
-    }
-    if (r_u32(0x800834A0u) == 3u)
-    {
-        archive = r_u32(0x800B68D0u);
-        w_u32(0x800D492Cu, effects_fn_80042258(archive, 0));
     }
     if (r_u32(0x80083484u) == 8u)
     {
-        uint32 first;
-        uint32 second;
-        uint32 difference;
-
-        archive = r_u32(0x800B68D0u);
-        first = effects_load_boat_model_chunk(archive, 0);
-        archive = r_u32(0x800B68D0u);
-        w_u32(0x800B6C10u, first);
-        second = effects_load_boat_model_chunk(archive, 1);
-        first = r_u32(0x800B6C10u);
-        archive = r_u32(0x800B68D0u);
-        difference = second - first;
-        w_u32(0x800B6C0Cu, (difference >> 2) | ((difference & 0x80000000u) != 0u ? 0xC0000000u : 0u));
-        effects_load_boat_model_chunk(archive, 2);
-        archive = r_u32(0x800B68D0u);
-        effects_load_boat_model_chunk(archive, 3);
+        if (decoded.count < 4u)
+            goto fail;
+        for (record = 0; record < 4; ++record)
+            if (!mesh_copy_model(&decoded.models[record], &event_models[record]))
+                goto fail;
     }
-    record = (sint32)arena_release_aligned((sint32)r_u32(0x800B68D8u));
-    return record;
+    mesh_clear_archive(&decoded);
+    for (record = 0; record < 4; ++record)
+    {
+        mesh_clear_model(&mesh_event_models[record]);
+        mesh_event_models[record] = event_models[record];
+    }
+    for (player = 0; player < 2; ++player)
+        for (record = 0; record < 16; ++record)
+        {
+            mesh_clear_boat_models(&mesh_boat_models[player][record]);
+            mesh_boat_models[player][record] = models[player][record];
+        }
+
+    return 1;
+fail:
+    free(src);
+    mesh_clear_archive(&decoded);
+    for (record = 0; record < 4; ++record)
+        mesh_clear_model(&event_models[record]);
+    for (player = 0; player < 2; ++player)
+        for (record = 0; record < 16; ++record)
+            mesh_clear_boat_models(&models[player][record]);
+    return 0;
 }
 
 uint32 cd_load_selected_asset(uint32 path)

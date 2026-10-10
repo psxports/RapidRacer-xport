@@ -4,6 +4,8 @@ Resolve `[XPORT_ROOT]` from `xport-project.json` and read `[XPORT_ROOT]/AGENTS.m
 
 ## Project facts
 
+- Prefer common abbreviations in function, type and variable names: `src`, `dst`, `init`, `sync`, `pos`, `dir`, `idx`, `desc`, `proj`, `subdiv`, `prims`; use `ot` for ordering tables and `ot_entry` for individual entries; use `v0`, `v1`, `v2`, `v3` for vertex arguments. Keep subsystem-action naming and avoid obscure abbreviations
+- Keep private module tables in the owning `.c`; avoid separate `*_data.h` files for a single consumer
 - Project lockstep support and converge acceptance are no longer required for native state migration. Use ordinary typed C structures and globals with binary/device formats isolated at boundaries; follow `status/audits/readability-plan.json`
 - RR lockstep configuration is disabled and project lockstep build/run branches are removed. Stage 1 implementation, initial-data dependencies and the native ownership map are recorded in `status/audits/native-stage1/report.json` and `status/audits/native-stage1/ownership.json`; subsequent stages require user verification of the previous Release
 - Input, menu/HUD text, font batches and lap replay now use native state. Stage 2 ownership, temporary stage 3–5 boundaries and checks are recorded in `status/audits/native-stage2/report.json`

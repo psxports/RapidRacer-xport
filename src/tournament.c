@@ -1,3 +1,5 @@
+#include "render.h"
+#include "game.h"
 #include "input.h"
 #include "tournament.h"
 #include "display.h"
@@ -6,15 +8,53 @@
 #include "name.h"
 #include "profile.h"
 #include "ranking.h"
+#include "results.h"
 #include "text.h"
 #include "xport_trace.h"
 
+// Course target parts from MAIN.EXE 800996A0
+static const uint16 tournament_course_times[6][2] = {
+    {1u, 30u}, {1u, 40u}, {1u, 40u}, {2u, 20u}, {1u, 40u}, {2u, 20u},
+};
+
+// Round adjustments from MAIN.EXE 800996D0
+static const uint16 tournament_time_adjustments[21] = {0u, 5u, 8u, 11u, 13u, 15u, 17u, 18u, 19u, 20u, 21u, 22u, 23u, 24u, 25u, 26u, 27u, 28u, 29u, 30u, 31u};
+
+// Match chain and scores from MAIN.EXE 800E1A6C
+// Runtime leader and match count from 800B6A96 and 800B6B46
+TOURNAMENT_MATCH_STATE tournament_matches;
+
+// Grid from MAIN.EXE 800E1916, extended for the byte round counter
+TOURNAMENT_GRID_STATE tournament_grid;
+
+// Tournament target parts and parameter from MAIN.EXE 800E1A44
+TOURNAMENT_TIME tournament_times[5];
+
+// Championship state from MAIN.EXE 800E1A8A
+TOURNAMENT_CHAMP_STATE tournament_champ;
+
+// Extra native rounds have no representation in the legacy save file
+void tournament_clear_extra_rounds(void)
+{
+    sint32 round;
+    sint32 player;
+
+    for (round = 20; round < TOURNAMENT_GRID_ROUNDS; ++round)
+    {
+        for (player = 0; player < TOURNAMENT_GRID_PLAYERS; ++player)
+        {
+            tournament_grid.status[round][player] = TOURNAMENT_GRID_EMPTY;
+            tournament_grid.seconds[round][player] = 0u;
+        }
+    }
+}
+
 sint32 tournament_draw_grid(void)
 {
-    sint16 rows = (sint8)r_u8(0x800E058Eu);
+    sint16 rows = (sint8)(uint8)game_selection.players;
     sint16 top = (sint16)(13 * (5 - rows) + 62);
-    sint16 selected_row = (sint16)(top + 27 * r_u8(0x800E1917u));
-    sint16 selected_column = r_u8(0x800E1916u) >= 3u ? 2 : r_u8(0x800E1916u);
+    sint16 selected_row = (sint16)(top + 27 * tournament_grid.player);
+    sint16 selected_column = tournament_grid.round >= 3u ? 2 : tournament_grid.round;
     sint32 index;
 
     FUNCTION_MARKER(0x80064814u, "MAIN.EXE");
@@ -46,21 +86,21 @@ sint32 tournament_reset_grid(void)
     sint32 column;
 
     FUNCTION_MARKER(0x80064B24u, "MAIN.EXE");
-    w_u8(0x800E058Du, 0u);
-    w_u8(0x800E1916u, 0u);
-    w_u8(0x800E1917u, 0u);
-    for (row = 0; row < 20; ++row)
+    game_selection.menu_variant = 0u;
+    tournament_grid.round = 0u;
+    tournament_grid.player = 0u;
+    for (row = 0; row < TOURNAMENT_GRID_ROUNDS; ++row)
     {
-        for (column = 0; column < 5; ++column)
+        for (column = 0; column < TOURNAMENT_GRID_PLAYERS; ++column)
         {
-            w_u8(0x800E1918u + 5u * (uint32)row + (uint32)column, 0u);
-            w_u16(0x800E197Cu + 10u * (uint32)row + 2u * (uint32)column, 0u);
+            tournament_grid.status[row][column] = 0u;
+            tournament_grid.seconds[row][column] = 0u;
         }
     }
     return 0;
 }
 
-sint32 tournament_calc_target_time(uint32 value, sint16 index)
+sint32 tournament_target_time(uint16 course, sint16 index)
 {
     sint16 table_index = index;
     sint16 excess = 0;
@@ -71,12 +111,12 @@ sint32 tournament_calc_target_time(uint32 value, sint16 index)
         excess = (sint16)(index - 20);
         table_index = 20;
     }
-    return (sint16)(60 * (sint16)r_u16(value) + r_u16(value + 2u) - ((sint16)r_u16(0x800996D0u + 2u * (uint32)table_index) - excess));
+    return (sint16)(60 * (sint16)tournament_course_times[course][0] + tournament_course_times[course][1] - ((sint16)tournament_time_adjustments[table_index] - excess));
 }
 
 sint32 tournament_refresh_grid(void)
 {
-    uint32 records = r_u32(0x800B6A74u);
+    UI_RECORD *records = sprite_records;
     TEXT_RECORD *menu = text_menu;
     sint16 top;
     sint16 column_offset;
@@ -89,61 +129,60 @@ sint32 tournament_refresh_grid(void)
     menu_pulse.brightness = 128u;
     menu_pulse.falling = 0u;
     top = (sint16)tournament_draw_grid();
-    for (row = 0; row < r_u8(0x800E058Eu); ++row)
+    for (row = 0; row < (uint8)game_selection.players; ++row)
         menu[row + 2].y = (uint16)(top + 27 * row + 5);
     for (row = 0; row < 3; ++row)
         menu[row + 7].y = (uint16)(top - 15);
     for (row = 0; row < 5; ++row)
         menu[row + 2].visible = 0u;
-    for (row = 0; row < r_u8(0x800E058Eu); ++row)
+    for (row = 0; row < (uint8)game_selection.players; ++row)
     {
         name_copy_player_name_bytes((uint16)row, menu[row + 2].text);
         menu[row + 2].visible = 1u;
     }
-    column_offset = r_u8(0x800E1916u) < 3u ? 0 : (sint16)r_u8(0x800E1916u) - 2;
+    column_offset = tournament_grid.round < 3u ? 0 : (sint16)tournament_grid.round - 2;
     for (row = 0; row < 15; ++row)
     {
-        w_u8(records + 256u + 84u * (uint32)row, 0u);
-        w_u8(records + 1516u + 84u * (uint32)row, 0u);
+        records[row + 3].type = 0u;
+        records[row + 18].type = 0u;
         menu[row + 10].visible = 0u;
     }
-    for (row = 0; row < r_u8(0x800E058Eu); ++row)
+    for (row = 0; row < (uint8)game_selection.players; ++row)
     {
         sint16 y = (sint16)(top + 27 * row + 3);
         for (column = 0; column < 3; ++column, ++record_index)
         {
             sint32 source_column = column_offset + column;
-            if (r_u8(0x800E1918u + 5u * (uint32)source_column + (uint32)row) == 1u)
+            if (tournament_grid.status[source_column][row] == 1u)
             {
-                uint32 record = records + 252u + 84u * (uint32)record_index;
+                UI_RECORD *record = (records + record_index + 3);
                 TEXT_RECORD *text = &menu[record_index + 10];
-                uint16 value = r_u16(0x800E197Cu + 10u * (uint32)source_column + 2u * (uint32)row);
+                uint16 value = tournament_grid.seconds[source_column][row];
                 char *output = text[0].text;
                 sint32 remainder = value % 60u;
-                w_u8(record + 4u, 1u);
-                w_u16(record + 8u, (uint16)(90 * column + 191));
-                w_u16(record + 10u, (uint16)y);
+                record->type = 1u;
+                record->x = (uint16)(90 * column + 191);
+                record->y = (uint16)y;
                 text[0].visible = 1u;
-                text[0].x = (uint16)(r_u16(record + 8u) + 18u);
-                text[0].y = (uint16)(r_u16(record + 10u) + 11u);
+                text[0].x = (uint16)(record->x + 18u);
+                text[0].y = (uint16)(record->y + 11u);
                 output[0] = (uint8)(value / 60u + 48u);
                 output[2u] = (uint8)(remainder / 10 + 48);
                 output[3u] = (uint8)(remainder % 10 + 48);
             }
-            else if (source_column < r_u8(0x800E1916u) || (source_column == r_u8(0x800E1916u) && row < r_u8(0x800E1917u)))
+            else if (source_column < tournament_grid.round || (source_column == tournament_grid.round && row < tournament_grid.player))
             {
-                uint32 record = records + 1512u + 84u * (uint32)record_index;
-                w_u8(record + 4u, 1u);
-                w_u16(record + 8u, (uint16)(90 * column + 200));
-                w_u16(record + 10u, (uint16)y);
+                UI_RECORD *record = (records + record_index + 18);
+                record->type = 1u;
+                record->x = (uint16)(90 * column + 200);
+                record->y = (uint16)y;
             }
         }
     }
     {
-        uint32 values = 0x800996A0u + 8u * r_u16(0x800B4244u);
         for (column = 0; column < 3; ++column)
         {
-            sint16 value = (sint16)tournament_calc_target_time(values, (sint16)(column_offset + column));
+            sint16 value = (sint16)tournament_target_time(menu_course_select.course, (sint16)(column_offset + column));
             sint32 remainder = value % 60;
             char *output = menu[column + 7].text;
             output[0] = (uint8)(value / 60 + 48);
@@ -160,7 +199,7 @@ sint32 tournament_update_grid_input(CONTROLLER_STATE *input)
     uint8 value;
 
     FUNCTION_MARKER(0x80065198u, "MAIN.EXE");
-    if ((input->current & 0x40u) != 0u && r_u8(0x800B4138u) != 0u)
+    if ((input->current & 0x40u) != 0u && menu_state.input_enabled != 0u)
         tournament_enter_race();
     tournament_draw_grid();
     if (menu_pulse.falling != 0u)
@@ -181,53 +220,53 @@ sint32 tournament_update_grid_input(CONTROLLER_STATE *input)
 sint32 tournament_sync_grid(void)
 {
     FUNCTION_MARKER(0x80065274u, "MAIN.EXE");
-    if ((sint16)r_u16(0x800B413Eu) == 21)
-        return menu_increment_group_offset((sint16)r_u16(0x800B4244u), (sint16)r_u16(0x800B4246u));
+    if ((sint16)menu_state.phase == 21)
+        return menu_increment_group_offset((sint16)menu_course_select.course, (sint16)menu_course_select.level);
     return 21;
 }
 
 sint32 tournament_enter_race(void)
 {
     PLAYER_PROFILE *profile_data;
-    sint16 mode = (sint16)r_u16(0x800E0584u);
+    sint16 mode = (sint16)game_selection.rules;
     TEXT_RECORD *record;
 
     FUNCTION_MARKER(0x800652B4u, "MAIN.EXE");
-    menu_save_desc_payloads((sint16)r_u16(0x800B413Cu));
+    menu_save_desc_payloads((sint16)menu_state.screen);
     profile_data = profile_current();
     profile_data->level_result = 0u;
-    profile_data->course = (uint8)((uint8)r_u16(0x800B4244u));
+    profile_data->course = (uint8)((uint8)menu_course_select.course);
     if (mode == 0)
     {
-        w_u8(0x800E058Du, 0u);
-        w_u8(0x800E058Bu, 30u);
-        name_copy_player_name_bytes(r_u8(0x800E1A8Bu), text_bind(0x80083994u));
-        profile_data->course = (uint8)(r_u8(0x800E1A8Au));
-        profile_data->level = (uint8)((uint8)r_u16(0x800B4246u));
+        game_selection.menu_variant = 0u;
+        game_selection.event = 30u;
+        name_copy_player_name_bytes(tournament_champ.player, hud_text.names[0]);
+        profile_data->course = (uint8)(tournament_champ.course);
+        profile_data->level = (uint8)((uint8)menu_course_select.level);
     }
     else if (mode == 1)
     {
         sint16 value;
-        w_u8(0x800E058Bu, 30u);
-        name_copy_player_name_bytes(r_u8(0x800E1917u), text_bind(0x80083994u));
-        value = (sint16)tournament_calc_target_time(0x800996A0u + 8u * r_u16(0x800B4244u), r_u8(0x800E1916u));
-        w_u16(0x800E1A44u, (uint16)(value / 60));
-        w_u16(0x800E1A46u, (uint16)(value % 60));
+        game_selection.event = 30u;
+        name_copy_player_name_bytes(tournament_grid.player, hud_text.names[0]);
+        value = (sint16)tournament_target_time(menu_course_select.course, tournament_grid.round);
+        tournament_times[0].parts[0] = (uint16)(value / 60);
+        tournament_times[0].parts[1] = (uint16)(value % 60);
     }
     else if (mode == 2)
     {
-        sint32 row = r_u8(0x800E1A6Du);
-        w_u8(0x800E058Bu, 31u);
-        name_copy_player_name_bytes(r_u8(0x800E1A6Eu + (uint32)row), text_bind(0x80083994u));
-        name_copy_player_name_bytes(r_u8(0x800E1A73u + (uint32)row), text_bind(0x800839A4u));
+        sint32 row = tournament_matches.match;
+        game_selection.event = 31u;
+        name_copy_player_name_bytes(tournament_matches.winners[row], hud_text.names[0]);
+        name_copy_player_name_bytes(tournament_matches.opponents[row], hud_text.names[1]);
     }
-    w_u8(0x800E058Cu, 0u);
+    game_selection.event_arg = 0u;
     w_u16(0x800B6AA0u, 5u);
-    w_u16(0x800B6AFAu, 1u);
+    menu_state.sound = 1u;
     text_set_hud_visible(0, 1);
-    w_u16(0x800B413Eu, 21u);
-    menu_increment_group_offset((sint16)r_u16(0x800B4244u), (sint16)r_u16(0x800B4246u));
-    w_u16(0x800B4084u, 1u);
+    menu_state.phase = 21u;
+    menu_increment_group_offset((sint16)menu_course_select.course, (sint16)menu_course_select.level);
+    menu_textures.rebuild = 1u;
     record = text_hud;
     record[0].x = 332u;
     record[0].y = 145u;
@@ -247,20 +286,20 @@ sint32 tournament_grid_complete(void)
     sint32 row;
 
     FUNCTION_MARKER(0x800654F4u, "MAIN.EXE");
-    for (row = 0; row < r_u8(0x800E058Eu); ++row)
+    for (row = 0; row < (uint8)game_selection.players; ++row)
     {
         sint32 column = 0;
-        if (r_u8(0x800E1918u + (uint32)row) == 1u)
+        if (tournament_grid.status[0][row] == 1u)
         {
-            while (column < 20 && r_u8(0x800E1918u + 5u * (uint32)column + (uint32)row) == 1u)
+            while (column < TOURNAMENT_GRID_ROUNDS && tournament_grid.status[column][row] == 1u)
             {
                 ++counts[row];
-                totals[row] = (sint16)(totals[row] + r_u16(0x800E197Cu + 10u * (uint32)column + 2u * (uint32)row));
+                totals[row] = (sint16)(totals[row] + tournament_grid.seconds[column][row]);
                 ++column;
             }
         }
     }
-    for (row = 0; row < r_u8(0x800E058Eu); ++row)
+    for (row = 0; row < (uint8)game_selection.players; ++row)
     {
         if (best_count < counts[row])
         {
@@ -288,7 +327,7 @@ sint32 tournament_grid_complete(void)
             }
         }
     }
-    w_u8(0x800E058Bu, 49u);
+    game_selection.event = 49u;
     if (lower_total != 0)
     {
         w_u8(0x800B69E8u, (uint8)selected);
@@ -299,13 +338,13 @@ sint32 tournament_grid_complete(void)
         if (tied != 0)
         {
             if (tied_total == 0)
-                w_u8(0x800E058Bu, 1u);
+                game_selection.event = 1u;
         }
         else
             w_u8(0x800B69E8u, (uint8)selected);
         w_u8(0x800B69BEu, 0u);
     }
-    w_u8(0x800E058Cu, 2u);
+    game_selection.event_arg = 2u;
     return 2;
 }
 
@@ -317,38 +356,34 @@ sint32 tournament_refresh_player_name(void)
 
 sint32 tournament_record_result(uint32 unused1, uint32 unused2, uint32 unused3, uint32 unused4)
 {
-    sint16 state = (sint16)r_u16(0x800E0580u);
-    sint16 column = r_u8(0x800E1916u);
+    sint16 state = (sint16)game_selection.selection;
+    sint16 column = tournament_grid.round;
     uint8 completed = 0u;
 
     FUNCTION_MARKER(0x8006574Cu, "MAIN.EXE");
-    w_u8(0x800E058Bu, 30u);
+    game_selection.event = 30u;
     if (state == -4 || state == -2)
-        w_u8(0x800E1918u + 5u * (uint32)column + r_u8(0x800E1917u), 1u);
+        tournament_grid.status[column][tournament_grid.player] = TOURNAMENT_GRID_PASSED;
     else if (state == -3 || state == -1)
-        w_u8(0x800E1918u + 5u * (uint32)column + r_u8(0x800E1917u), 2u);
-    profile_fn_800579d4(r_u8(0x800E1917u), unused2, unused3, unused4);
-    w_u16(0x800E197Cu + 10u * (uint32)column + 2u * r_u8(0x800E1917u), (uint16)(60u * r_u16(0x800E18D4u) + r_u16(0x800E18D6u)));
+        tournament_grid.status[column][tournament_grid.player] = TOURNAMENT_GRID_FAILED;
+    profile_fn_800579d4(tournament_grid.player, unused2, unused3, unused4);
+    tournament_grid.seconds[column][tournament_grid.player] = (uint16)(60u * race_lap_times[0][0] + race_lap_times[0][1]);
     for (;;)
     {
         sint32 first_open = 0;
-        w_u8(0x800E1917u, (uint8)(r_u8(0x800E1917u) + 1u));
-        if (r_u8(0x800E1917u) == r_u8(0x800E058Eu))
+        tournament_grid.player = (uint8)(tournament_grid.player + 1u);
+        if (tournament_grid.player == (uint8)game_selection.players)
         {
-            w_u8(0x800E1917u, 0u);
-            w_u8(0x800E1916u, (uint8)(r_u8(0x800E1916u) + 1u));
+            tournament_grid.player = 0u;
+            tournament_grid.round = (uint8)(tournament_grid.round + 1u);
         }
-        if (r_u8(0x800E1918u + r_u8(0x800E1917u)) == 1u)
-        {
-            do
-                ++first_open;
-            while (r_u8(0x800E1918u + 5u * (uint32)first_open + r_u8(0x800E1917u)) == 1u);
-        }
-        if (r_u8(0x800E1918u + 5u * (uint32)first_open + r_u8(0x800E1917u)) == 2u)
+        while (first_open < TOURNAMENT_GRID_ROUNDS && tournament_grid.status[first_open][tournament_grid.player] == TOURNAMENT_GRID_PASSED)
+            ++first_open;
+        if (first_open == TOURNAMENT_GRID_ROUNDS || tournament_grid.status[first_open][tournament_grid.player] == TOURNAMENT_GRID_FAILED)
             ++completed;
         else
             break;
-        if (completed >= r_u8(0x800E058Eu))
+        if (completed >= (uint8)game_selection.players)
             return tournament_grid_complete();
     }
     return completed;
@@ -356,19 +391,19 @@ sint32 tournament_record_result(uint32 unused1, uint32 unused2, uint32 unused3, 
 
 sint32 tournament_init_match_order(void)
 {
-    sint16 value = (sint16)r_u16(0x800B6A96u) + 1;
+    sint16 value = (sint16)tournament_matches.leader + 1;
     sint32 index;
 
     FUNCTION_MARKER(0x80065960u, "MAIN.EXE");
-    w_u8(0x800E1A6Du, 0u);
-    w_u8(0x800E1A6Eu, (uint8)r_u16(0x800B6A96u));
-    if (value == r_u8(0x800E058Eu))
+    tournament_matches.match = 0u;
+    tournament_matches.winners[0] = (uint8)tournament_matches.leader;
+    if (value == (uint8)game_selection.players)
         value = 0;
     for (index = 0; index < 4; ++index)
     {
-        w_u8(0x800E1A73u + (uint32)index, (uint8)value);
+        tournament_matches.opponents[index] = (uint8)value;
         ++value;
-        if (value == r_u8(0x800E058Eu))
+        if (value == (uint8)game_selection.players)
             value = 0;
     }
     return 0;
@@ -379,21 +414,21 @@ sint32 tournament_init_round(void)
     sint32 index;
 
     FUNCTION_MARKER(0x800659F0u, "MAIN.EXE");
-    w_u8(0x800E058Du, 1u);
-    w_u8(0x800E1A6Cu, 0u);
+    game_selection.menu_variant = 1u;
+    tournament_matches.round = 0u;
     for (index = 0; index < 5; ++index)
-        w_u8(0x800E1A78u + (uint32)index, 0u);
-    w_u16(0x800B6A96u, 0u);
-    w_u16(0x800B6B46u, (uint16)(r_u8(0x800E058Eu) - 1u));
+        tournament_matches.points[index] = 0u;
+    tournament_matches.leader = 0u;
+    tournament_matches.match_count = (uint16)((uint8)game_selection.players - 1u);
     return tournament_init_match_order();
 }
 
 sint32 tournament_draw_match_highlight(void)
 {
-    sint16 row = r_u8(0x800E1A6Du);
+    sint16 row = tournament_matches.match;
 
     FUNCTION_MARKER(0x80065A6Cu, "MAIN.EXE");
-    if (row < (sint16)r_u16(0x800B6B46u))
+    if (row < (sint16)tournament_matches.match_count)
     {
         sint16 top = (sint16)(30 * row + 74);
         display_set_line_color((sint8)menu_pulse.brightness, 64, 64);
@@ -405,13 +440,13 @@ sint32 tournament_draw_match_highlight(void)
 sint32 tournament_refresh_matches(void)
 {
     TEXT_RECORD *menu = text_menu;
-    uint32 records = r_u32(0x800B6A74u);
+    UI_RECORD *records = sprite_records;
     sint32 index;
 
     FUNCTION_MARKER(0x80065AD8u, "MAIN.EXE");
     for (index = 0; index < 4; ++index)
     {
-        sint32 visible = index < (sint16)r_u16(0x800B6B46u);
+        sint32 visible = index < (sint16)tournament_matches.match_count;
         sint16 y = (sint16)(30 * index + 80);
         char *output = menu[index + 8].text;
         sint32 character;
@@ -421,28 +456,28 @@ sint32 tournament_refresh_matches(void)
         menu[index + 4].y = (uint16)y;
         menu[index + 8].y = (uint16)y;
         menu[index + 12].y = (uint16)y;
-        if (r_u8(0x800E1A6Du) < index)
+        if (tournament_matches.match < index)
         {
             for (character = 0; character < 5; ++character)
                 output[(uint32)character] = r_u8(0x800B4274u + (uint32)character);
         }
         else
-            name_copy_player_name_bytes(r_u8(0x800E1A6Eu + (uint32)index), output);
-        name_copy_player_name_bytes(r_u8(0x800E1A73u + (uint32)index), menu[index + 12].text);
-        w_u8(records + 172u + 84u * (uint32)index, index < r_u8(0x800E1A6Du));
-        w_u8(records + 508u + 84u * (uint32)index, index < r_u8(0x800E1A6Du));
-        w_u16(records + 178u + 84u * (uint32)index, (uint16)(y - 8));
-        w_u16(records + 514u + 84u * (uint32)index, (uint16)(y - 8));
-        if (index < r_u8(0x800E1A6Du))
+            name_copy_player_name_bytes(tournament_matches.winners[index], output);
+        name_copy_player_name_bytes(tournament_matches.opponents[index], menu[index + 12].text);
+        records[index + 2].type = index < tournament_matches.match;
+        records[index + 6].type = index < tournament_matches.match;
+        records[index + 2].y = (uint16)(y - 8);
+        records[index + 6].y = (uint16)(y - 8);
+        if (index < tournament_matches.match)
         {
-            sint32 same = r_u8(0x800E1A6Fu + (uint32)index) == r_u8(0x800E1A6Eu + (uint32)index);
-            w_u16(records + 176u + 84u * (uint32)index, same ? 105u : 350u);
-            w_u16(records + 512u + 84u * (uint32)index, same ? 350u : 105u);
+            sint32 same = tournament_matches.winners[index + 1] == tournament_matches.winners[index];
+            records[index + 2].x = same ? 105u : 350u;
+            records[index + 6].x = same ? 350u : 105u;
         }
     }
     for (index = 0; index < 10; ++index)
-        menu[index + 16].visible = index == r_u8(0x800E1A6Cu);
-    menu[3].visible = r_u8(0x800E1A6Du) < (sint16)r_u16(0x800B6B46u);
+        menu[index + 16].visible = index == tournament_matches.round;
+    menu[3].visible = tournament_matches.match < (sint16)tournament_matches.match_count;
     menu[26].visible = menu[3].visible == 0u;
     return menu[26].visible;
 }
@@ -452,10 +487,10 @@ sint32 tournament_update_match_input(CONTROLLER_STATE *input)
     uint8 value;
 
     FUNCTION_MARKER(0x80065D4Cu, "MAIN.EXE");
-    if ((input->current & 0x40u) != 0u && r_u8(0x800B4138u) != 0u)
+    if ((input->current & 0x40u) != 0u && menu_state.input_enabled != 0u)
     {
-        if (r_u8(0x800E1A6Du) >= r_u8(0x800B6B46u))
-            w_u16(0x800B413Eu, 32u);
+        if (tournament_matches.match >= (uint8)tournament_matches.match_count)
+            menu_state.phase = 32u;
         else
             tournament_enter_race();
     }
@@ -478,38 +513,38 @@ sint32 tournament_update_match_input(CONTROLLER_STATE *input)
 sint32 tournament_sync_match(void)
 {
     FUNCTION_MARKER(0x80065E54u, "MAIN.EXE");
-    if ((sint16)r_u16(0x800B413Eu) == 21)
-        return menu_increment_group_offset((sint16)r_u16(0x800B4244u), (sint16)r_u16(0x800B4246u));
+    if ((sint16)menu_state.phase == 21)
+        return menu_increment_group_offset((sint16)menu_course_select.course, (sint16)menu_course_select.level);
     return 21;
 }
 
 sint32 tournament_record_match_result(void)
 {
-    sint16 state = (sint16)r_u16(0x800E0580u);
-    sint32 row = r_u8(0x800E1A6Du);
+    sint16 state = (sint16)game_selection.selection;
+    sint32 row = tournament_matches.match;
 
     FUNCTION_MARKER(0x80065E94u, "MAIN.EXE");
-    w_u8(0x800E058Bu, 31u);
+    game_selection.event = 31u;
     if (state == -3)
         return state < -2;
     if (state == -1)
     {
-        if (r_u16(0x800E1BB2u) != 0u)
+        if (result_state.quit_player != 0u)
         {
-            w_u8(0x800E059Du, 0u);
-            w_u8(0x800E059Eu, 1u);
+            race_selection.ranks[0] = 0u;
+            race_selection.ranks[1] = 1u;
         }
         else
-            w_u8(0x800E059Du, 1u);
+            race_selection.ranks[0] = 1u;
     }
     {
-        uint8 value = r_u8(0x800E059Du) >= r_u8(0x800E059Eu) ? r_u8(0x800E1A73u + (uint32)row) : r_u8(0x800E1A6Eu + (uint32)row);
-        w_u8(0x800E1A78u + value, (uint8)(r_u8(0x800E1A78u + value) + 1u));
-        if (row + 1 >= (sint16)r_u16(0x800B6B46u))
-            w_u16(0x800B6A96u, value);
-        w_u8(0x800E1A6Fu + (uint32)row, value);
+        uint8 value = race_selection.ranks[0] >= race_selection.ranks[1] ? tournament_matches.opponents[row] : tournament_matches.winners[row];
+        tournament_matches.points[value] = (uint8)(tournament_matches.points[value] + 1u);
+        if (row + 1 >= (sint16)tournament_matches.match_count)
+            tournament_matches.leader = value;
+        tournament_matches.winners[row + 1] = value;
     }
-    w_u8(0x800E1A6Du, (uint8)(row + 1));
+    tournament_matches.match = (uint8)(row + 1);
     return row + 1;
 }
 
@@ -525,13 +560,13 @@ sint32 tournament_refresh_standings(void)
     for (first = 0; first < 5; ++first)
     {
         order[first] = (sint16)first;
-        counts[first] = r_u8(0x800E1A78u + (uint32)first);
+        counts[first] = tournament_matches.points[first];
         menu[first + 2].visible = 0u;
         menu[first + 9].visible = 0u;
     }
-    for (first = 0; first < r_u8(0x800E058Eu); ++first)
+    for (first = 0; first < (uint8)game_selection.players; ++first)
     {
-        for (second = 0; second < r_u8(0x800E058Eu); ++second)
+        for (second = 0; second < (uint8)game_selection.players; ++second)
         {
             if (first != second && counts[second] < counts[first])
             {
@@ -544,7 +579,7 @@ sint32 tournament_refresh_standings(void)
             }
         }
     }
-    for (first = 0; first < r_u8(0x800E058Eu); ++first)
+    for (first = 0; first < (uint8)game_selection.players; ++first)
     {
         char *output;
         menu[first + 2].visible = 1u;
@@ -556,10 +591,10 @@ sint32 tournament_refresh_standings(void)
     }
     {
         char *output = menu[7].text;
-        uint8 value = (uint8)(r_u8(0x800E1A6Cu) + 1u);
+        uint8 value = (uint8)(tournament_matches.round + 1u);
         output[0] = (uint8)(value / 10u + 48u);
         output[1u] = (uint8)(value % 10u + 48u);
-        if (r_u8(0x800E1A6Cu) == 0u)
+        if (tournament_matches.round == 0u)
             output[8u] = 32u;
     }
     return 32;
@@ -570,15 +605,15 @@ sint32 tournament_advance_round(CONTROLLER_STATE *input)
     sint32 result = input->current & 0x40u;
 
     FUNCTION_MARKER(0x800662A4u, "MAIN.EXE");
-    if (result != 0 && r_u8(0x800B4138u) != 0u)
+    if (result != 0 && menu_state.input_enabled != 0u)
     {
-        w_u8(0x800E1A6Cu, (uint8)(r_u8(0x800E1A6Cu) + 1u));
+        tournament_matches.round = (uint8)(tournament_matches.round + 1u);
         result = 33;
-        if (r_u16(0x800E0590u) < r_u8(0x800E1A6Cu))
-            w_u16(0x800B413Eu, 33u);
+        if ((sint16)game_options.round_limit < tournament_matches.round)
+            menu_state.phase = 33u;
         else
         {
-            w_u16(0x800B413Eu, 31u);
+            menu_state.phase = 31u;
             return tournament_init_round();
         }
     }
@@ -597,11 +632,11 @@ sint32 tournament_refresh_leader(void)
     for (first = 0; first < 5; ++first)
     {
         order[first] = (sint16)first;
-        counts[first] = r_u8(0x800E1A78u + (uint32)first);
+        counts[first] = tournament_matches.points[first];
     }
-    for (first = 0; first < r_u8(0x800E058Eu); ++first)
+    for (first = 0; first < (uint8)game_selection.players; ++first)
     {
-        for (second = 0; second < r_u8(0x800E058Eu); ++second)
+        for (second = 0; second < (uint8)game_selection.players; ++second)
         {
             if (first != second && counts[second] < counts[first])
             {
@@ -620,30 +655,30 @@ sint32 tournament_refresh_leader(void)
 
 sint32 tournament_reset_result_rows(void)
 {
-    uint32 records = r_u32(0x800B6A74u);
+    UI_RECORD *records = sprite_records;
     sint32 index;
 
     FUNCTION_MARKER(0x8006649Cu, "MAIN.EXE");
     for (index = 0; index < 3; ++index)
-        w_u8(records + 172u + 84u * (uint32)index, 0u);
+        records[index + 2].type = 0u;
     return tournament_init_profile();
 }
 
 sint32 tournament_init_profile(void)
 {
     PLAYER_PROFILE *profile_data = profile_current();
-    sint16 row = r_u8(0x800E0592u);
+    sint16 row = (uint8)game_options.level;
     sint32 index;
 
     FUNCTION_MARKER(0x80066504u, "MAIN.EXE");
     profile_data->level = (uint8)((uint8)row);
-    w_u16(0x800B4246u, (uint16)row);
-    w_u8(0x800E1A8Au, 0u);
-    w_u8(0x800E1A8Bu, 0u);
+    menu_course_select.level = (uint16)row;
+    tournament_champ.course = 0u;
+    tournament_champ.player = 0u;
     for (index = 0; index < 16; ++index)
     {
-        w_u8(0x800E1A8Cu + (uint32)index, 0u);
-        w_u8(0x800E1A9Cu + (uint32)index, 0u);
+        tournament_champ.races[index] = 0u;
+        tournament_champ.points[index] = 0u;
     }
     for (index = 0; index < 6; ++index)
         profile_data->progress.courses[(uint32)row][(uint32)index].state = (uint8)(5u);
@@ -653,7 +688,7 @@ sint32 tournament_init_profile(void)
 
 sint32 tournament_refresh_table(void)
 {
-    uint32 records = r_u32(0x800B6A74u);
+    UI_RECORD *records = sprite_records;
     TEXT_RECORD *menu = text_menu;
     sint32 rows = 0;
     sint32 index;
@@ -662,21 +697,21 @@ sint32 tournament_refresh_table(void)
     FUNCTION_MARKER(0x80066600u, "MAIN.EXE");
 
     for (index = 0; index < 3; ++index)
-        w_u8(records + 88u + 84u * (uint32)index, index == (sint16)r_u16(0x800B4246u));
-    if (r_u8(0x800E1A8Au) < 6u)
+        records[index + 1].type = index == (sint16)menu_course_select.level;
+    if (tournament_champ.course < 6u)
     {
-        w_u8(records + 424u, 1u);
-        w_u8(records + 508u, 1u);
-        w_u8(records + 592u, 0u);
+        records[5].type = 1u;
+        records[6].type = 1u;
+        records[7].type = 0u;
         menu[54].visible = 1u;
         menu[55].visible = 1u;
         menu[56].visible = 0u;
     }
     else
     {
-        w_u8(records + 424u, 0u);
-        w_u8(records + 508u, 0u);
-        w_u8(records + 592u, 1u);
+        records[5].type = 0u;
+        records[6].type = 0u;
+        records[7].type = 1u;
         menu[54].visible = 0u;
         menu[55].visible = 0u;
         menu[56].visible = 1u;
@@ -702,7 +737,7 @@ sint32 tournament_refresh_table(void)
     else if ((sint16)r_u16(0x800B69CAu) == 3)
     {
         menu[2].visible = 1u;
-        rows = r_u8(0x800E058Eu);
+        rows = (uint8)game_selection.players;
     }
     top = (sint16)(7 * (8 - rows) + 70);
     for (index = 0; index < rows; ++index)
@@ -741,10 +776,10 @@ sint32 tournament_refresh_table(void)
             primitive[0].x = 170u;
             primitive[0].y = (uint16)y;
             primitive[0].text = name_player_text((uint32)peer);
-            left_output[0] = (uint8)(r_u8(0x800E1A8Cu + (uint32)peer) / 10u + 48u);
-            left_output[1u] = (uint8)(r_u8(0x800E1A8Cu + (uint32)peer) % 10u + 48u);
-            right_output[0] = (uint8)(r_u8(0x800E1A9Cu + (uint32)peer) / 10u + 48u);
-            right_output[1u] = (uint8)(r_u8(0x800E1A9Cu + (uint32)peer) % 10u + 48u);
+            left_output[0] = (uint8)(tournament_champ.races[peer] / 10u + 48u);
+            left_output[1u] = (uint8)(tournament_champ.races[peer] % 10u + 48u);
+            right_output[0] = (uint8)(tournament_champ.points[peer] / 10u + 48u);
+            right_output[1u] = (uint8)(tournament_champ.points[peer] % 10u + 48u);
         }
     }
     menu[3].visible = 1u;
@@ -765,13 +800,13 @@ sint32 tournament_init_table(void)
     sint16 identifiers[8];
     sint32 first;
     sint32 second;
-    TEXT_RECORD *primitives = text_hud;
+    TEXT_RECORD *prims = text_hud;
 
     FUNCTION_MARKER(0x80066B50u, "MAIN.EXE");
     w_u16(0x800B6AF0u, 0u);
-    for (first = 0; first < r_u8(0x800E058Eu); ++first)
+    for (first = 0; first < (uint8)game_selection.players; ++first)
     {
-        TEXT_RECORD *primitive = &primitives[first];
+        TEXT_RECORD *primitive = &prims[first];
         primitive[3].font = 1u;
         primitive[3].x = 190u;
         primitive[3].text = name_player_text((uint32)first);
@@ -780,12 +815,12 @@ sint32 tournament_init_table(void)
     }
     for (first = 0; first < 5; ++first)
     {
-        for (second = 0; second < r_u8(0x800E058Eu); ++second)
+        for (second = 0; second < (uint8)game_selection.players; ++second)
         {
             sint32 other;
-            for (other = 0; other < r_u8(0x800E058Eu); ++other)
+            for (other = 0; other < (uint8)game_selection.players; ++other)
             {
-                if (r_u8(0x800E1A9Cu + (uint32)order[other]) < r_u8(0x800E1A9Cu + (uint32)order[second]))
+                if (tournament_champ.points[order[other]] < tournament_champ.points[order[second]])
                 {
                     sint16 value = identifiers[second];
                     sint16 index = order[second];
@@ -797,7 +832,7 @@ sint32 tournament_init_table(void)
             }
         }
     }
-    for (first = 0; first < r_u8(0x800E058Eu); ++first)
+    for (first = 0; first < (uint8)game_selection.players; ++first)
         w_u16(0x800DDCF8u + 2u * (uint32)first, (uint16)identifiers[first]);
     return tournament_refresh_table();
 }
@@ -807,25 +842,25 @@ sint32 tournament_update_mode_input(CONTROLLER_STATE *input)
     sint16 mode = (sint16)r_u16(0x800B69CAu);
 
     FUNCTION_MARKER(0x80066D58u, "MAIN.EXE");
-    if (r_u8(0x800B4138u) != 0u && mode == 3)
+    if (menu_state.input_enabled != 0u && mode == 3)
     {
-        if (r_u8(0x800E1A8Au) < 6u)
+        if (tournament_champ.course < 6u)
         {
             if ((input->current & 0x40u) != 0u)
             {
-                w_u16(0x800B6AFAu, 1u);
+                menu_state.sound = 1u;
                 tournament_enter_race();
             }
             if ((input->current & 0x10u) != 0u)
             {
-                w_u16(0x800B6AFAu, 2u);
-                w_u16(0x800B413Eu, 1u);
+                menu_state.sound = 2u;
+                menu_state.phase = 1u;
             }
         }
         else if ((input->current & 0x40u) != 0u)
         {
-            w_u16(0x800B6AFAu, 1u);
-            w_u16(0x800B413Eu, 1u);
+            menu_state.sound = 1u;
+            menu_state.phase = 1u;
         }
     }
     return tournament_refresh_table();
@@ -840,34 +875,34 @@ sint32 tournament_reset_text(void)
 sint32 tournament_record_champ_result(void)
 {
     PLAYER_PROFILE *profile_data = profile_current();
-    sint16 state = (sint16)r_u16(0x800E0580u);
+    sint16 state = (sint16)game_selection.selection;
     sint16 source_index = 0;
-    uint8 peer = r_u8(0x800E1A8Bu);
+    uint8 peer = tournament_champ.player;
 
     FUNCTION_MARKER(0x80066E5Cu, "MAIN.EXE");
     if (state == -3 || state == -1)
         source_index = 15;
     else if (state == -4 || state == -2)
-        source_index = r_u8(0x800E059Du);
-    w_u8(0x800E1A8Cu + peer, (uint8)(r_u8(0x800E1A8Cu + peer) + 1u));
-    w_u8(0x800E1A9Cu + peer, (uint8)(r_u8(0x800E1A9Cu + peer) + r_u8(0x80098E08u + (uint32)source_index)));
-    w_u8(0x800E1A8Bu, (uint8)(peer + 1u));
-    if (r_u8(0x800E1A8Bu) == r_u8(0x800E058Eu))
+        source_index = race_selection.ranks[0];
+    tournament_champ.races[peer] = (uint8)(tournament_champ.races[peer] + 1u);
+    tournament_champ.points[peer] = (uint8)(tournament_champ.points[peer] + ranking_place_points((uint32)source_index));
+    tournament_champ.player = (uint8)(peer + 1u);
+    if (tournament_champ.player == (uint8)game_selection.players)
     {
-        w_u8(0x800E1A8Bu, 0u);
-        profile_data->progress.courses[r_u16(0x800B4246u)][r_u8(0x800E1A8Au)].state = (uint8)(6u);
-        w_u8(0x800E1A8Au, (uint8)(r_u8(0x800E1A8Au) + 1u));
-        w_u16(0x800B4244u, r_u8(0x800E1A8Au));
-        profile_data->course = (uint8)(r_u8(0x800E1A8Au));
+        tournament_champ.player = 0u;
+        profile_data->progress.courses[menu_course_select.level][tournament_champ.course].state = (uint8)(6u);
+        tournament_champ.course = (uint8)(tournament_champ.course + 1u);
+        menu_course_select.course = tournament_champ.course;
+        profile_data->course = (uint8)(tournament_champ.course);
         if (profile_data->course < 6u)
-            profile_data->progress.courses[r_u16(0x800B4246u)][r_u8(0x800E1A8Au)].state = (uint8)(4u);
+            profile_data->progress.courses[menu_course_select.level][tournament_champ.course].state = (uint8)(4u);
         else
         {
             profile_data->course = (uint8)(5u);
-            w_u8(0x800E058Bu, 1u);
-            w_u16(0x800B4244u, 5u);
+            game_selection.event = 1u;
+            menu_course_select.course = 5u;
         }
     }
-    w_u8(0x800E058Bu, 38u);
+    game_selection.event = 38u;
     return 38;
 }

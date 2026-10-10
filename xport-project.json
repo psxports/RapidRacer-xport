@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "name": "Rapid Racer (xport)",
+  "short_name": "RR",
+  "toolset": "C:\\Projects\\xports\\xport\\tools",
+  "paths": {
+    "status": "status",
+    "project_tools": "tools",
+    "analysis_database": "status/analysis.sqlite",
+    "native_executable": "bin/RR.exe",
+    "native_debug_executable": "bin/RR_debug.exe",
+    "native_working_directory": "bin",
+    "native_solution": "src/platform/win/RR.sln",
+    "native_build": "_build",
+    "ida_exports": "orig/images",
+    "ida_configs": "tools/ida",
+    "sdk_classification": "status/ghidra/classification.json",
+    "disc_image": "iso/Rapid Racer (Europe) (En,Fr,De,Es,It).cue",
+    "original_executable": "orig/SCES_003.94",
+    "music_source": "iso",
+    "music_output": "bin/MUSIC"
+  },
+  "duckstation": {
+    "save_serial": "SCES-00394",
+    "host": "127.0.0.1",
+    "gdb_port": 2414,
+    "reserved_gdb_ports": {
+      "user": 2414,
+      "lockstep": 2421
+    },
+    "default_role": "user",
+    "data_directory": "tools/duckstation/data/user",
+    "data_directories": {
+      "user": "tools/duckstation/data/user",
+      "lockstep": "tools/duckstation/data/lockstep"
+    }
+  },
+  "lockstep": {
+    "schema": 1,
+    "enabled": false
+  },
+  "code_refresh": {
+    "build": {
+      "solution": "src/platform/win/RR.sln",
+      "configuration": "Debug",
+      "platform": "x86",
+      "process_name": "RR_debug.exe"
+    },
+    "tests": [],
+    "artifacts": []
+  },
+  "analysis": {
+    "ctree_exports": [],
+    "images": [
+      "SCES_003.94",
+      "MAIN.EXE"
+    ],
+    "default_image": "MAIN.EXE"
+  },
+  "capabilities": {
+    "redbook_audio": {
+      "enabled": true
+    }
+  }
+}

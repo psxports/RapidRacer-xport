@@ -1,15 +1,35 @@
+#include "timer.h"
+#include "route.h"
+#include "game.h"
 #include "camera.h"
 #include "input.h"
 #include "cd.h"
 #include "arena.h"
 #include "runtime.h"
 #include "sound.h"
+#include "scene.h"
 #include "global.h"
 #include "vehicle.h"
 #include "psx_spu.h"
 #include "xport_trace.h"
 #include <stdlib.h>
 #include <string.h>
+
+// Options from MAIN.EXE 800E05CE/05D0/05D2/05D4
+SOUND_OPTIONS sound_options;
+
+// Default choices from MAIN.EXE 80098D1C; runtime slots at 800E05BC and 80083740
+const uint16 sound_default_tracks[8] = {2, 3, 4, 5, 6, 7, 8, 8};
+
+// Track stepping from MAIN.EXE pause menu 80011540
+void sound_step_track(sint32 direction)
+{
+    uint16 *track = &sound_options.tracks[sound_options.track_slot];
+
+    *track = (uint16)((uint32)*track + (uint32)direction);
+    if (direction < 0 ? (sint16)*track < 2 : (sint16)*track >= 9)
+        *track = direction < 0 ? 8u : 2u;
+}
 
 static sint32 sound_sra(uint32 value, uint32 shift)
 {
@@ -67,7 +87,7 @@ uint32 sound_queue_command(uint32 state, sint32 sound, sint32 command, uint32 ar
     FUNCTION_MARKER(0x800353FCu, "MAIN.EXE");
     if (command == 4)
     {
-        uint16 timer = r_u16(0x800B3D94u);
+        uint16 timer = game_timing.ticks;
 
         w_u16(state + 3706u, 0u);
         w_u32(0x800B3F5Cu, 0u);
@@ -103,10 +123,10 @@ uint32 sound_queue_command(uint32 state, sint32 sound, sint32 command, uint32 ar
         uint16 previous;
 
         result = (uint32)sound << 1;
-        if ((sint16)r_u16(0x800E05D2u) == 2 && sound != 11)
+        if ((sint16)sound_options.mode == 2 && sound != 11)
             return result;
         config = 0x800912CCu + (uint32)sound * 12u;
-        timer = r_u16(0x800B3D94u);
+        timer = game_timing.ticks;
         previous = r_u16(config + 8u);
         age = (sint32)((uint32)timer - (uint32)previous);
         if (age < 0)
@@ -122,7 +142,7 @@ uint32 sound_queue_command(uint32 state, sint32 sound, sint32 command, uint32 ar
                 return (uint32)duration;
         }
         linked = (sint8)r_u8(config + 10u);
-        timer = r_u16(0x800B3D94u);
+        timer = game_timing.ticks;
         w_u16(config + 8u, timer);
         w_u16(config + (uint32)(sint32)linked * 12u + 8u, timer);
         w_u16(queue + 32u, timer);
@@ -176,7 +196,7 @@ uint32 sound_queue_command(uint32 state, sint32 sound, sint32 command, uint32 ar
     else if (command == 7)
     {
         result = (uint32)sound << 1;
-        if (r_u16(0x800E05D2u) == 2u)
+        if (sound_options.mode == 2u)
             return result;
         config = 0x80091374u + (uint32)sound * 12u;
     }
@@ -225,7 +245,7 @@ uint32 sound_queue_command(uint32 state, sint32 sound, sint32 command, uint32 ar
         uint16 timer;
         uint16 previous_timer;
 
-        result = (uint32)(sint32)(sint16)r_u16(0x800E05D2u);
+        result = (uint32)(sint32)(sint16)sound_options.mode;
         if (result != 0u)
             return result;
         result = r_u32(0x80083478u);
@@ -234,7 +254,7 @@ uint32 sound_queue_command(uint32 state, sint32 sound, sint32 command, uint32 ar
         result = 8u;
         if (r_u32(0x80083484u) == 8u)
             return result;
-        timer = r_u16(0x800B3D94u);
+        timer = game_timing.ticks;
         previous_timer = r_u16(state + 3708u);
         elapsed_raw = (uint32)timer - (uint32)previous_timer;
         elapsed = (sint16)elapsed_raw;
@@ -292,7 +312,7 @@ uint32 sound_queue_command(uint32 state, sint32 sound, sint32 command, uint32 ar
             return result;
         sound = (sint16)selected;
         table = 0x800E5FA8u + (uint32)sound * 4u;
-        timer = r_u16(0x800B3D94u);
+        timer = game_timing.ticks;
         w_u16(queue + 30u, 0u);
         w_u32(0x800B3F5Cu, 0u);
         w_u16(queue + 32u, timer);
@@ -365,7 +385,7 @@ sint32 voice_update_volume(uint32 voice_state)
     }
     if (voice_state != selected_voice)
     {
-        if ((sint16)r_u16(0x800E05D4u) == 0)
+        if ((sint16)sound_options.mono == 0)
         {
             attr.volume.left = (sint16)target_left;
             attr.volume.right = (sint16)target_right;
@@ -380,7 +400,7 @@ sint32 voice_update_volume(uint32 voice_state)
         SpuSetVoiceAttr(&attr);
         return 0;
     }
-    if ((sint16)r_u16(0x800E05D4u) == 0)
+    if ((sint16)sound_options.mono == 0)
     {
         do
         {
@@ -460,7 +480,7 @@ sint32 sound_config_reverb_depth(uint16 left, uint16 right)
     sint32 value;
 
     FUNCTION_MARKER(0x80035D3Cu, "MAIN.EXE");
-    timer = (sint16)r_u16(0x800E05D4u);
+    timer = (sint16)sound_options.mono;
     attr.mask = SPU_REV_DEPTHL | SPU_REV_DEPTHR;
     if (timer == 0)
     {
@@ -539,7 +559,7 @@ sint32 sound_start_sample_voice(uint32 voice_state, sint32 octave, sint32 note, 
     voice_bit = 1u << (r_u8(voice_state + 1u) & 31u);
     sample = (sint16)(uint16)((uint32)r_u8(config + 1u) + (uint32)r_u16(voice_state + 16u));
     address_index = (sint16)r_u16(0x800DDF68u + (uint32)sample * 2u);
-    if ((sint16)r_u16(0x800E05D4u) == 0)
+    if ((sint16)sound_options.mono == 0)
     {
         sint16 left = (sint16)r_u16(voice_state + 4u);
 
@@ -596,9 +616,21 @@ sint32 sound_start_sample_voice(uint32 voice_state, sint32 octave, sint32 note, 
     return (sint32)SpuSetReverbVoice(loop & 1, voice_bit);
 }
 
+// Native per-player cursor; legacy audio context identity is confined to this boundary
+static sint16 sound_reverb_idx[2];
+
+static sint16 *sound_reverb_cursor(uint32 state)
+{
+    if (state == 0x800DEF4Cu)
+        return &sound_reverb_idx[0];
+    if (state == 0x800DFEF4u)
+        return &sound_reverb_idx[1];
+    abort();
+}
+
 sint32 vehicle_update_audio(uint32 context, uint32 unused2, uint32 unused3, uint32 unused4)
 {
-    uint32 timeline = r_u32(context + 3736u);
+    sint16 *reverb_idx = sound_reverb_cursor(context + 3676u);
     BOAT *boat = vehicle_player(context);
     CONTROLLER_STATE *input;
     uint32 state = context + 3676u;
@@ -647,19 +679,19 @@ sint32 vehicle_update_audio(uint32 context, uint32 unused2, uint32 unused3, uint
     }
     if (r_u32(0x80083484u) != 9u)
     {
-        sint32 clock = (sint32)r_u32(0x800D6B54u);
+        sint32 clock = (sint32)race_time.ticks;
 
         if ((uint32)(clock - 801) < 99u || (uint32)(clock - 401) < 99u)
             sound_queue_command(context, (global_fn_8006e9d8() & 1) + 7, 0, unused4);
         if (r_u32(0x80083484u) != 4u && vehicle_menu(r_u32(context + 100u))->mode == 4u)
         {
-            clock = (sint32)r_u32(0x800D6B54u);
+            clock = (sint32)race_time.ticks;
             sint32 hundreds = clock / 100;
 
             if ((sint16)r_u16(state + 46u) != (sint16)hundreds && clock - hundreds * 100 < 5)
             {
                 w_u16(state + 46u, (uint16)hundreds);
-                clock = (sint32)r_u32(0x800D6B54u);
+                clock = (sint32)race_time.ticks;
                 if ((uint32)(clock - 91) < 1009u)
                     sound_queue_command(context, 9, 1, unused4);
             }
@@ -730,45 +762,38 @@ sint32 vehicle_update_audio(uint32 context, uint32 unused2, uint32 unused3, uint
 
     if (r_u32(0x80083478u) == 1u)
     {
-        uint32 setup = r_u32(0x8008349Cu);
-        uint32 base = r_u32(setup + 140u);
+        sint32 idx = *reverb_idx;
 
-        if (base != 0u)
+        if (scene_reverb->entries != NULL)
         {
-            sint32 divisor = (sint32)r_u32(0x800B6A98u);
+            const SCENE_REVERB *entry;
+            sint32 divisor = (sint32)route_resources.count;
             sint32 dividend = (sint32)(uint32)boat->race.progress;
             sint32 remainder;
 
             if (divisor == 0 || (dividend == (sint32)0x80000000u && divisor == -1))
                 abort();
             remainder = dividend % divisor;
-            if ((sint16)remainder < (sint16)r_u16(timeline))
-                timeline -= 8u;
-            else if ((sint16)r_u16(timeline + 2u) < (sint16)remainder)
+            if (idx < 0 || idx >= scene_reverb->count)
+                abort();
+            entry = &scene_reverb->entries[idx];
+            if ((sint16)remainder < entry->first)
+                --idx;
+            else if (entry->last < (sint16)remainder)
             {
                 w_u16(state + 28u, 10u);
-                timeline += 8u;
+                ++idx;
             }
             else
                 w_u16(state + 28u, 9u);
         }
         else
             w_u16(state + 28u, 10u);
-        {
-            sint32 timeline_index;
-            sint32 count;
-
-            setup = r_u32(0x8008349Cu);
-            base = r_u32(setup + 140u);
-            count = (sint16)r_u16(setup + 32u);
-            timeline_index = (sint16)((timeline - base) >> 3);
-            if (timeline_index == count)
-                w_u32(state + 60u, base);
-            else if (timeline_index >= 0)
-                w_u32(state + 60u, timeline);
-            else
-                w_u32(state + 60u, base + (uint32)(count - 1) * 8u);
-        }
+        if (idx == scene_reverb->count)
+            idx = 0;
+        else if (idx < 0)
+            idx = scene_reverb->count - 1;
+        *reverb_idx = (sint16)idx;
     }
     sound_remove_inactive_voice_recs(state);
     return 1;
@@ -832,7 +857,7 @@ sint32 sound_update_impact(BOAT *boat, uint32 voice, uint32 state, uint32 argume
     }
     else
     {
-        if ((r_u32(0x800E0588u) & 4u) != 0u && accumulator >= 65)
+        if ((((uint32)game_selection.flags | ((uint32)game_selection.ready << 16) | ((uint32)game_selection.event << 24)) & 4u) != 0u && accumulator >= 65)
             sound_queue_command(state, 12, 0, argument);
         raw_pitch = r_u16(state + 3698u);
         raw_accumulator = r_u16(state + 3696u);
@@ -1267,7 +1292,7 @@ uint32 spu_init_cd_audio(void)
         sound_init_player_state(0x800DFEF4u);
         sound_queue_command(0x800DF098u, 0, 4, 0u);
     }
-    if ((sint16)r_u16(0x800E05D4u) == 0)
+    if ((sint16)sound_options.mono == 0)
     {
         mix.val2 = 0xFFu;
         mix.val0 = 0xFFu;
@@ -1308,10 +1333,8 @@ sint32 sound_init_player_state(uint32 state)
     w_u16(state + 24u, 16u);
     sound_config_reverb_depth(16u, (uint16)setup);
     w_u16(state + 28u, 10u);
-    setup = r_u32(0x8008349Cu);
     records = r_u32(state + 48u);
     count = (sint16)r_u16(state + 44u);
-    setup = r_u32(setup + 140u);
     w_u16(state + 46u, 30u);
     w_u8(state + 42u, 6u);
     w_u16(state, 0u);
@@ -1328,7 +1351,7 @@ sint32 sound_init_player_state(uint32 state)
     w_u16(state + 30u, 0u);
     w_u16(state + 32u, 0u);
     w_u8(state + 43u, 7u);
-    w_u32(state + 60u, setup);
+    *sound_reverb_cursor(state) = 0;
     if (count <= 0)
         return result;
     do

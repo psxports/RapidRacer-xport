@@ -12,199 +12,104 @@
 #include "xport_trace.h"
 #include <stdlib.h>
 
-static sint32 cb_dispatch_node(uint32 callback, uint32 node)
-{
-    if (callback == 0x80040C6Cu)
-        return effects_advance_tex_cb(node);
-    if (callback == 0x80034C28u)
-        return title_dispatch_state_cb(node);
-    if (callback == 0x80040DD8u)
-        return effects_update_transform_cb(node);
-    if (callback == 0x8004199Cu)
-        return effects_update_particles(node);
-    return 0;
-}
+// Native ownership for MAIN.EXE 80038544..800387CC
+static CB_NODE cb_nodes[50];
+static CB_NODE *cb_free, *cb_next;
+static CB_LIST cb_global;
+CB_LIST cb_players[2];
+static CB_LIST *cb_active = &cb_global;
 
-uint32 cb_init_pool(void)
+void cb_init_pool(void)
 {
-    uint32 record;
-    sint32 index;
+    uint32 idx;
 
     FUNCTION_MARKER(0x80038544u, "MAIN.EXE");
-    w_u32(0x800B6860u, 0x800B6864u);
-    w_u32(0x800B6864u, 0u);
-    record = game_alloc_arena_bytes(1000);
-    w_u32(0x800B6868u, record);
-    w_u32(0x800B686Cu, 0u);
-    for (index = 0; index < 50; ++index)
+    cb_global.head = cb_players[0].head = cb_players[1].head = NULL;
+    cb_active = &cb_global;
+    cb_next = NULL;
+    for (idx = 0; idx < 50u; ++idx)
     {
-        w_u32(record, record + 20u);
-        record += 20u;
+        cb_nodes[idx].next = idx + 1u < 50u ? &cb_nodes[idx + 1u] : NULL;
+        cb_nodes[idx].prev = NULL;
     }
-    w_u32(record, 0u);
-    return record;
+    cb_free = cb_nodes;
 }
 
-uint32 cb_set_active_head(uint32 head)
+void cb_set_active_head(CB_LIST *list)
 {
     FUNCTION_MARKER(0x8003859Cu, "MAIN.EXE");
-    if (head != 0u)
-    {
-        w_u32(0x800B6860u, head);
-        return head;
-    }
-    w_u32(0x800B6860u, 0x800B6864u);
-    return 0x800B6864u;
+    cb_active = list ? list : &cb_global;
 }
 
-uint32 cb_clear_list(uint32 head)
+void cb_clear_list(CB_LIST *list)
 {
-    uint32 node;
-    uint32 result;
-    uint32 frame = guest_stack_push(0x20u);
-    uint32 slot = frame + 0x10u;
+    CB_NODE *node = list->head;
 
     FUNCTION_MARKER(0x800385C4u, "MAIN.EXE");
-    w_u32(0x800B686Cu, slot);
-    result = slot;
-    node = r_u32(head);
-    while (node != 0u)
+    while (node)
     {
-        uint32 next = r_u32(node);
-
-        w_u32(slot, next);
-        result = cb_unlink_active_node(node);
-        node = r_u32(slot);
+        cb_next = node->next;
+        cb_unlink_active_node(node);
+        node = cb_next;
     }
-    guest_stack_pop(0x20u);
-    return result;
 }
 
-uint32 cb_traverse_list(uint32 head)
+void cb_traverse_list(CB_LIST *list)
 {
-    uint32 node;
-    uint32 result;
-    uint32 frame = guest_stack_push(0x20u);
-    uint32 slot = frame + 0x10u;
+    CB_NODE *node = list->head;
 
     FUNCTION_MARKER(0x80038610u, "MAIN.EXE");
-    w_u32(0x800B686Cu, slot);
-    result = slot;
-    node = r_u32(head);
-    while (node != 0u)
+    while (node)
     {
-        uint32 next = r_u32(node);
-
-        w_u32(slot, next);
-        result = (uint32)cb_dispatch_node(r_u32(node + 16u), node);
-        next = r_u32(slot);
-        node = next;
+        cb_next = node->next;
+        node->fn(node);
+        node = cb_next;
     }
-    guest_stack_pop(0x20u);
-    return result;
 }
 
-uint32 cb_dispatch_list(void)
+void cb_dispatch_list(void)
 {
-    uint32 head = r_u32(0x800B6860u);
-    uint32 node;
-    uint32 result;
-    uint32 frame = guest_stack_push(0x20u);
-    uint32 slot = frame + 0x10u;
-
     FUNCTION_MARKER(0x8003866Cu, "MAIN.EXE");
-    w_u32(0x800B686Cu, slot);
-    result = slot;
-    node = r_u32(head);
-    while (node != 0u)
-    {
-        uint32 next = r_u32(node);
-
-        w_u32(slot, next);
-        result = (uint32)cb_dispatch_node(r_u32(node + 16u), node);
-        next = r_u32(slot);
-        node = next;
-    }
-    guest_stack_pop(0x20u);
-    return result;
+    cb_traverse_list(cb_active);
 }
 
-uint32 cb_clear_active_list(void)
+void cb_clear_active_list(void)
 {
-    uint32 head;
-    uint32 node;
-    uint32 result;
-    uint32 frame = guest_stack_push(0x20u);
-    uint32 slot = frame + 0x10u;
-
     FUNCTION_MARKER(0x800386CCu, "MAIN.EXE");
-    head = r_u32(0x800B6860u);
-    w_u32(0x800B686Cu, slot);
-    result = slot;
-    node = r_u32(head);
-    while (node != 0u)
-    {
-        uint32 next = r_u32(node);
-
-        w_u32(slot, next);
-        result = cb_unlink_active_node(node);
-        node = r_u32(slot);
-    }
-    guest_stack_pop(0x20u);
-    return result;
+    cb_clear_list(cb_active);
 }
 
-uint32 cb_alloc_node(uint32 callback)
+CB_NODE *cb_alloc_node(CB_FN fn)
 {
-    uint32 node = r_u32(0x800B6868u);
-    uint32 head = r_u32(0x800B6860u);
-    uint32 next;
-    uint32 first;
-    uint32 linked;
+    CB_NODE *node = cb_free;
 
     FUNCTION_MARKER(0x8003871Cu, "MAIN.EXE");
-    next = r_u32(node);
-    w_u32(0x800B6868u, next);
-    first = r_u32(head);
-    w_u32(node, first);
-    w_u32(head, node);
-    linked = r_u32(node);
-    w_u32(node + 4u, head);
-    if (linked != 0u)
-        w_u32(linked + 4u, node);
-    w_u32(node + 16u, callback);
-    w_u32(node + 8u, 0u);
-    w_u32(node + 12u, 0u);
+    if (!node || !fn)
+        abort();
+    cb_free = node->next;
+    node->next = cb_active->head;
+    node->prev = &cb_active->head;
+    if (node->next)
+        node->next->prev = &node->next;
+    cb_active->head = node;
+    node->fn = fn;
+    node->flags = node->arg.idx = 0;
     return node;
 }
 
-uint32 cb_unlink_active_node(uint32 node)
+void cb_unlink_active_node(CB_NODE *node)
 {
-    uint32 slot;
-    uint32 next;
-    uint32 previous_link;
-    uint32 free_head;
-
     FUNCTION_MARKER(0x8003876Cu, "MAIN.EXE");
-    slot = r_u32(0x800B686Cu);
-    if (node == r_u32(slot))
-    {
-        next = r_u32(node);
-        w_u32(slot, next);
-    }
-    previous_link = r_u32(node + 4u);
-    next = r_u32(node);
-    w_u32(previous_link, next);
-    next = r_u32(node);
-    if (next != 0u)
-    {
-        previous_link = r_u32(node + 4u);
-        w_u32(next + 4u, previous_link);
-    }
-    free_head = r_u32(0x800B6868u);
-    w_u32(0x800B6868u, node);
-    w_u32(node, free_head);
-    return free_head;
+    if (!node || !node->prev)
+        abort();
+    if (node == cb_next)
+        cb_next = node->next;
+    *node->prev = node->next;
+    if (node->next)
+        node->next->prev = node->prev;
+    node->prev = NULL;
+    node->next = cb_free;
+    cb_free = node;
 }
 
 sint32 cb_vblank_timer(void)

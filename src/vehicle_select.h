@@ -6,7 +6,7 @@
 
 #include "psx.h"
 
-void vehicle_select_enable_prim(uint32 primitive, sint32 enabled);
+void vehicle_select_enable_prim(POLY_FT4 *primitive, sint32 enabled);
 
 PROFILE_GRID *profile_grid_row(sint16 index);
 sint32 profile_get_grid_byte(sint16 row, sint16 column);

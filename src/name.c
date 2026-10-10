@@ -1,3 +1,4 @@
+#include "game.h"
 #include "input.h"
 #include "display.h"
 #include "name.h"
@@ -103,16 +104,16 @@ static void name_fill_ring(sint32 start)
         name_wheel.slots[14].glyph = (uint16)(value - 37);
 }
 
-sint32 name_apply_player_name_cheats(void)
+void name_apply_player_name_cheats(void)
 {
     static const uint32 mode_strings[3][6] = {{0x800B4150u, 0x800B4158u, 0x800B4160u, 0x800B4168u, 0x800B4170u, 0x800B4178u}, {0x800B4180u, 0x800B4188u, 0x800B4190u, 0x800B4198u, 0x800B41A0u, 0x800B41A8u}, {0x800B41B0u, 0x800B41B8u, 0x800B41C0u, 0x800B41C8u, 0x800B41D0u, 0x800B41D8u}};
-    sint32 result = (sint16)r_u16(0x800E0582u);
+    sint32 result = (sint16)game_selection.mode;
 
     FUNCTION_MARKER(0x8005056Cu, "MAIN.EXE");
     if (result != 0)
-        return result;
+        return;
     result = 1;
-    if (r_u8(0x800E058Eu) == 1u)
+    if ((uint8)game_selection.players == 1u)
     {
         PLAYER_PROFILE *profile_data = profile_current();
         sint32 selected_mode = -1;
@@ -129,7 +130,7 @@ sint32 name_apply_player_name_cheats(void)
                 }
         if (selected_mode != -1)
         {
-            w_u16(0x800B6AFAu, 3u);
+            menu_state.sound = 3u;
             profile_data->course = (uint8)((uint8)(selected_count - 1));
             profile_data->level = (uint8)((uint8)selected_mode);
             profile_data->max_level = (uint8)selected_mode;
@@ -139,7 +140,7 @@ sint32 name_apply_player_name_cheats(void)
         }
         if (name_player_name_matches(0, 0x800B41E0u) != 0)
         {
-            w_u16(0x800B6AFAu, 3u);
+            menu_state.sound = 3u;
             profile_data->course = (uint8)(5u);
             profile_data->level = (uint8)(0u);
             profile_data->max_level = 0u;
@@ -148,7 +149,7 @@ sint32 name_apply_player_name_cheats(void)
         }
         if (name_player_name_matches(0, 0x800B41E8u) != 0)
         {
-            w_u16(0x800B6AFAu, 3u);
+            menu_state.sound = 3u;
             profile_data->course = (uint8)(5u);
             profile_data->level = (uint8)(1u);
             profile_data->max_level = 1u;
@@ -157,7 +158,7 @@ sint32 name_apply_player_name_cheats(void)
         }
         if (name_player_name_matches(0, 0x800B41F0u) != 0)
         {
-            w_u16(0x800B6AFAu, 3u);
+            menu_state.sound = 3u;
             profile_data->course = (uint8)(5u);
             profile_data->level = (uint8)(2u);
             profile_data->max_level = 2u;
@@ -166,73 +167,75 @@ sint32 name_apply_player_name_cheats(void)
         }
         if (name_player_name_matches(0, 0x800B41F8u) != 0)
         {
-            w_u16(0x800B6AFAu, 3u);
+            menu_state.sound = 3u;
             profile_data->course = (uint8)(1u);
             profile_data->level = (uint8)(3u);
             profile_data->max_level = 3u;
         }
         if (name_player_name_matches(0, 0x800B4200u) != 0)
         {
-            w_u16(0x800B6AFAu, 3u);
+            menu_state.sound = 3u;
             for (count = 0; count < 10; ++count)
                 profile_current()->availability[count] = 1u;
         }
         {
-            uint16 flags = r_u16(0x800E0588u);
+            uint16 flags = game_selection.flags;
             if ((flags & 4u) != 0u)
-                w_u16(0x800E0588u, (uint16)(flags - 4u));
+                game_selection.flags = (uint16)(flags - 4u);
         }
         if (name_player_name_matches(0, 0x800B4208u) != 0)
         {
-            uint16 flags = r_u16(0x800E0588u);
-            w_u16(0x800B6AFAu, 3u);
-            w_u16(0x800E0588u, (uint16)(flags + 4u));
+            uint16 flags = game_selection.flags;
+            menu_state.sound = 3u;
+            game_selection.flags = (uint16)(flags + 4u);
         }
         {
-            uint16 flags = r_u16(0x800E0588u);
+            uint16 flags = game_selection.flags;
             if ((flags & 16u) != 0u)
-                w_u16(0x800E0588u, (uint16)(flags - 16u));
+                game_selection.flags = (uint16)(flags - 16u);
         }
         if (name_player_name_matches(0, 0x800B4210u) != 0)
         {
             uint16 flags;
 
-            w_u16(0x800B6AFAu, 3u);
-            flags = r_u16(0x800E0588u);
+            menu_state.sound = 3u;
+            flags = game_selection.flags;
             w_u16(0x800B6B86u, 0u);
             w_u16(0x800B6AA0u, 5u);
-            w_u16(0x800E0588u, (uint16)(flags + 16u));
+            game_selection.flags = (uint16)(flags + 16u);
             text_set_hud_visible(0, 1);
-            w_u16(0x800B413Eu, 25u);
+            menu_state.phase = 25u;
         }
         {
-            uint16 flags = r_u16(0x800E0588u);
+            uint16 flags = game_selection.flags;
             if ((flags & 8u) != 0u)
-                w_u16(0x800E0588u, (uint16)(flags - 8u));
+                game_selection.flags = (uint16)(flags - 8u);
         }
         if (name_player_name_matches(0, 0x800B4218u) != 0)
         {
-            uint16 flags = r_u16(0x800E0588u);
-            w_u16(0x800B6AFAu, 3u);
+            uint16 flags = game_selection.flags;
+            menu_state.sound = 3u;
             if ((flags & 0x20u) != 0u)
-                w_u16(0x800E0588u, (uint16)(flags + 8u));
+                game_selection.flags = (uint16)(flags + 8u);
         }
         if (name_player_name_matches(0, 0x800B4220u) != 0)
-            w_u16(0x800B6AFAu, 3u);
+            menu_state.sound = 3u;
         {
-            uint16 flags = r_u16(0x800E0588u);
+            uint16 flags = game_selection.flags;
             if ((flags & 64u) != 0u)
-                w_u16(0x800E0588u, (uint16)(flags - 64u));
+                game_selection.flags = (uint16)(flags - 64u);
         }
         if (name_player_name_matches(0, 0x800B4228u) != 0)
         {
-            uint16 flags = r_u16(0x800E0588u);
-            w_u16(0x800B6AFAu, 3u);
-            w_u16(0x800E0588u, (uint16)(flags + 64u));
+            uint16 flags = game_selection.flags;
+            menu_state.sound = 3u;
+            game_selection.flags = (uint16)(flags + 64u);
         }
-        return profile_reset_grid_flags();
+        {
+            profile_reset_grid_flags();
+            return;
+        }
     }
-    return result;
 }
 
 sint32 name_refresh_menu_text(void)
@@ -303,8 +306,8 @@ void name_commit_chars(void)
 
 sint32 name_reset_wheel(void)
 {
-    uint16 configuration = r_u16(0x800B413Cu);
-    uint32 records;
+    uint16 configuration = menu_state.screen;
+    UI_RECORD *records;
     sint32 index;
 
     FUNCTION_MARKER(0x80057D28u, "MAIN.EXE");
@@ -316,17 +319,17 @@ sint32 name_reset_wheel(void)
     name_editor.pending_glyph = (uint16)((uint16)-1);
     w_u16(0x800B4142u, configuration);
     name_build_glyphs();
-    records = r_u32(0x800B6A74u);
+    records = sprite_records;
     for (index = 0; index < 37; ++index)
     {
-        uint32 record = records + 504u + 84u * (uint32)index;
-        sint32 sprite_index = (sint16)r_u16(record + 6u);
-        uint32 sprite = r_u32(record) + 120u * (uint32)sprite_index;
+        UI_RECORD *record = (records + index + 6);
+        sint32 sprite_index = (sint16)record->value;
+        SPRITE_RENDER *sprite = sprite_render_at(record->data, sprite_index);
 
-        name_wheel.glyphs[index].width = r_u16(sprite + 16u);
-        sprite_index = (sint16)r_u16(record + 6u);
-        sprite = r_u32(record) + 120u * (uint32)sprite_index;
-        name_wheel.glyphs[index].height = r_u16(sprite + 20u);
+        name_wheel.glyphs[index].width = (uint16)sprite->width;
+        sprite_index = (sint16)record->value;
+        sprite = sprite_render_at(record->data, sprite_index);
+        name_wheel.glyphs[index].height = (uint16)sprite->height;
     }
     configuration = name_editor.glyph;
     for (index = 0; index < 15; ++index)
@@ -343,7 +346,7 @@ sint32 name_reset_wheel(void)
     }
     w_u16(0x800B6A60u, 34u);
     for (index = 0; index < 37; ++index)
-        w_u8(r_u32(0x800B6A74u) + 508u + 84u * (uint32)index, 0u);
+        sprite_records[index + 6].type = 0u;
     name_refresh_menu_text();
     return name_update_wheel(&input_controllers[0], 0u, 0u, 0u);
 }
@@ -514,7 +517,7 @@ sint32 name_update_wheel(CONTROLLER_STATE *input, uint32 unused2, uint32 unused3
         name_editor.wheel_angle = (uint16)angle;
         if (step >= 36)
             name_editor.phase = (uint16)((uint16)(state == NAME_EDITOR_SEEK_PREV ? NAME_EDITOR_COMMIT_PREV : NAME_EDITOR_COMMIT_NEXT));
-        if (r_u8(0x800B4138u) != 0u)
+        if (menu_state.input_enabled != 0u)
         {
             if ((input->current & 0x8000u) != 0u)
             {
@@ -584,7 +587,7 @@ sint32 name_update_wheel(CONTROLLER_STATE *input, uint32 unused2, uint32 unused3
         else
         {
             name_editor.phase = (uint16)(NAME_EDITOR_IDLE);
-            w_u16(0x800B6AFAu, 0u);
+            menu_state.sound = 0u;
         }
     }
     else if (state == NAME_EDITOR_COMMIT_NEXT)
@@ -621,7 +624,7 @@ sint32 name_update_wheel(CONTROLLER_STATE *input, uint32 unused2, uint32 unused3
         else
         {
             name_editor.phase = (uint16)(NAME_EDITOR_IDLE);
-            w_u16(0x800B6AFAu, 0u);
+            menu_state.sound = 0u;
         }
     }
 
@@ -659,37 +662,37 @@ sint32 name_update_wheel(CONTROLLER_STATE *input, uint32 unused2, uint32 unused3
         name_wheel.sorted_glyphs[index] = glyph;
     }
     {
-        uint32 records = r_u32(0x800B6A74u);
+        UI_RECORD *records = sprite_records;
 
         for (index = 0; index < 15; ++index)
         {
-            uint32 record = records + 3612u + 84u * (uint32)index;
+            UI_RECORD *record = (records + index + 43);
             sint16 sorted = (sint16)name_wheel.order[index];
             sint16 glyph = (sint16)name_wheel.sorted_glyphs[index];
-            uint32 sprite_base;
-            uint32 sprite;
+            SPRITE_RENDER *sprite_base;
+            SPRITE_RENDER *sprite;
             sint16 vertical;
             sint16 width;
             sint16 height;
             sint16 coordinate;
 
-            w_u16(record + 6u, (uint16)glyph);
-            sprite_base = r_u32(record);
+            record->value = (uint16)glyph;
+            sprite_base = record->data;
             vertical = (sint16)name_wheel.slots[sorted].depth;
             height = (sint16)name_wheel.glyphs[glyph].height;
-            sprite = sprite_base + 120u * (uint32)(sint32)glyph;
+            sprite = sprite_render_at(sprite_base, glyph);
             width = (sint16)name_wheel.glyphs[glyph].width;
-            w_u8(record + 4u, (uint8)(vertical >= -2));
+            record->type = (uint8)(vertical >= -2);
             coordinate = (sint16)name_wheel.slots[sorted].x;
             vertical = (sint16)name_wheel.slots[sorted].depth;
-            w_u16(record + 8u, (uint16)(coordinate - (width >> 1) - vertical));
+            record->x = (uint16)(coordinate - (width >> 1) - vertical);
             coordinate = (sint16)name_wheel.slots[sorted].y;
             vertical = (sint16)name_wheel.slots[sorted].depth;
-            w_u16(record + 10u, (uint16)(coordinate - vertical));
+            record->y = (uint16)(coordinate - vertical);
             vertical = (sint16)name_wheel.slots[sorted].depth;
-            w_u32(sprite + 16u, (uint32)(width + 2 * vertical));
+            sprite->width = (uint32)(width + 2 * vertical);
             vertical = (sint16)name_wheel.slots[sorted].depth;
-            w_u32(sprite + 20u, (uint32)(height + 2 * vertical));
+            sprite->height = (uint32)(height + 2 * vertical);
         }
     }
 
@@ -702,7 +705,7 @@ sint32 name_update_wheel(CONTROLLER_STATE *input, uint32 unused2, uint32 unused3
             TEXT_RECORD *menu;
             uint8 character;
 
-            w_u16(0x800B6AFAu, 0u);
+            menu_state.sound = 0u;
             name_editor.wheel_step = 0u;
             name_editor.phase = (uint16)(NAME_EDITOR_STEP_PREV);
             name_editor.pending_glyph = (uint16)((uint16)next);
@@ -722,7 +725,7 @@ sint32 name_update_wheel(CONTROLLER_STATE *input, uint32 unused2, uint32 unused3
             TEXT_RECORD *menu;
             uint8 character;
 
-            w_u16(0x800B6AFAu, 0u);
+            menu_state.sound = 0u;
             name_editor.wheel_step = 0u;
             name_editor.phase = (uint16)(NAME_EDITOR_STEP_NEXT);
             name_editor.pending_glyph = (uint16)((uint16)next);
@@ -735,13 +738,13 @@ sint32 name_update_wheel(CONTROLLER_STATE *input, uint32 unused2, uint32 unused3
             character = (uint8)name_alphabet[next];
             selected_text[0] = character;
         }
-        if (r_u8(0x800B4138u) != 0u)
+        if (menu_state.input_enabled != 0u)
         {
             if ((input->current & 0x10u) != 0u)
             {
                 sint32 page = (sint16)name_editor.player_slot;
 
-                w_u16(0x800B6AFAu, 2u);
+                menu_state.sound = 2u;
                 if (page != 0)
                 {
                     name_editor.player_slot = (uint16)((uint16)(page - 1));
@@ -752,22 +755,22 @@ sint32 name_update_wheel(CONTROLLER_STATE *input, uint32 unused2, uint32 unused3
                 }
                 else
                 {
-                    uint8 mode = r_u8(0x800E058Eu);
+                    uint8 mode = (uint8)game_selection.players;
 
                     if (mode == 1u)
-                        w_u16(0x800B413Eu, 3u);
+                        menu_state.phase = 3u;
                     else if (mode == 2u)
-                        w_u16(0x800B413Eu, 4u);
+                        menu_state.phase = 4u;
                     else
                     {
-                        sint32 profile_mode = (sint16)r_u16(0x800E0584u);
+                        sint32 profile_mode = (sint16)game_selection.rules;
 
                         if (profile_mode == 1)
-                            w_u16(0x800B413Eu, 27u);
+                            menu_state.phase = 27u;
                         else if (profile_mode == 2)
-                            w_u16(0x800B413Eu, 37u);
+                            menu_state.phase = 37u;
                         else if (profile_mode == 0)
-                            w_u16(0x800B413Eu, 35u);
+                            menu_state.phase = 35u;
                     }
                 }
             }
@@ -779,7 +782,7 @@ sint32 name_update_wheel(CONTROLLER_STATE *input, uint32 unused2, uint32 unused3
                 if ((buttons & 0x8000u) != 0u && previous != 0)
                 {
                     name_editor.selected_char = (uint16)(previous - 1);
-                    w_u16(0x800B6AFAu, 0u);
+                    menu_state.sound = 0u;
                 }
                 if ((input->current & 0x2000u) != 0u)
                 {
@@ -788,7 +791,7 @@ sint32 name_update_wheel(CONTROLLER_STATE *input, uint32 unused2, uint32 unused3
                     if (current < 3)
                     {
                         name_editor.selected_char = (uint16)(current + 1);
-                        w_u16(0x800B6AFAu, 0u);
+                        menu_state.sound = 0u;
                     }
                 }
                 selected = (sint16)name_editor.selected_char;
@@ -803,21 +806,21 @@ sint32 name_update_wheel(CONTROLLER_STATE *input, uint32 unused2, uint32 unused3
                 sint32 page;
                 uint8 page_count;
 
-                w_u16(0x800B6AFAu, 1u);
+                menu_state.sound = 1u;
                 name_commit_chars();
                 page = (sint16)name_editor.player_slot;
-                page_count = r_u8(0x800E058Eu);
+                page_count = (uint8)game_selection.players;
                 if (page + 1 == page_count)
                 {
                     sint32 gate = (sint16)r_u16(0x800B69CAu);
 
-                    w_u16(0x800B413Eu, 5u);
+                    menu_state.phase = 5u;
                     if (gate == 1)
                     {
                         PROFILE_SERIES *series = profile_get_series();
 
                         if ((sint16)series->phase != gate)
-                            w_u16(0x800B413Eu, 18u);
+                            menu_state.phase = 18u;
                     }
                 }
                 else
@@ -928,17 +931,18 @@ sint32 name_draw_entry(void)
 
 sint32 name_build_glyphs(void)
 {
-    uint32 frame = guest_stack_push(0x88u);
+    SPRITE_IMAGE image = {0};
     sint32 index;
     sint32 result;
 
     FUNCTION_MARKER(0x80058FD0u, "MAIN.EXE");
+    sprite_register_packets();
     for (index = 0; index < 52; ++index)
     {
         uint8 character = (uint8)name_alphabet[index];
         sint16 alphabet_index = text_fonts[0].map[character];
         const TEXT_METRIC *glyph;
-        uint32 output = 0x800D7578u + 120u * (uint32)index;
+        SPRITE_RENDER *output = sprite_render_at(sprite_glyphs, index);
         uint16 x;
         uint16 y;
         uint16 width;
@@ -949,32 +953,31 @@ sint32 name_build_glyphs(void)
         if (alphabet_index < 0 || (size_t)alphabet_index >= text_fonts[0].count)
             abort();
         glyph = &text_fonts[0].metrics[alphabet_index];
-        w_u16(frame + 78u, 450u);
-        w_u8(frame + 62u, 0u);
-        w_u16(frame + 76u, 960u);
-        w_u16(frame + 72u, 960u);
-        w_u16(frame + 74u, 256u);
+        image.clut_y = 450u;
+        image.mode = 0u;
+        image.clut_x = 960u;
+        image.tpage_x = 960u;
+        image.tpage_y = 256u;
         x = glyph->u;
         y = glyph->v;
-        w_u16(frame + 80u, 256u);
-        w_u16(frame + 82u, 80u);
-        w_u16(frame + 64u, x);
-        w_u16(frame + 66u, y);
+        image.x = 256u;
+        image.y = 80u;
+        image.u = x;
+        image.v = y;
         width = glyph->width;
-        w_u16(frame + 68u, width);
+        image.width = width;
         height = glyph->height;
-        w_u16(frame + 70u, height);
+        image.height = height;
         tpage = GetTPage(0, 0, 960, 256);
-        w_u16(frame + 84u, tpage);
+        image.tpage = tpage;
         clut = GetClut(960, 450);
-        w_u16(frame + 86u, clut);
+        image.clut = clut;
         width = glyph->width;
         height = glyph->height;
-        menu_build_sprite_packet(output, frame + 32u, (sint16)x, (sint16)y, 0, 0, 0, 0, (sint16)width, (sint16)height);
-        sprite_init_anim_rec((sint16)(index + 6), 0x800D7578u, 0, (sint16)index, (sint16)(10 * index), (sint16)(5 * index), 1);
+        menu_build_sprite_packet(output, &image, (sint16)x, (sint16)y, 0, 0, 0, 0, (sint16)width, (sint16)height);
+        sprite_init_anim_rec((sint16)(index + 6), sprite_glyphs, 0, (sint16)index, (sint16)(10 * index), (sint16)(5 * index), 1);
     }
     result = 52 << 16;
-    guest_stack_pop(0x88u);
     return result;
 }
 
@@ -985,7 +988,7 @@ void name_fn_800591bc(void)
 
 sint32 name_update_reels(CONTROLLER_STATE *input)
 {
-    uint32 records = r_u32(0x800B6A74u);
+    UI_RECORD *records = sprite_records;
     uint32 buttons = input->current;
     sint32 index;
     sint32 active_count = 0;
@@ -994,17 +997,17 @@ sint32 name_update_reels(CONTROLLER_STATE *input)
     FUNCTION_MARKER(0x800591C4u, "MAIN.EXE");
     for (index = 0; index < 5; ++index)
     {
-        uint32 record = records + 3444u + 84u * (uint32)index;
-        uint32 sprite = r_u32(record) + 120u * (uint32)(sint32)(sint16)r_u16(record + 6u);
+        UI_RECORD *record = (records + index + 41);
+        SPRITE_RENDER *sprite = sprite_render_at(record->data, (sint16)record->value);
         NAME_REEL *reel = &name_reels.slots[index];
         sint16 mode = (sint16)reel->mode;
-        sint32 shade = (sint32)r_u32(sprite + 36u) + reel->counter + 8 * (sint16)reel->selection;
+        sint32 shade = (sint32)sprite->tpage_y + reel->counter + 8 * (sint16)reel->selection;
 
-        w_u32(sprite + 20u, 8u);
-        w_u8(sprite + 89u, (uint8)(shade + 8));
-        w_u8(sprite + 73u, (uint8)(shade + 8));
-        w_u8(sprite + 81u, (uint8)shade);
-        w_u8(sprite + 65u, (uint8)shade);
+        sprite->height = 8u;
+        sprite->quad.v3 = (uint8)(shade + 8);
+        sprite->quad.v1 = (uint8)(shade + 8);
+        sprite->quad.v2 = (uint8)shade;
+        sprite->quad.v0 = (uint8)shade;
         if (mode == NAME_REEL_SPIN || mode == NAME_REEL_STEP)
         {
             uint16 counter = (uint16)(reel->counter + reel->step);
@@ -1049,7 +1052,7 @@ sint32 name_update_reels(CONTROLLER_STATE *input)
                     sint32 may_stop = index == 0 || name_reels.slots[index - 1].mode == NAME_REEL_IDLE;
                     if (may_stop != 0)
                     {
-                        w_u16(0x800B6AFAu, 4u);
+                        menu_state.sound = 4u;
                         reel->mode = NAME_REEL_IDLE;
                     }
                 }
@@ -1085,7 +1088,7 @@ sint32 name_update_reels(CONTROLLER_STATE *input)
             reel->step = (uint16)-1;
             reel->mode = NAME_REEL_STEP;
             reel->counter = 7u;
-            w_u16(0x800B6AFAu, 0u);
+            menu_state.sound = 0u;
             selection = (sint16)reel->selection - 1;
             if (selection < 0)
                 selection = 15;
@@ -1100,7 +1103,7 @@ sint32 name_update_reels(CONTROLLER_STATE *input)
             sint16 previous;
             reel->step = 1u;
             reel->mode = NAME_REEL_STEP;
-            w_u16(0x800B6AFAu, 0u);
+            menu_state.sound = 0u;
             previous = (sint16)reel->selection + 1;
             if (previous >= 16)
                 previous = 0;
@@ -1108,14 +1111,14 @@ sint32 name_update_reels(CONTROLLER_STATE *input)
         }
         else if ((buttons & 0x8000u) != 0u && index > 0 && (uint8)name_reels.input_gate != 0u)
         {
-            w_u16(0x800B6AFAu, 9u);
+            menu_state.sound = 9u;
             name_reels.input_gate = (uint16)((name_reels.input_gate & 0xFF00u) | (uint8)(0u));
             reel->mode = NAME_REEL_IDLE;
             name_reels.slots[index - 1].mode = NAME_REEL_SELECTED;
         }
         else if ((buttons & 0x2000u) != 0u && index < 4 && (uint8)name_reels.input_gate != 0u)
         {
-            w_u16(0x800B6AFAu, 9u);
+            menu_state.sound = 9u;
             name_reels.input_gate = (uint16)((name_reels.input_gate & 0xFF00u) | (uint8)(0u));
             reel->mode = NAME_REEL_IDLE;
             name_reels.slots[index + 1].mode = NAME_REEL_SELECTED;
@@ -1125,7 +1128,7 @@ sint32 name_update_reels(CONTROLLER_STATE *input)
             reel->mode = NAME_REEL_IDLE;
             name_reels.input_gate = (uint16)((name_reels.input_gate & 0xFF00u) | (uint8)(0u));
             name_reels.input_gate = 0u;
-            w_u16(0x800B6AFAu, 4u);
+            menu_state.sound = 4u;
         }
     }
 
@@ -1162,7 +1165,7 @@ sint32 name_update_reels(CONTROLLER_STATE *input)
         }
         name_reels.slots[0].mode = NAME_REEL_SELECTED;
         name_reels.input_gate = 1u;
-        w_u16(0x800B6AFAu, 4u);
+        menu_state.sound = 4u;
     }
 
     for (index = 0; index < 5; ++index)
@@ -1192,7 +1195,7 @@ sint32 name_check_reels(void)
 sint32 name_reset_reels(void)
 {
     uint32 encoded = name_reels.code;
-    uint32 records = r_u32(0x800B6A74u);
+    UI_RECORD *records = sprite_records;
     sint32 index;
 
     FUNCTION_MARKER(0x80059A98u, "MAIN.EXE");
@@ -1205,11 +1208,11 @@ sint32 name_reset_reels(void)
     }
     for (index = 0; index < 5; ++index)
     {
-        uint32 sprite = r_u32(records + 3444u) + 120u * (uint32)(sint32)(sint16)r_u16(records + 3450u);
+        SPRITE_RENDER *sprite = sprite_render_at(records[41].data, (sint16)records[41].value);
         name_reels.slots[index].step = 0u;
         name_reels.slots[index].counter = 0u;
         name_reels.slots[index].mode = NAME_REEL_IDLE;
-        w_u32(sprite + 20u, 8u);
+        sprite->height = 8u;
     }
     return name_update_reels(&input_controllers[0]);
 }

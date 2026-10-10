@@ -5,6 +5,9 @@
 
 #include "psx.h"
 
+extern const uint8 ranking_points[16];
+uint8 ranking_place_points(uint32 place);
+
 sint32 ranking_find_empty_slot(void);
 sint32 ranking_player_is_leading(void);
 sint32 ranking_refresh_championship(void);
@@ -22,7 +25,7 @@ sint32 ranking_finalize_select(void);
 sint32 ranking_update_screen_anim(void);
 void ranking_noop(void);
 sint32 profile_unlock_progress(uint32 slot);
-sint32 profile_select_mode(void);
+void profile_select_mode(void);
 sint32 profile_refresh_mode_visual(void);
 sint32 profile_init_slot(sint16 profile_index);
 sint32 profile_init_select(void);

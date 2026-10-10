@@ -1,29 +1,87 @@
+#include "title.h"
+#include "route.h"
 #include "replay.h"
 #include "vehicle.h"
 #include <string.h>
 #include "mesh.h"
+#include "display.h"
 #include "camera.h"
 #include "trail.h"
 #include "global.h"
 #include "motion.h"
 #include "render.h"
+#include "psx_gpu.h"
 #include <stdlib.h>
+
+// Shared cursor for both player OT rings
+enum { MESH_OT_BUFFERS = 2, MESH_OT_CAPACITY = 34, MESH_OT_DEPTH = 100 };
+static uint32 mesh_ot_cursor;
+static uint32 mesh_ots[MESH_OT_BUFFERS][MESH_OT_CAPACITY][MESH_OT_DEPTH];
+
+static uint32 *mesh_alloc_ot(sint32 buffer, uint32 *chain)
+{
+    uint32 *ot;
+    if ((uint32)buffer >= MESH_OT_BUFFERS || mesh_ot_cursor >= MESH_OT_CAPACITY
+        || !gpu_register_packet_range(mesh_ots, sizeof(mesh_ots)))
+        abort();
+    ot = mesh_ots[buffer][mesh_ot_cursor];
+    if (++mesh_ot_cursor == MESH_OT_CAPACITY)
+        mesh_ot_cursor = 0;
+    ClearOTagR(ot, MESH_OT_DEPTH);
+    ot[0] = *chain;
+    AddPrims(chain, &ot[MESH_OT_DEPTH - 1], ot);
+    return ot;
+}
+MESH_BOAT_MODELS mesh_boat_models[2][16];
+MESH_MODEL mesh_event_models[4];
+MESH_RENDER_STATE mesh_render_state;
+
+// Propeller offsets for the six setup models
+static const uint16 mesh_prop_offsets[6] = {20, 0, 16, 0, 18, 20};
+
+
+// Closed five-point quad outline from MAIN.EXE 8001D680
+typedef struct
+{
+    uint32 tag;
+    union
+    {
+        uint32 color0;
+        struct {uint8 r0, g0, b0, code;};
+    };
+
+    union
+    {
+        uint32 xy;
+        struct {sint16 x, y;};
+    } points[5];
+
+    uint32 pad;
+} MESH_QUAD_OUTLINE;
+
+typedef char mesh_quad_outline_size[(sizeof(MESH_QUAD_OUTLINE) == 32) ? 1 : -1];
 
 #if defined(_DEBUG)
     #if defined(_WIN32)
-        #include <windows.h>
+// Keep the F8 probe independent of conflicting Windows/PsyQ names
+__declspec(dllimport) short __stdcall GetAsyncKeyState(int key);
+
+enum
+{
+    MESH_PROBE_KEY_F8 = 0x77
+};
     #endif
 typedef struct
 {
     const BOAT *player;
-    uint32 groups;
+    const MESH_MODEL *model;
     uint32 source_rgb;
     uint32 output_rgb;
     uint32 intensity[3];
     uint32 vertex;
-    uint32 lighting_record;
+    const RENDER_LIGHTING *lighting_record;
     SVECTOR normal;
-    uint8 lighting[56];
+    RENDER_LIGHTING lighting;
     PsxGteSnapshot gte;
 } MESH_COLOR_PROBE;
 
@@ -32,7 +90,7 @@ volatile uint32 mesh_color_probe_peak_limit = 204u;
 volatile uint32 mesh_color_probe_hits;
 MESH_COLOR_PROBE mesh_color_probe;
 static const BOAT *mesh_color_probe_player;
-static uint32 mesh_color_probe_groups;
+static const MESH_MODEL *mesh_color_probe_model;
 
 // Break here after the native check has saved its evidence
 __declspec(noinline) void mesh_color_probe_hit(void)
@@ -45,7 +103,7 @@ static void mesh_color_probe_check(const SVECTOR *normal, uint32 source, uint32 
     uint32 intensity[3];
     uint32 maximum = 0u;
     uint32 channel;
-    uint32 descriptor;
+    const ROUTE_SEGMENT *seg;
 
     if (!mesh_color_probe_player || !mesh_color_probe_armed)
         return;
@@ -63,15 +121,15 @@ static void mesh_color_probe_check(const SVECTOR *normal, uint32 source, uint32 
         return;
     mesh_color_probe_armed = 0u;
     mesh_color_probe.player = mesh_color_probe_player;
-    mesh_color_probe.groups = mesh_color_probe_groups;
+    mesh_color_probe.model = mesh_color_probe_model;
     mesh_color_probe.source_rgb = source;
     mesh_color_probe.output_rgb = output;
     memcpy(mesh_color_probe.intensity, intensity, sizeof(intensity));
     mesh_color_probe.vertex = vertex;
     mesh_color_probe.normal = *normal;
-    descriptor = (uint32)mesh_color_probe_player->contacts.points[0].object;
-    mesh_color_probe.lighting_record = r_u32(0x800834ACu) + (uint32)r_u8(descriptor + 6u) * 56u;
-    memcpy(mesh_color_probe.lighting, psx_addr(mesh_color_probe.lighting_record, 56u), 56u);
+    seg = mesh_color_probe_player->contacts.points[0].seg;
+    mesh_color_probe.lighting_record = render_lighting(seg->lighting);
+    mesh_color_probe.lighting = *mesh_color_probe.lighting_record;
     psx_gte_snapshot(&mesh_color_probe.gte);
     mesh_color_probe_hit();
 }
@@ -145,19 +203,6 @@ static void mesh_rotate_mat_y(sint32 angle, MATRIX *matrix)
     }
 }
 
-static void mesh_write_mat(uint32 address, const MATRIX *matrix, uint16 pad)
-{
-    sint32 row;
-    sint32 column;
-
-    for (row = 0; row < 3; ++row)
-        for (column = 0; column < 3; ++column)
-            w_u16(address + (uint32)(row * 3 + column) * 2u, (uint16)matrix->m[row][column]);
-    w_u16(address + 18u, pad);
-    for (row = 0; row < 3; ++row)
-        w_u32(address + 20u + (uint32)row * 4u, (uint32)matrix->t[row]);
-}
-
 static void mesh_transform_point(const MATRIX *matrix, const SVECTOR *point, VECTOR *output)
 {
     sint32 flags;
@@ -167,847 +212,13 @@ static void mesh_transform_point(const MATRIX *matrix, const SVECTOR *point, VEC
     RotTrans((SVECTOR *)point, output, &flags);
 }
 
-static void mesh_read_svector(uint32 address, SVECTOR *output)
+
+uint32 *mesh_prepare_player_ot_packet(uint32 state, sint32 player)
 {
-    uint32 xy = r_u32(address);
-    uint32 zp = r_u32(address + 4u);
-
-    output->vx = (sint16)xy;
-    output->vy = (sint16)(xy >> 16);
-    output->vz = (sint16)zp;
-    output->pad = (sint16)(zp >> 16);
-}
-
-void mesh_render_tri_flat_lit(uint32 faces, sint32 count)
-{
-    uint32 packet;
-    uint32 ordering_table;
-    uint32 depth_limit;
-    uint32 remaining;
-    sint32 previous_cross = -1;
-    sint32 previous_average = 0;
-
-    FUNCTION_MARKER(0x8001C6D8u, "MAIN.EXE");
-    if (count == 0)
-        return;
-    packet = r_u32(0x800B6C00u) & 0xFFFFFFu;
-    ordering_table = r_u32(0x800B6AB4u);
-    depth_limit = r_u32(0x800B6A08u);
-    remaining = (uint32)count;
-    do
-    {
-        SVECTOR vertices[3];
-        SVECTOR normal;
-        sint32 screen[3];
-        sint32 depth[3];
-        sint32 flags;
-        sint32 average;
-        sint32 current_cross;
-        uint32 color;
-
-        memcpy(vertices, psx_addr(faces, sizeof(vertices)), sizeof(vertices));
-        gte_project3_full_depth(vertices, screen, depth, &flags);
-        average = (sint32)((uint32)previous_average + r_u32(0x800B69F0u));
-        if (previous_cross > 0 && (uint32)average < depth_limit)
-        {
-            uint32 bucket = ordering_table + (uint32)average * 4u;
-
-            w_u32(packet, r_u32(bucket) | 0x04000000u);
-            w_u32(bucket, packet);
-            packet += 20u;
-        }
-        current_cross = NormalClip(screen[0], screen[1], screen[2]);
-        if (current_cross > 0)
-        {
-            w_u32(packet + 8u, (uint32)screen[0]);
-            w_u32(packet + 12u, (uint32)screen[1]);
-            w_u32(packet + 16u, (uint32)screen[2]);
-            memcpy(&normal, psx_addr(faces + 24u, sizeof(normal)), sizeof(normal));
-            color = r_u32(faces + 32u);
-            color = gte_normal_color_col(&normal, color);
-            w_u32(packet + 4u, color);
-            previous_average = AverageZ3(depth[0], depth[1], depth[2]);
-        }
-        previous_cross = current_cross;
-        faces += 36u;
-    } while (--remaining != 0u);
-    {
-        sint32 average = (sint32)((uint32)previous_average + r_u32(0x800B69F0u));
-
-        if (previous_cross > 0 && (uint32)average < depth_limit)
-        {
-            uint32 bucket = ordering_table + (uint32)average * 4u;
-
-            w_u32(packet, r_u32(bucket) | 0x04000000u);
-            w_u32(bucket, packet);
-            packet += 20u;
-        }
-    }
-    w_u32(0x800B6C00u, packet);
-}
-
-void mesh_render_quad_flat_lit(uint32 faces, sint32 count)
-{
-    uint32 packet;
-    uint32 ordering_table;
-    uint32 depth_limit;
-    uint32 remaining;
-    sint32 previous_cross = -1;
-    sint32 previous_average = 0;
-
-    FUNCTION_MARKER(0x8001C864u, "MAIN.EXE");
-    if (count == 0)
-        return;
-    packet = r_u32(0x800B6C00u) & 0xFFFFFFu;
-    ordering_table = r_u32(0x800B6AB4u);
-    depth_limit = r_u32(0x800B6A08u);
-    remaining = (uint32)count;
-    do
-    {
-        SVECTOR vertices[3];
-        SVECTOR fourth;
-        SVECTOR normal;
-        sint32 screen[4];
-        sint32 depth[4];
-        sint32 flags;
-        sint32 average;
-        sint32 current_cross;
-        uint32 color;
-
-        memcpy(vertices, psx_addr(faces, sizeof(vertices)), sizeof(vertices));
-        gte_project3_full_depth(vertices, screen, depth, &flags);
-        average = (sint32)((uint32)previous_average + r_u32(0x800B69F0u));
-        if (previous_cross > 0 && (uint32)average < depth_limit)
-        {
-            uint32 bucket = ordering_table + (uint32)average * 4u;
-
-            w_u32(packet, r_u32(bucket) | 0x05000000u);
-            w_u32(bucket, packet);
-            packet += 24u;
-        }
-        current_cross = NormalClip(screen[0], screen[1], screen[2]);
-        if (current_cross > 0)
-        {
-            w_u32(packet + 8u, (uint32)screen[0]);
-            w_u32(packet + 12u, (uint32)screen[1]);
-            w_u32(packet + 16u, (uint32)screen[2]);
-            memcpy(&fourth, psx_addr(faces + 24u, sizeof(fourth)), sizeof(fourth));
-            depth[3] = gte_project_full_depth(&fourth, &screen[3], &flags);
-            w_u32(packet + 20u, (uint32)screen[3]);
-            memcpy(&normal, psx_addr(faces + 32u, sizeof(normal)), sizeof(normal));
-            color = r_u32(faces + 40u);
-            color = gte_normal_color_col(&normal, color);
-            w_u32(packet + 4u, color);
-            previous_average = AverageZ4(depth[0], depth[1], depth[2], depth[3]);
-        }
-        previous_cross = current_cross;
-        faces += 44u;
-    } while (--remaining != 0u);
-    {
-        sint32 average = (sint32)((uint32)previous_average + r_u32(0x800B69F0u));
-
-        if (previous_cross > 0 && (uint32)average < depth_limit)
-        {
-            uint32 bucket = ordering_table + (uint32)average * 4u;
-
-            w_u32(packet, r_u32(bucket) | 0x05000000u);
-            w_u32(bucket, packet);
-            packet += 24u;
-        }
-    }
-    w_u32(0x800B6C00u, packet);
-}
-
-void mesh_render_tri_flat_lit_tex(uint32 faces, sint32 count)
-{
-    uint32 packet;
-    uint32 ordering_table;
-    uint32 depth_limit;
-    uint32 remaining;
-    sint32 previous_cross = -1;
-    sint32 previous_average = 0;
-
-    FUNCTION_MARKER(0x8001CA10u, "MAIN.EXE");
-    if (count == 0)
-        return;
-    packet = r_u32(0x800B6C00u) & 0xFFFFFFu;
-    ordering_table = r_u32(0x800B6AB4u);
-    depth_limit = r_u32(0x800B6A08u);
-    remaining = (uint32)count;
-    do
-    {
-        SVECTOR vertices[3];
-        SVECTOR normal;
-        sint32 screen[3];
-        sint32 depth[3];
-        sint32 flags;
-        sint32 average;
-        sint32 current_cross;
-        uint32 color;
-        uint32 texture;
-        uint16 texture_high;
-        uint16 texture_low;
-
-        memcpy(vertices, psx_addr(faces, sizeof(vertices)), sizeof(vertices));
-        gte_project3_full_depth(vertices, screen, depth, &flags);
-        average = (sint32)((uint32)previous_average + r_u32(0x800B69F0u));
-        if (previous_cross > 0 && (uint32)average < depth_limit)
-        {
-            uint32 bucket = ordering_table + (uint32)average * 4u;
-
-            w_u32(packet, r_u32(bucket) | 0x07000000u);
-            w_u32(bucket, packet);
-            packet += 32u;
-        }
-        current_cross = NormalClip(screen[0], screen[1], screen[2]);
-        if (current_cross > 0)
-        {
-            w_u32(packet + 8u, (uint32)screen[0]);
-            w_u32(packet + 16u, (uint32)screen[1]);
-            w_u32(packet + 24u, (uint32)screen[2]);
-            memcpy(&normal, psx_addr(faces + 24u, sizeof(normal)), sizeof(normal));
-            color = r_u32(faces + 36u);
-            color = gte_normal_color_col(&normal, color);
-            texture_high = r_u16(faces + 34u);
-            texture_low = r_u16(faces + 6u);
-            texture = (uint32)texture_low | ((uint32)texture_high << 16);
-            w_u32(packet + 12u, texture);
-            texture_high = r_u16(faces + 32u);
-            texture_low = r_u16(faces + 14u);
-            texture = (uint32)texture_low | ((uint32)texture_high << 16);
-            w_u32(packet + 20u, texture);
-            w_u16(packet + 28u, r_u16(faces + 22u));
-            w_u32(packet + 4u, color);
-            previous_average = AverageZ3(depth[0], depth[1], depth[2]);
-        }
-        previous_cross = current_cross;
-        faces += 40u;
-    } while (--remaining != 0u);
-    {
-        sint32 average = (sint32)((uint32)previous_average + r_u32(0x800B69F0u));
-
-        if (previous_cross > 0 && (uint32)average < depth_limit)
-        {
-            uint32 bucket = ordering_table + (uint32)average * 4u;
-
-            w_u32(packet, r_u32(bucket) | 0x07000000u);
-            w_u32(bucket, packet);
-            packet += 32u;
-        }
-    }
-    w_u32(0x800B6C00u, packet);
-}
-
-void mesh_render_quad_flat_lit_tex(uint32 faces, sint32 count)
-{
-    uint32 packet;
-    uint32 ordering_table;
-    uint32 depth_limit;
-    uint32 remaining;
-    sint32 previous_cross = -1;
-    sint32 previous_average = 0;
-
-    FUNCTION_MARKER(0x8001CBDCu, "MAIN.EXE");
-    if (count == 0)
-        return;
-    packet = r_u32(0x800B6C00u) & 0xFFFFFFu;
-    ordering_table = r_u32(0x800B6AB4u);
-    depth_limit = r_u32(0x800B6A08u);
-    remaining = (uint32)count;
-    do
-    {
-        SVECTOR vertices[3];
-        SVECTOR fourth;
-        SVECTOR normal;
-        sint32 screen[4];
-        sint32 depth[4];
-        sint32 flags;
-        sint32 average;
-        sint32 current_cross;
-        uint32 color;
-        uint32 texture;
-        uint16 texture_high;
-        uint16 texture_low;
-
-        memcpy(vertices, psx_addr(faces, sizeof(vertices)), sizeof(vertices));
-        gte_project3_full_depth(vertices, screen, depth, &flags);
-        average = (sint32)((uint32)previous_average + r_u32(0x800B69F0u));
-        if (previous_cross > 0 && (uint32)average < depth_limit)
-        {
-            uint32 bucket = ordering_table + (uint32)average * 4u;
-
-            w_u32(packet, r_u32(bucket) | 0x09000000u);
-            w_u32(bucket, packet);
-            packet += 40u;
-        }
-        current_cross = NormalClip(screen[0], screen[1], screen[2]);
-        if (current_cross > 0)
-        {
-            w_u32(packet + 8u, (uint32)screen[0]);
-            w_u32(packet + 16u, (uint32)screen[1]);
-            w_u32(packet + 24u, (uint32)screen[2]);
-            memcpy(&fourth, psx_addr(faces + 24u, sizeof(fourth)), sizeof(fourth));
-            depth[3] = gte_project_full_depth(&fourth, &screen[3], &flags);
-            w_u32(packet + 32u, (uint32)screen[3]);
-            memcpy(&normal, psx_addr(faces + 32u, sizeof(normal)), sizeof(normal));
-            color = r_u32(faces + 44u);
-            color = gte_normal_color_col(&normal, color);
-            texture_high = r_u16(faces + 42u);
-            texture_low = r_u16(faces + 6u);
-            texture = (uint32)texture_low | ((uint32)texture_high << 16);
-            w_u32(packet + 12u, texture);
-            texture_high = r_u16(faces + 40u);
-            texture_low = r_u16(faces + 14u);
-            texture = (uint32)texture_low | ((uint32)texture_high << 16);
-            w_u32(packet + 20u, texture);
-            w_u16(packet + 28u, r_u16(faces + 22u));
-            w_u16(packet + 36u, r_u16(faces + 30u));
-            w_u32(packet + 4u, color);
-            previous_average = AverageZ4(depth[0], depth[1], depth[2], depth[3]);
-        }
-        previous_cross = current_cross;
-        faces += 48u;
-    } while (--remaining != 0u);
-    {
-        sint32 average = (sint32)((uint32)previous_average + r_u32(0x800B69F0u));
-
-        if (previous_cross > 0 && (uint32)average < depth_limit)
-        {
-            uint32 bucket = ordering_table + (uint32)average * 4u;
-
-            w_u32(packet, r_u32(bucket) | 0x09000000u);
-            w_u32(bucket, packet);
-            packet += 40u;
-        }
-    }
-    w_u32(0x800B6C00u, packet);
-}
-
-void mesh_render_tri_gouraud_lit(uint32 faces, sint32 count)
-{
-    uint32 packet;
-    uint32 ordering_table;
-    uint32 depth_limit;
-    uint32 remaining;
-    sint32 previous_cross = -1;
-    sint32 previous_average = 0;
-
-    FUNCTION_MARKER(0x8001CDD4u, "MAIN.EXE");
-    if (count == 0)
-        return;
-    packet = r_u32(0x800B6C00u) & 0xFFFFFFu;
-    ordering_table = r_u32(0x800B6AB4u);
-    depth_limit = r_u32(0x800B6A08u);
-    remaining = (uint32)count;
-    do
-    {
-        SVECTOR vertices[3];
-        SVECTOR normal;
-        sint32 screen[3];
-        sint32 depth[3];
-        sint32 flags;
-        sint32 average;
-        sint32 current_cross;
-        uint32 color;
-
-        memcpy(vertices, psx_addr(faces, sizeof(vertices)), sizeof(vertices));
-        gte_project3_full_depth(vertices, screen, depth, &flags);
-        average = (sint32)((uint32)previous_average + r_u32(0x800B69F0u));
-        if (previous_cross > 0 && (uint32)average < depth_limit)
-        {
-            uint32 bucket = ordering_table + (uint32)average * 4u;
-
-            w_u32(packet, r_u32(bucket) | 0x06000000u);
-            w_u32(bucket, packet);
-            packet += 28u;
-        }
-        current_cross = NormalClip(screen[0], screen[1], screen[2]);
-        if (current_cross > 0)
-        {
-            sint32 vertex;
-
-            w_u32(packet + 8u, (uint32)screen[0]);
-            w_u32(packet + 16u, (uint32)screen[1]);
-            w_u32(packet + 24u, (uint32)screen[2]);
-            for (vertex = 0; vertex < 3; ++vertex)
-            {
-                memcpy(&normal, psx_addr(faces + 24u + (uint32)vertex * 8u, sizeof(normal)), sizeof(normal));
-                color = r_u32(faces + 48u + (uint32)vertex * 4u);
-                color = mesh_color_eval(&normal, color, (uint32)vertex);
-                w_u32(packet + 4u + (uint32)vertex * 8u, color);
-            }
-            previous_average = AverageZ3(depth[0], depth[1], depth[2]);
-        }
-        previous_cross = current_cross;
-        faces += 60u;
-    } while (--remaining != 0u);
-    {
-        sint32 average = (sint32)((uint32)previous_average + r_u32(0x800B69F0u));
-
-        if (previous_cross > 0 && (uint32)average < depth_limit)
-        {
-            uint32 bucket = ordering_table + (uint32)average * 4u;
-
-            w_u32(packet, r_u32(bucket) | 0x06000000u);
-            w_u32(bucket, packet);
-            packet += 28u;
-        }
-    }
-    w_u32(0x800B6C00u, packet);
-}
-
-void mesh_render_quad_gouraud_lit(uint32 faces, sint32 count)
-{
-    uint32 packet;
-    uint32 ordering_table;
-    uint32 depth_limit;
-    uint32 remaining;
-    sint32 previous_cross = -1;
-    sint32 previous_average = 0;
-
-    FUNCTION_MARKER(0x8001CFACu, "MAIN.EXE");
-    if (count == 0)
-        return;
-    packet = r_u32(0x800B6C00u) & 0xFFFFFFu;
-    ordering_table = r_u32(0x800B6AB4u);
-    depth_limit = r_u32(0x800B6A08u);
-    remaining = (uint32)count;
-    do
-    {
-        SVECTOR vertices[3];
-        SVECTOR fourth;
-        SVECTOR normal;
-        sint32 screen[4];
-        sint32 depth[4];
-        sint32 flags;
-        sint32 average;
-        sint32 current_cross;
-        uint32 color;
-
-        memcpy(vertices, psx_addr(faces, sizeof(vertices)), sizeof(vertices));
-        gte_project3_full_depth(vertices, screen, depth, &flags);
-        average = (sint32)((uint32)previous_average + r_u32(0x800B69F0u));
-        if (previous_cross > 0 && (uint32)average < depth_limit)
-        {
-            uint32 bucket = ordering_table + (uint32)average * 4u;
-
-            w_u32(packet, r_u32(bucket) | 0x08000000u);
-            w_u32(bucket, packet);
-            packet += 36u;
-        }
-        current_cross = NormalClip(screen[0], screen[1], screen[2]);
-        if (current_cross > 0)
-        {
-            sint32 vertex;
-
-            w_u32(packet + 8u, (uint32)screen[0]);
-            w_u32(packet + 16u, (uint32)screen[1]);
-            w_u32(packet + 24u, (uint32)screen[2]);
-            memcpy(&fourth, psx_addr(faces + 24u, sizeof(fourth)), sizeof(fourth));
-            depth[3] = gte_project_full_depth(&fourth, &screen[3], &flags);
-            w_u32(packet + 32u, (uint32)screen[3]);
-            for (vertex = 0; vertex < 4; ++vertex)
-            {
-                memcpy(&normal, psx_addr(faces + 32u + (uint32)vertex * 8u, sizeof(normal)), sizeof(normal));
-                color = r_u32(faces + 64u + (uint32)vertex * 4u);
-                color = mesh_color_eval(&normal, color, (uint32)vertex);
-                w_u32(packet + 4u + (uint32)vertex * 8u, color);
-            }
-            previous_average = AverageZ4(depth[0], depth[1], depth[2], depth[3]);
-        }
-        previous_cross = current_cross;
-        faces += 80u;
-    } while (--remaining != 0u);
-    {
-        sint32 average = (sint32)((uint32)previous_average + r_u32(0x800B69F0u));
-
-        if (previous_cross > 0 && (uint32)average < depth_limit)
-        {
-            uint32 bucket = ordering_table + (uint32)average * 4u;
-
-            w_u32(packet, r_u32(bucket) | 0x08000000u);
-            w_u32(bucket, packet);
-            packet += 36u;
-        }
-    }
-    w_u32(0x800B6C00u, packet);
-}
-
-void mesh_render_tri_gouraud_lit_tex(uint32 faces, sint32 count)
-{
-    uint32 packet;
-    uint32 ordering_table;
-    uint32 depth_limit;
-    uint32 remaining;
-    sint32 previous_cross = -1;
-    sint32 previous_average = 0;
-
-    FUNCTION_MARKER(0x8001D1CCu, "MAIN.EXE");
-    if (count == 0)
-        return;
-    packet = r_u32(0x800B6C00u) & 0xFFFFFFu;
-    ordering_table = r_u32(0x800B6AB4u);
-    depth_limit = r_u32(0x800B6A08u);
-    remaining = (uint32)count;
-    do
-    {
-        SVECTOR vertices[3];
-        SVECTOR normals[3];
-        sint32 screen[3];
-        sint32 depth[3];
-        sint32 flags;
-        sint32 average;
-        sint32 current_cross;
-        uint32 colors[3];
-        uint32 source_color;
-        uint32 texture;
-        uint16 texture_high;
-        uint16 texture_low;
-
-        memcpy(vertices, psx_addr(faces, sizeof(vertices)), sizeof(vertices));
-        gte_project3_full_depth(vertices, screen, depth, &flags);
-        average = (sint32)((uint32)previous_average + r_u32(0x800B69F0u));
-        if (previous_cross > 0 && (uint32)average < depth_limit)
-        {
-            uint32 bucket = ordering_table + (uint32)average * 4u;
-
-            w_u32(packet, r_u32(bucket) | 0x09000000u);
-            w_u32(bucket, packet);
-            packet += 40u;
-        }
-        current_cross = NormalClip(screen[0], screen[1], screen[2]);
-        if (current_cross > 0)
-        {
-            w_u32(packet + 8u, (uint32)screen[0]);
-            w_u32(packet + 20u, (uint32)screen[1]);
-            w_u32(packet + 32u, (uint32)screen[2]);
-            memcpy(normals, psx_addr(faces + 24u, sizeof(normals)), sizeof(normals));
-            source_color = r_u32(faces + 52u);
-            mesh_color_eval3(normals, source_color, colors);
-            texture_high = r_u16(faces + 50u);
-            texture_low = r_u16(faces + 6u);
-            texture = (uint32)texture_low | ((uint32)texture_high << 16);
-            w_u32(packet + 12u, texture);
-            texture_high = r_u16(faces + 48u);
-            texture_low = r_u16(faces + 14u);
-            texture = (uint32)texture_low | ((uint32)texture_high << 16);
-            w_u32(packet + 24u, texture);
-            w_u16(packet + 36u, r_u16(faces + 22u));
-            w_u32(packet + 4u, colors[0]);
-            w_u32(packet + 16u, colors[1]);
-            w_u32(packet + 28u, colors[2]);
-            previous_average = AverageZ3(depth[0], depth[1], depth[2]);
-        }
-        previous_cross = current_cross;
-        faces += 64u;
-    } while (--remaining != 0u);
-    {
-        sint32 average = (sint32)((uint32)previous_average + r_u32(0x800B69F0u));
-
-        if (previous_cross > 0 && (uint32)average < depth_limit)
-        {
-            uint32 bucket = ordering_table + (uint32)average * 4u;
-
-            w_u32(packet, r_u32(bucket) | 0x09000000u);
-            w_u32(bucket, packet);
-            packet += 40u;
-        }
-    }
-    w_u32(0x800B6C00u, packet);
-}
-
-void mesh_render_quad_gouraud_lit_tex(uint32 faces, sint32 count)
-{
-    uint32 packet;
-    uint32 ordering_table;
-    uint32 depth_limit;
-    uint32 remaining;
-    sint32 previous_cross = -1;
-    sint32 previous_average = 0;
-
-    FUNCTION_MARKER(0x8001D3B0u, "MAIN.EXE");
-    if (count == 0)
-        return;
-    packet = r_u32(0x800B6C00u) & 0xFFFFFFu;
-    ordering_table = r_u32(0x800B6AB4u);
-    depth_limit = r_u32(0x800B6A08u);
-    remaining = (uint32)count;
-    do
-    {
-        SVECTOR vertices[3];
-        SVECTOR fourth;
-        SVECTOR normals[3];
-        SVECTOR fourth_normal;
-        sint32 screen[4];
-        sint32 depth[4];
-        sint32 flags;
-        sint32 average;
-        sint32 current_cross;
-        uint32 colors[4];
-        uint32 source_color;
-        uint32 texture;
-        uint16 texture_high;
-        uint16 texture_low;
-
-        memcpy(vertices, psx_addr(faces, sizeof(vertices)), sizeof(vertices));
-        gte_project3_full_depth(vertices, screen, depth, &flags);
-        average = (sint32)((uint32)previous_average + r_u32(0x800B69F0u));
-        if (previous_cross > 0 && (uint32)average < depth_limit)
-        {
-            uint32 bucket = ordering_table + (uint32)average * 4u;
-
-            w_u32(packet, r_u32(bucket) | 0x0C000000u);
-            w_u32(bucket, packet);
-            packet += 52u;
-        }
-        current_cross = NormalClip(screen[0], screen[1], screen[2]);
-        if (current_cross > 0)
-        {
-            w_u32(packet + 8u, (uint32)screen[0]);
-            w_u32(packet + 20u, (uint32)screen[1]);
-            w_u32(packet + 32u, (uint32)screen[2]);
-            memcpy(&fourth, psx_addr(faces + 24u, sizeof(fourth)), sizeof(fourth));
-            depth[3] = gte_project_full_depth(&fourth, &screen[3], &flags);
-            w_u32(packet + 44u, (uint32)screen[3]);
-            memcpy(normals, psx_addr(faces + 32u, sizeof(normals)), sizeof(normals));
-            source_color = r_u32(faces + 68u);
-            mesh_color_eval3(normals, source_color, colors);
-            texture_high = r_u16(faces + 66u);
-            texture_low = r_u16(faces + 6u);
-            texture = (uint32)texture_low | ((uint32)texture_high << 16);
-            w_u32(packet + 12u, texture);
-            texture_high = r_u16(faces + 64u);
-            texture_low = r_u16(faces + 14u);
-            texture = (uint32)texture_low | ((uint32)texture_high << 16);
-            w_u32(packet + 24u, texture);
-            w_u16(packet + 36u, r_u16(faces + 22u));
-            w_u16(packet + 48u, r_u16(faces + 30u));
-            w_u32(packet + 4u, colors[0]);
-            w_u32(packet + 16u, colors[1]);
-            w_u32(packet + 28u, colors[2]);
-            memcpy(&fourth_normal, psx_addr(faces + 56u, sizeof(fourth_normal)), sizeof(fourth_normal));
-            colors[3] = mesh_color_eval(&fourth_normal, source_color, 3u);
-            w_u32(packet + 40u, colors[3]);
-            previous_average = AverageZ4(depth[0], depth[1], depth[2], depth[3]);
-        }
-        previous_cross = current_cross;
-        faces += 84u;
-    } while (--remaining != 0u);
-    {
-        sint32 average = (sint32)((uint32)previous_average + r_u32(0x800B69F0u));
-
-        if (previous_cross > 0 && (uint32)average < depth_limit)
-        {
-            uint32 bucket = ordering_table + (uint32)average * 4u;
-
-            w_u32(packet, r_u32(bucket) | 0x0C000000u);
-            w_u32(bucket, packet);
-            packet += 52u;
-        }
-    }
-    w_u32(0x800B6C00u, packet);
-}
-
-void mesh_dispatch_renderers(uint32 first, uint32 second, uint32 groups)
-{
-    uint32 faces;
-    sint32 count;
-
-    FUNCTION_MARKER(0x8001D5D8u, "MAIN.EXE");
-    render_set_order_depth(first, second);
-    faces = r_u32(groups + 32u);
-    count = (sint32)r_u32(groups);
-    mesh_render_tri_flat_lit(faces, count);
-    faces = r_u32(groups + 36u);
-    count = (sint32)r_u32(groups + 4u);
-    mesh_render_quad_flat_lit(faces, count);
-    faces = r_u32(groups + 40u);
-    count = (sint32)r_u32(groups + 8u);
-    mesh_render_tri_flat_lit_tex(faces, count);
-    faces = r_u32(groups + 44u);
-    count = (sint32)r_u32(groups + 12u);
-    mesh_render_quad_flat_lit_tex(faces, count);
-    faces = r_u32(groups + 48u);
-    count = (sint32)r_u32(groups + 16u);
-    mesh_render_tri_gouraud_lit(faces, count);
-    faces = r_u32(groups + 52u);
-    count = (sint32)r_u32(groups + 20u);
-    mesh_render_quad_gouraud_lit(faces, count);
-    faces = r_u32(groups + 56u);
-    count = (sint32)r_u32(groups + 24u);
-    mesh_render_tri_gouraud_lit_tex(faces, count);
-    faces = r_u32(groups + 60u);
-    count = (sint32)r_u32(groups + 28u);
-    mesh_render_quad_gouraud_lit_tex(faces, count);
-}
-
-void mesh_render_quad_faces(uint32 faces, sint32 count, uint32 stride)
-{
-    uint32 packet = r_u32(0x800B6C00u) & 0xFFFFFFu;
-    uint32 ordering_table = r_u32(0x800B6AB4u);
-    uint32 depth_limit = r_u32(0x800B6A08u);
-    sint32 index;
-
-    FUNCTION_MARKER(0x8001D680u, "MAIN.EXE");
-    for (index = 0; index < count; ++index, faces += stride)
-    {
-        sint32 screen[4];
-        sint32 depth[4];
-        sint32 flags;
-        sint32 cross;
-        sint32 average;
-        uint32 bucket;
-        sint32 vertex;
-
-        for (vertex = 0; vertex < 4; ++vertex)
-            depth[vertex] = gte_project((SVECTOR *)psx_addr(faces + (uint32)vertex * 8u, sizeof(SVECTOR)), &screen[vertex], &flags);
-        cross = NormalClip(screen[0], screen[1], screen[2]);
-        average = AverageZ4(depth[0], depth[1], depth[2], depth[3]) + (sint32)r_u32(0x800B69F0u);
-        if ((uint32)average >= depth_limit)
-            continue;
-        bucket = ordering_table + (uint32)average * 4u;
-        w_u32(packet, r_u32(bucket) | 0x07000000u);
-        w_u32(bucket, packet);
-        w_u32(packet + 4u, cross > 0 ? 0x4CE8D0D0u : 0x4CA89090u);
-        w_u32(packet + 8u, (uint32)screen[0]);
-        w_u32(packet + 12u, (uint32)screen[1]);
-        w_u32(packet + 16u, (uint32)screen[3]);
-        w_u32(packet + 20u, (uint32)screen[2]);
-        w_u32(packet + 24u, (uint32)screen[0]);
-        w_u32(packet + 28u, 0x55555555u);
-        packet += 32u;
-    }
-    w_u32(0x800B6C00u, packet);
-}
-
-void mesh_render_tri_faces(uint32 faces, sint32 count, uint32 stride)
-{
-    uint32 packet = r_u32(0x800B6C00u) & 0xFFFFFFu;
-    uint32 ordering_table = r_u32(0x800B6AB4u);
-    uint32 depth_limit = r_u32(0x800B6A08u);
-    sint32 index;
-
-    FUNCTION_MARKER(0x8001D840u, "MAIN.EXE");
-    for (index = 0; index < count; ++index, faces += stride)
-    {
-        sint32 screen[3];
-        sint32 depth[3];
-        sint32 flags;
-        sint32 cross;
-        sint32 average;
-        uint32 bucket;
-        sint32 vertex;
-
-        for (vertex = 0; vertex < 3; ++vertex)
-            depth[vertex] = gte_project((SVECTOR *)psx_addr(faces + (uint32)vertex * 8u, sizeof(SVECTOR)), &screen[vertex], &flags);
-        cross = NormalClip(screen[0], screen[1], screen[2]);
-        average = AverageZ3(depth[0], depth[1], depth[2]) + (sint32)r_u32(0x800B69F0u);
-        if ((uint32)average >= depth_limit)
-            continue;
-        bucket = ordering_table + (uint32)average * 4u;
-        w_u32(packet, r_u32(bucket) | 0x06000000u);
-        w_u32(bucket, packet);
-        w_u32(packet + 4u, cross > 0 ? 0x4CE8D0D0u : 0x4CA89090u);
-        w_u32(packet + 8u, (uint32)screen[0]);
-        w_u32(packet + 12u, (uint32)screen[1]);
-        w_u32(packet + 16u, (uint32)screen[2]);
-        w_u32(packet + 20u, (uint32)screen[0]);
-        w_u32(packet + 24u, 0x55555555u);
-        packet += 28u;
-    }
-    w_u32(0x800B6C00u, packet);
-}
-
-void mesh_dispatch_face_render_groups(uint32 first, uint32 second, uint32 groups)
-{
-    FUNCTION_MARKER(0x8001D9ECu, "MAIN.EXE");
-    render_set_order_depth(first, second);
-    mesh_render_tri_faces(r_u32(groups + 32u), (sint32)r_u32(groups), 36u);
-    mesh_render_quad_faces(r_u32(groups + 36u), (sint32)r_u32(groups + 4u), 44u);
-    mesh_render_tri_faces(r_u32(groups + 40u), (sint32)r_u32(groups + 8u), 40u);
-    mesh_render_quad_faces(r_u32(groups + 44u), (sint32)r_u32(groups + 12u), 48u);
-    mesh_render_tri_faces(r_u32(groups + 48u), (sint32)r_u32(groups + 16u), 60u);
-    mesh_render_quad_faces(r_u32(groups + 52u), (sint32)r_u32(groups + 20u), 80u);
-    mesh_render_tri_faces(r_u32(groups + 56u), (sint32)r_u32(groups + 24u), 64u);
-    mesh_render_quad_faces(r_u32(groups + 60u), (sint32)r_u32(groups + 28u), 84u);
-}
-
-sint32 mesh_face_groups_project(uint32 descriptor)
-{
-    uint32 count;
-    uint32 face;
-
-    FUNCTION_MARKER(0x800329A8u, "MAIN.EXE");
-    count = r_u32(descriptor + 8u);
-    if (count != 0u)
-    {
-        face = r_u32(descriptor + 40u);
-        do
-        {
-            sint32 screen_xy[3];
-            sint32 shade[3];
-            sint32 flags;
-            sint32 vertex;
-
-            gte_project3_full_depth((SVECTOR *)psx_addr(face, 3u * sizeof(SVECTOR)), screen_xy, shade, &flags);
-            w_u32(face + 36u, r_u32(face + 36u) | 0x02000000u);
-            for (vertex = 0; vertex < 3; ++vertex)
-            {
-                if (shade[vertex] < 0)
-                    shade[vertex] = 0;
-                if (shade[vertex] > 63)
-                    shade[vertex] = 63;
-                w_u16(face + (uint32)vertex * 8u + 6u, (uint16)((shade[vertex] << 8) | 0x80));
-            }
-            face += 40u;
-        } while (--count != 0u);
-    }
-    count = r_u32(descriptor + 12u);
-    if (count != 0u)
-    {
-        face = r_u32(descriptor + 44u);
-        do
-        {
-            sint32 screen_xy[3];
-            sint32 shade[4];
-            sint32 flags;
-            sint32 vertex;
-
-            gte_project3_full_depth((SVECTOR *)psx_addr(face, 3u * sizeof(SVECTOR)), screen_xy, shade, &flags);
-            w_u32(face + 44u, r_u32(face + 44u) | 0x02000000u);
-            shade[3] = gte_project_full_depth((SVECTOR *)psx_addr(face + 24u, sizeof(SVECTOR)), 0, &flags);
-            for (vertex = 0; vertex < 4; ++vertex)
-            {
-                if (shade[vertex] < 0)
-                    shade[vertex] = 0;
-                if (shade[vertex] > 63)
-                    shade[vertex] = 63;
-            }
-            w_u16(face + 6u, (uint16)((shade[0] << 8) | 0x80));
-            w_u16(face + 14u, (uint16)((shade[1] << 8) | 0x80));
-            w_u16(face + 30u, (uint16)((shade[3] << 8) | 0x80));
-            w_u16(face + 22u, (uint16)((shade[2] << 8) | 0x80));
-            face += 48u;
-        } while (--count != 0u);
-    }
-    return -1;
-}
-
-uint32 mesh_prepare_player_ot_packet(uint32 state, sint32 player)
-{
-    uint32 cursor = r_u32(0x800B682Cu);
-    uint32 next = cursor + 1u;
-    uint32 packet = 0x800C39D0u + (uint32)player * 13600u + cursor * 400u;
-    uint32 chain = state + (uint32)player * 1784u + 1744u;
-
     FUNCTION_MARKER(0x80033028u, "MAIN.EXE");
-    w_u32(0x800B682Cu, next);
-    if (next == 34u)
-        w_u32(0x800B682Cu, 0u);
-    ClearOTagR(psx_addr(packet, 400u), 100);
-    w_u32(packet, r_u32(chain));
-    w_u32(chain, (packet + 396u) & 0xFFFFFFu);
-    return packet;
+    if ((uint32)player >= MESH_OT_BUFFERS)
+        abort();
+    return mesh_alloc_ot(player, render_scene_ot(render_frame(camera_for_view(state), player)) + 2);
 }
 
 sint32 mesh_vis_vert_project(const BOAT *boat)
@@ -1040,41 +251,30 @@ sint32 mesh_vis_vert_project(const BOAT *boat)
     if (edge < 0)
         return 0;
     edge = (sint32)((uint32)screen_x - (uint32)radius);
-    if ((sint32)r_u32(0x800B3DF8u) < edge)
+    if ((sint32)display_state.scene_width < edge)
         return 0;
     edge = (sint32)((uint32)screen_y + (uint32)radius);
     if (edge < 0)
         return 0;
     edge = (sint32)((uint32)screen_y - (uint32)radius);
-    if ((sint32)r_u32(0x800B3DFCu) < edge)
+    if ((sint32)display_state.scene_height < edge)
         return 0;
     return (sint32)((uint32)(sint32)(sint16)transformed.vz + 240u) >= 0;
 }
 
-uint32 mesh_prepare_racer_ot_packet(uint32 state, uint32 bucket, sint32 player)
+uint32 *mesh_prepare_racer_ot_packet(uint32 state, uint32 bucket, sint32 player)
 {
-    uint32 cursor;
-    uint32 packet;
-    uint32 chain;
-
     FUNCTION_MARKER(0x800331F0u, "MAIN.EXE");
     if (bucket >= 250u)
-        return 0u;
-    cursor = r_u32(0x800B682Cu);
-    packet = 0x800C39D0u + (uint32)player * 13600u + cursor * 400u;
-    w_u32(0x800B682Cu, cursor + 1u);
-    if (cursor + 1u == 34u)
-        w_u32(0x800B682Cu, 0u);
-    chain = state + (uint32)player * 1784u + 328u + bucket * 4u;
-    ClearOTagR(psx_addr(packet, 400u), 100);
-    w_u32(packet, r_u32(chain));
-    w_u32(chain, (packet + 396u) & 0xFFFFFFu);
-    return packet;
+        return NULL;
+    if ((uint32)player >= MESH_OT_BUFFERS)
+        abort();
+    return mesh_alloc_ot(player, render_route_ot(render_frame(camera_for_view(state), player)) + bucket);
 }
 
 sint32 route_segment_is_in_window(uint32 entry, sint32 offset)
 {
-    uint32 descriptor;
+    const ROUTE_SEGMENT *seg;
     sint32 count;
     sint32 current;
     sint32 target;
@@ -1085,11 +285,11 @@ sint32 route_segment_is_in_window(uint32 entry, sint32 offset)
     sint32 direction;
 
     FUNCTION_MARKER(0x800332DCu, "MAIN.EXE");
-    descriptor = camera_for_view(entry)->route;
-    current = (sint32)((uint32)r_u16(descriptor) - 1u);
+    seg = camera_for_view(entry)->route;
+    current = (sint32)((uint32)seg->next.idx - 1u);
     if (current < 0)
-        current = (sint32)((uint32)r_u16(descriptor + 2u) + 1u);
-    count = (sint32)r_u32(0x800B6A98u);
+        current = (sint32)((uint32)seg->prev.idx + 1u);
+    count = (sint32)route_resources.count;
     target = math_rem_s32(offset, count);
     if (target < 0)
         target = (sint32)((uint32)target + (uint32)count);
@@ -1141,26 +341,10 @@ sint32 mesh_order_bucket(uint32 first, const sint32 position[3], sint16 *host_de
     return depth >= 0 ? depth >> 5 : 0;
 }
 
-sint32 mesh_calc_order_bucket(uint32 view, const BOAT *boat, uint32 output, sint16 *host_depth)
-{
-    const sint32 *position = boat->motion.position;
-    sint16 depth;
-    sint32 visible;
-    sint32 result = mesh_order_bucket(view, position, &depth, &visible);
-    if (visible)
-    {
-        if (host_depth)
-            *host_depth = depth;
-        else
-            w_u16(output, (uint16)depth);
-    }
-    return result;
-}
-
 void mesh_render_racer_model(uint32 view, sint32 player)
 {
     BOAT *candidates[32];
-    uint32 orderings[32];
+    uint32 *orderings[32];
     uint16 buckets[32];
     sint16 sort_depths[32];
     sint32 count = 0;
@@ -1170,22 +354,22 @@ void mesh_render_racer_model(uint32 view, sint32 player)
 
     FUNCTION_MARKER_ARGS(0x8003347Cu, "MAIN.EXE", XPORT_CALL_VALUE_VOID, 2u, XPORT_CALL_GUEST_POINTER(view, 1u), XPORT_CALL_SCALAR((uint32)player));
 #if defined(_DEBUG) && defined(_WIN32)
-    if (player == 0 && (GetAsyncKeyState(VK_F8) & 1))
+    if (player == 0 && (GetAsyncKeyState(MESH_PROBE_KEY_F8) & 1))
         mesh_color_probe_armed = 1u;
 #endif
-    if (r_u32(0x800B6988u) == 0u)
+    if (mesh_render_state.enabled == 0u)
         return;
     if ((sint32)(uint32)vehicle_player(view)->contacts.points[0].height <= 0)
     {
-        w_u32(0x800B698Cu, 0u);
-        w_u32(0x800B6990u, 0u);
+        mesh_render_state.rand_bit = 0u;
+        mesh_render_state.rand_pair = 0u;
     }
     else
     {
-        w_u32(0x800B698Cu, (uint32)(global_fn_8006e9d8() & 1));
-        w_u32(0x800B6990u, (uint32)(global_fn_8006e9d8() & 3));
+        mesh_render_state.rand_bit = (uint32)(global_fn_8006e9d8() & 1);
+        mesh_render_state.rand_pair = (uint32)(global_fn_8006e9d8() & 3);
     }
-    camera_bias(camera_for_view(view), 0x800843D4u);
+    camera_bias_matrix(camera_for_view(view), &camera_identity, 1);
     for (index = 0; index < (sint32)vehicle_racer_count; ++index)
     {
         BOAT *racer = vehicle_racers[index];
@@ -1220,7 +404,7 @@ void mesh_render_racer_model(uint32 view, sint32 player)
                 racer->trail.phase = 0u;
             continue;
         }
-        depth = (uint32)mesh_calc_order_bucket(view, racer, 0u, &sort_depth);
+        depth = (uint32)mesh_order_bucket(view, racer->motion.position, &sort_depth, NULL);
         if (depth < 250u)
         {
             candidates[count] = racer;
@@ -1299,7 +483,7 @@ void mesh_render_racer_model(uint32 view, sint32 player)
     for (index = count - 1; index >= 0; --index)
     {
         BOAT *racer = candidates[index];
-        uint32 descriptor;
+        MESH_MODEL *desc;
         uint32 model;
         uint32 view_index;
 
@@ -1308,10 +492,10 @@ void mesh_render_racer_model(uint32 view, sint32 player)
         carried_boat = racer;
         SetRotMatrix(&racer->contacts.ground);
         SetTransMatrix(&racer->contacts.ground);
-        view_index = r_u32(view + 4u);
+        view_index = (uint32)(camera_for_view(view) - camera_views);
         model = racer->model_slot;
-        descriptor = r_u32(0x80101788u + view_index * 64u + model * 4u);
-        mesh_face_groups_project(descriptor);
+        desc = &mesh_boat_models[view_index][model].main;
+        mesh_project_model(desc);
     }
     for (index = count - 1; index >= 0; --index)
     {
@@ -1320,13 +504,12 @@ void mesh_render_racer_model(uint32 view, sint32 player)
         if (racer->trail.phase != 2u)
             continue;
         carried_boat = racer;
-        w_u32(0x800843E8u, (uint32)racer->trail.origin[0]);
-        w_u32(0x800843ECu, (uint32)racer->trail.origin[1]);
-        w_u32(0x800843F0u, (uint32)racer->trail.origin[2]);
-        camera_bias(camera_for_view(view), 0x800843D4u);
-        w_u32(0x800843E8u, 0u);
-        w_u32(0x800843ECu, 0u);
-        w_u32(0x800843F0u, 0u);
+        {
+            MATRIX trail_matrix = camera_identity;
+
+            memcpy(trail_matrix.t, racer->trail.origin, sizeof(trail_matrix.t));
+            camera_bias_matrix(camera_for_view(view), &trail_matrix, 1);
+        }
         trail_render(racer, orderings[index], 100);
         trail_render_spray(racer, orderings[index], 100);
     }
@@ -1335,14 +518,14 @@ void mesh_render_racer_model(uint32 view, sint32 player)
         BOAT *racer = candidates[index];
         uint32 model;
         uint32 view_index;
-        uint32 descriptor;
+        MESH_MODEL *desc;
 
         if (racer->trail.phase != 2u)
             continue;
         carried_boat = racer;
         if (r_u32(0x80083478u) == 2u && racer != vehicle_player(view))
         {
-            camera_bias(camera_for_view(view), 0x800843D4u);
+            camera_bias_matrix(camera_for_view(view), &camera_identity, 1);
             trail_render_marker(racer, orderings[index]);
         }
         camera_config_lighting(racer, &racer->motion.transform.matrix);
@@ -1351,24 +534,22 @@ void mesh_render_racer_model(uint32 view, sint32 player)
             render_scale_proj_transform(2);
         else if (buckets[index] < 20u)
             render_scale_proj_transform(1);
-        view_index = r_u32(view + 4u);
+        view_index = (uint32)(camera_for_view(view) - camera_views);
         model = racer->model_slot;
-        descriptor = r_u32(0x80101788u + view_index * 64u + model * 4u);
+        desc = &mesh_boat_models[view_index][model].main;
 #if defined(_DEBUG)
         mesh_color_probe_player = racer == vehicle_player(view) ? racer : NULL;
-        mesh_color_probe_groups = descriptor;
+        mesh_color_probe_model = desc;
 #endif
-        mesh_dispatch_renderers(orderings[index], 100u, descriptor);
+        mesh_draw_model(orderings[index], 100u, desc);
 #if defined(_DEBUG)
         mesh_color_probe_player = NULL;
 #endif
         render_scale_proj_transform(0);
         if (racer != vehicle_player(view) || camera_for_view(view)->mode != 2u)
         {
-            const uint32 temporary = 0x1F800220u;
             MATRIX source;
             MATRIX accessory;
-            uint16 matrix_pad;
             const BOAT_SETUP *setup;
             sint32 mode;
             sint32 saved_bias;
@@ -1377,11 +558,10 @@ void mesh_render_racer_model(uint32 view, sint32 player)
             SetRotMatrix(&source);
             SetTransMatrix(&source);
             accessory = source;
-            memcpy(&matrix_pad, (const uint8 *)&source + 18u, sizeof(matrix_pad));
             mesh_rotate_mat_y((sint32)(uint32)racer->control.steering / 2, &accessory);
             setup = (&racer->setup);
             mode = (sint32)setup->propellers;
-            saved_bias = (sint32)r_u32(0x800B69F0u);
+            saved_bias = render_order.bias;
             if (mode == 1 || mode == 2)
             {
                 SVECTOR point;
@@ -1396,13 +576,17 @@ void mesh_render_racer_model(uint32 view, sint32 player)
                 }
                 else
                 {
-                    uint16 displacement = r_u16(0x80089978u + setup->model_index * 4u);
+                    uint16 displacement;
+
+                    if (setup->model_index >= sizeof(mesh_prop_offsets) / sizeof(mesh_prop_offsets[0]))
+                        abort();
+                    displacement = mesh_prop_offsets[setup->model_index];
 
                     racer->trail.propeller.vx = (sint16)displacement;
                     point = racer->trail.propeller;
                     mesh_transform_point(&source, &point, &positions[0]);
                     setup = (&racer->setup);
-                    displacement = r_u16(0x80089978u + setup->model_index * 4u);
+                    displacement = mesh_prop_offsets[setup->model_index];
                     racer->trail.propeller.vx = (sint16)(uint16)(0u - (uint32)displacement);
                     point = racer->trail.propeller;
                     mesh_transform_point(&source, &point, &positions[1]);
@@ -1410,19 +594,16 @@ void mesh_render_racer_model(uint32 view, sint32 player)
                 }
                 for (position_index = 0; position_index < position_count; ++position_index)
                 {
-                    uint32 table = position_index == 0 ? 0x800DDD18u : 0x800DDD58u;
-
                     accessory.t[0] = positions[position_index].vx;
                     accessory.t[1] = positions[position_index].vy;
                     accessory.t[2] = positions[position_index].vz;
-                    mesh_write_mat(temporary, &accessory, matrix_pad);
                     camera_config_lighting(racer, &accessory);
-                    camera_bias(camera_for_view(view), temporary);
-                    view_index = r_u32(view + 4u);
+                    camera_bias_matrix(camera_for_view(view), &accessory, 0);
+                    view_index = (uint32)(camera_for_view(view) - camera_views);
                     model = racer->model_slot;
-                    descriptor = r_u32(table + view_index * 128u + model * 4u);
-                    w_u32(0x800B69F0u, (uint32)saved_bias);
-                    mesh_dispatch_renderers(orderings[index], 100u, descriptor);
+                    desc = &mesh_boat_models[view_index][model].prop[position_index];
+                    render_order.bias = saved_bias;
+                    mesh_draw_model(orderings[index], 100u, desc);
                     if ((uint32)racer->control.mode == 1u)
                         trail_render_flare(racer, orderings[index], 100u);
                 }
@@ -1431,11 +612,11 @@ void mesh_render_racer_model(uint32 view, sint32 player)
     }
     if (r_u32(0x80083484u) == 4u && replay_state.playing != 0u)
     {
-        uint32 route = replay_state.contact.object;
-        sint32 route_offset = (sint32)((uint32)r_u16(route) - 1u);
+        const ROUTE_SEGMENT *seg = replay_state.contact.seg;
+        sint32 route_offset = (sint32)((uint32)seg->next.idx - 1u);
 
         if (route_offset < 0)
-            route_offset = (sint32)((uint32)r_u16(route + 2u) + 1u);
+            route_offset = (sint32)((uint32)seg->prev.idx + 1u);
         if (route_segment_is_in_window(view, route_offset) != 0)
         {
             sint16 sort_depth;
@@ -1443,26 +624,26 @@ void mesh_render_racer_model(uint32 view, sint32 player)
 
             if (depth < 250u)
             {
-                uint32 ordering = mesh_prepare_racer_ot_packet(view, depth, player);
+                uint32 *ordering = mesh_prepare_racer_ot_packet(view, depth, player);
                 uint32 view_index;
                 uint32 model;
-                uint32 descriptor;
+                MESH_MODEL *desc;
 
                 camera_bias_matrix(camera_for_view(view), &replay_state.matrix, 0);
-                view_index = r_u32(view + 4u);
+                view_index = (uint32)(camera_for_view(view) - camera_views);
                 model = carried_boat ? carried_boat->model_slot : 0u;
-                descriptor = r_u32(0x80101788u + view_index * 64u + model * 4u);
-                mesh_dispatch_face_render_groups(ordering, 100u, descriptor);
+                desc = &mesh_boat_models[view_index][model].main;
+                mesh_outline_model(ordering, 100u, desc);
             }
         }
     }
     for (index = count - 1; index >= 0; --index)
     {
         BOAT *racer = candidates[index];
-        uint32 ordering;
+        uint32 *ordering;
         uint32 model;
         uint32 view_index;
-        uint32 descriptor;
+        MESH_MODEL *desc;
         const BOAT_SETUP *setup;
 
         if (racer->trail.phase == 2u)
@@ -1470,114 +651,25 @@ void mesh_render_racer_model(uint32 view, sint32 player)
         ordering = mesh_prepare_racer_ot_packet(view, buckets[index], player);
         if (r_u32(0x80083478u) == 2u && racer != vehicle_player(view))
         {
-            camera_bias(camera_for_view(view), 0x800843D4u);
+            camera_bias_matrix(camera_for_view(view), &camera_identity, 1);
             trail_render_marker(racer, ordering);
         }
         camera_bias_matrix(camera_for_view(view), &racer->motion.transform.matrix, 0);
-        view_index = r_u32(view + 4u);
+        view_index = (uint32)(camera_for_view(view) - camera_views);
         model = racer->model_slot;
-        descriptor = r_u32(0x800E8DA8u + view_index * 64u + model * 4u);
-        mesh_render_lit_quads(ordering, descriptor, &racer->contacts.points[0].normal);
+        desc = &mesh_boat_models[view_index][model].lod;
+        mesh_draw_lit_quads(ordering, desc, &racer->contacts.points[0].normal);
         setup = (&racer->setup);
         if ((sint32)setup->propellers > 0)
         {
-            view_index = r_u32(view + 4u);
+            view_index = (uint32)(camera_for_view(view) - camera_views);
             model = racer->model_slot;
-            descriptor = r_u32(0x800F0488u + view_index * 64u + model * 4u);
-            mesh_render_lit_quads(ordering, descriptor, &racer->contacts.points[0].normal);
+            desc = &mesh_boat_models[view_index][model].prop_lod;
+            mesh_draw_lit_quads(ordering, desc, &racer->contacts.points[0].normal);
         }
     }
 }
 
-void mesh_render_lit_quads(uint32 ordering, uint32 descriptor, const SVECTOR *normal)
-{
-    sint32 count;
-    uint32 face;
-    uint32 packet;
-    uint32 color;
-    sint32 previous_cross = -1;
-    sint32 previous_depth = 0;
-    uint32 remaining;
-
-    FUNCTION_MARKER_ARGS(0x80033F54u, "MAIN.EXE", XPORT_CALL_VALUE_VOID, 3u, XPORT_CALL_GUEST_POINTER(ordering, 4u), XPORT_CALL_GUEST_POINTER(descriptor, 48u), XPORT_CALL_HOST_POINTER(normal, sizeof(*normal)));
-    if (descriptor == 0u)
-        return;
-    count = (sint32)r_u32(descriptor + 12u);
-    face = r_u32(descriptor + 44u);
-    if (count == 0)
-        return;
-    packet = r_u32(0x800B6C00u) & 0xFFFFFFu;
-    {
-        uint32 source_color = r_u32(face + 44u);
-
-        color = gte_normal_color_col(normal, source_color);
-    }
-    remaining = (uint32)count;
-    while (remaining-- != 0u)
-    {
-        sint32 screen[4];
-        sint32 depths[4];
-        sint32 flags;
-        sint32 vertex;
-        sint32 cross;
-
-        for (vertex = 0; vertex < 3; ++vertex)
-            depths[vertex] = gte_project_full_depth((SVECTOR *)psx_addr(face + (uint32)vertex * 8u, sizeof(SVECTOR)), &screen[vertex], &flags);
-        {
-            sint32 depth = (sint32)((uint32)previous_depth + r_u32(0x800B69F0u));
-
-            previous_depth = depth;
-            if (previous_cross > 0 && (uint32)depth < 99u)
-            {
-                uint32 bucket = ordering + (uint32)depth * 4u;
-
-                w_u32(packet, r_u32(bucket) | 0x09000000u);
-                w_u32(bucket, packet);
-                packet += 40u;
-            }
-        }
-        cross = NormalClip(screen[0], screen[1], screen[2]);
-        previous_cross = cross;
-        if (cross > 0)
-        {
-            uint32 high;
-            uint32 low;
-            sint32 average;
-
-            w_u32(packet + 8u, (uint32)screen[0]);
-            w_u32(packet + 16u, (uint32)screen[1]);
-            w_u32(packet + 24u, (uint32)screen[2]);
-            depths[3] = gte_project_full_depth((SVECTOR *)psx_addr(face + 24u, sizeof(SVECTOR)), &screen[3], &flags);
-            high = r_u16(face + 42u);
-            low = r_u16(face + 6u);
-            w_u32(packet + 12u, low | (high << 16));
-            high = r_u16(face + 40u);
-            low = r_u16(face + 14u);
-            w_u32(packet + 20u, low | (high << 16));
-            w_u16(packet + 28u, r_u16(face + 22u));
-            w_u16(packet + 36u, r_u16(face + 30u));
-            w_u32(packet + 32u, (uint32)screen[3]);
-            average = AverageZ4(depths[0], depths[1], depths[2], depths[3]);
-            w_u32(packet + 4u, color);
-            previous_depth = average;
-        }
-        face += 48u;
-    }
-    {
-        sint32 depth = (sint32)((uint32)previous_depth + r_u32(0x800B69F0u));
-
-        previous_depth = depth;
-        if (previous_cross > 0 && (uint32)depth < 99u)
-        {
-            uint32 bucket = ordering + (uint32)depth * 4u;
-
-            w_u32(packet, r_u32(bucket) | 0x09000000u);
-            w_u32(bucket, packet);
-            packet += 40u;
-        }
-    }
-    w_u32(0x800B6C00u, packet);
-}
 
 sint32 mesh_init_tex_templates(void)
 {
@@ -1591,51 +683,1091 @@ void mesh_fn_80034180(void)
     FUNCTION_MARKER(0x80034180u, "MAIN.EXE");
 }
 
-sint32 mesh_fn_8003429c(uint32 state)
-{
-    uint32 packed = r_u32(0x800B6840u);
-    uint32 palette = r_u32(0x800B684Cu);
-    sint32 pass;
 
-    FUNCTION_MARKER(0x8003429Cu, "MAIN.EXE");
-    for (pass = 0; pass < 2; ++pass)
+static uint16 mesh_read_half(const uint8 *src)
+{
+    return (uint16)((uint16)src[0] | ((uint16)src[1] << 8));
+}
+
+static uint32 mesh_read_word(const uint8 *src)
+{
+    return (uint32)mesh_read_half(src) | ((uint32)mesh_read_half(src + 2u) << 16);
+}
+
+static SVECTOR mesh_decode_vec(const uint8 *src)
+{
+    SVECTOR dst;
+    dst.vx = (sint16)mesh_read_half(src);
+    dst.vy = (sint16)mesh_read_half(src + 2u);
+    dst.vz = (sint16)mesh_read_half(src + 4u);
+    dst.pad = (sint16)mesh_read_half(src + 6u);
+    return dst;
+}
+
+void mesh_clear_model(MESH_MODEL *model)
+{
+    for (uint32 kind = 0; kind < 8u; ++kind)
+        free(model->sets[kind].faces);
+    memset(model, 0, sizeof(*model));
+}
+
+sint32 mesh_decode_model(const uint8 *src, size_t size, MESH_MODEL *dst)
+{
+    static const uint8 strides[8] = {36, 44, 40, 48, 60, 80, 64, 84};
+    MESH_MODEL model = {0};
+    if (!src || !dst || size < 64u)
+        return 0;
+    for (uint32 kind = 0; kind < 8u; ++kind)
     {
-        uint32 source = packed;
-        uint32 destination = state + (pass == 0 ? 32u : 1568u);
-        sint32 row;
-        for (row = 0; row < 8; ++row)
+        uint32 count = mesh_read_word(src + 4u * kind);
+        uint32 offset = mesh_read_word(src + 32u + 4u * kind);
+        uint32 stride = strides[kind];
+        if (count > INT32_MAX || (count && (offset > size || count > (size - offset) / stride || count > SIZE_MAX / sizeof(MESH_FACE))))
+            goto fail;
+        if (!count)
+            continue;
+        MESH_FACE_SET *set = &model.sets[kind];
+        set->faces = calloc(count, sizeof(*set->faces));
+        if (!set->faces)
+            goto fail;
+        set->count = count;
+        uint32 vtx_count = (kind & 1u) ? 4u : 3u;
+        uint32 normal_count = kind >= 4u ? vtx_count : 1u;
+        uint32 normal_end = 8u * (vtx_count + normal_count);
+        uint32 textured = kind == 2u || kind == 3u || kind >= 6u;
+        uint32 color_offset = normal_end + (textured ? 4u : 0u);
+        for (uint32 idx = 0; idx < count; ++idx)
         {
-            uint32 low = r_u32(source);
-            uint32 high = r_u32(source + 8u);
-            sint32 column;
-            source += 12u;
-            for (column = 0; column < 15; ++column)
+            const uint8 *record = src + offset + (size_t)idx * stride;
+            MESH_FACE *face = &set->faces[idx];
+            for (uint32 v = 0; v < vtx_count; ++v)
+                face->v[v] = mesh_decode_vec(record + 8u * v);
+            for (uint32 v = 0; v < normal_count; ++v)
+                face->normals[v] = mesh_decode_vec(record + 8u * (vtx_count + v));
+            if (textured)
             {
-                uint32 left;
-                uint32 right;
-                if (column == 8)
-                {
-                    low = high;
-                    high = r_u32(source + 8u);
-                    source += 4u;
-                }
-                left = low & 15u;
-                right = high & 15u;
-                low >>= 4;
-                high >>= 4;
-                w_u32(destination + (uint32)column * 32u, (uint32)r_u16(palette + left * 2u) | ((uint32)r_u16(palette + right * 2u) << 16));
+                face->tpage = mesh_read_half(record + normal_end);
+                face->clut = mesh_read_half(record + normal_end + 2u);
             }
-            destination += 4u;
-            source += 8u;
+            for (uint32 word = 0; word < (stride - color_offset) / 4u; ++word)
+                face->colors[word] = mesh_read_word(record + color_offset + 4u * word);
         }
     }
-    w_u32(state + 24u, 1u);
-    w_u32(state + 28u, 3u);
-    w_u32(state, 0x80080E6Cu);
-    w_u32(state + 20u, 0xFFFFFFF0u);
-    w_u32(state + 12u, 0u);
-    w_u32(state + 8u, 0x80034638u);
-    w_u32(state + 16u, r_u32(state));
-    xport_update_u32(r_u32(0x800B6850u) + 8u, XPORT_MEMORY_UPDATE_OR, 8u);
-    return (sint32)r_u32(r_u32(0x800B6850u) + 8u);
+    mesh_clear_model(dst);
+    *dst = model;
+    return 1;
+fail:
+    mesh_clear_model(&model);
+    return 0;
+}
+
+sint32 mesh_project_model(MESH_MODEL *model)
+{
+    FUNCTION_MARKER(0x800329A8u, "MAIN.EXE");
+    for (uint32 kind = 2u; kind < 4u; ++kind)
+    {
+        MESH_FACE_SET *set = &model->sets[kind];
+        for (uint32 idx = 0; idx < set->count; ++idx)
+        {
+            MESH_FACE *face = &set->faces[idx];
+            sint32 xy[3], depth[4], flags;
+            gte_project3_full_depth(face->v, xy, depth, &flags);
+            face->colors[0] |= 0x02000000u;
+            if (kind == 3u)
+                depth[3] = gte_project_full_depth(&face->v[3], NULL, &flags);
+            uint32 vtx_count = kind == 2u ? 3u : 4u;
+            for (uint32 v = 0; v < vtx_count; ++v)
+            {
+                sint32 shade = depth[v];
+                if (shade < 0)
+                    shade = 0;
+                if (shade > 63)
+                    shade = 63;
+                face->v[v].pad = (sint16)((shade << 8) | 0x80);
+            }
+        }
+    }
+    return -1;
+}
+
+static void mesh_draw_tri_flat_lit(const MESH_FACE *faces, sint32 count)
+{
+    uint32 packet_offset;
+    POLY_F3 *packet;
+    uint32 *ot;
+    uint32 depth_limit;
+    uint32 remaining;
+    sint32 previous_cross = -1;
+    sint32 previous_average = 0;
+
+    FUNCTION_MARKER(0x8001C6D8u, "MAIN.EXE");
+    if (count == 0)
+        return;
+    packet_offset = render_packet_offset();
+    ot = render_order.ot;
+    depth_limit = render_order.depth_limit;
+    remaining = (uint32)count;
+    do
+    {
+        SVECTOR vertices[3];
+        SVECTOR normal;
+        sint32 screen[3];
+        sint32 depth[3];
+        sint32 flags;
+        sint32 average;
+        sint32 current_cross;
+        uint32 color;
+
+        memcpy(vertices, faces->v, sizeof(vertices));
+        gte_project3_full_depth(vertices, screen, depth, &flags);
+        average = (sint32)((uint32)previous_average + (uint32)render_order.bias);
+        if (previous_cross > 0 && (uint32)average < depth_limit)
+        {
+            uint32 *bucket = ot + (uint32)average;
+
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+            packet->tag = *bucket | 0x04000000u;
+            AddPrim(bucket, packet);
+            packet_offset += sizeof(*packet);
+        }
+        current_cross = NormalClip(screen[0], screen[1], screen[2]);
+        if (current_cross > 0)
+        {
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+            packet->xy0 = (uint32)screen[0];
+            packet->xy1 = (uint32)screen[1];
+            packet->xy2 = (uint32)screen[2];
+            normal = faces->normals[0];
+            color = faces->colors[0];
+            color = gte_normal_color_col(&normal, color);
+            packet->color0 = color;
+            previous_average = AverageZ3(depth[0], depth[1], depth[2]);
+        }
+        previous_cross = current_cross;
+        ++faces;
+    } while (--remaining != 0u);
+    {
+        sint32 average = (sint32)((uint32)previous_average + (uint32)render_order.bias);
+
+        if (previous_cross > 0 && (uint32)average < depth_limit)
+        {
+            uint32 *bucket = ot + (uint32)average;
+
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+            packet->tag = *bucket | 0x04000000u;
+            AddPrim(bucket, packet);
+            packet_offset += sizeof(*packet);
+        }
+    }
+    render_packet_publish(packet_offset);
+}
+
+static void mesh_draw_quad_flat_lit(const MESH_FACE *faces, sint32 count)
+{
+    uint32 packet_offset;
+    POLY_F4 *packet;
+    uint32 *ot;
+    uint32 depth_limit;
+    uint32 remaining;
+    sint32 previous_cross = -1;
+    sint32 previous_average = 0;
+
+    FUNCTION_MARKER(0x8001C864u, "MAIN.EXE");
+    if (count == 0)
+        return;
+    packet_offset = render_packet_offset();
+    ot = render_order.ot;
+    depth_limit = render_order.depth_limit;
+    remaining = (uint32)count;
+    do
+    {
+        SVECTOR vertices[3];
+        SVECTOR v3;
+        SVECTOR normal;
+        sint32 screen[4];
+        sint32 depth[4];
+        sint32 flags;
+        sint32 average;
+        sint32 current_cross;
+        uint32 color;
+
+        memcpy(vertices, faces->v, sizeof(vertices));
+        gte_project3_full_depth(vertices, screen, depth, &flags);
+        average = (sint32)((uint32)previous_average + (uint32)render_order.bias);
+        if (previous_cross > 0 && (uint32)average < depth_limit)
+        {
+            uint32 *bucket = ot + (uint32)average;
+
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+            packet->tag = *bucket | 0x05000000u;
+            AddPrim(bucket, packet);
+            packet_offset += sizeof(*packet);
+        }
+        current_cross = NormalClip(screen[0], screen[1], screen[2]);
+        if (current_cross > 0)
+        {
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+            packet->xy0 = (uint32)screen[0];
+            packet->xy1 = (uint32)screen[1];
+            packet->xy2 = (uint32)screen[2];
+            v3 = faces->v[3];
+            depth[3] = gte_project_full_depth(&v3, &screen[3], &flags);
+            packet->xy3 = (uint32)screen[3];
+            normal = faces->normals[0];
+            color = faces->colors[0];
+            color = gte_normal_color_col(&normal, color);
+            packet->color0 = color;
+            previous_average = AverageZ4(depth[0], depth[1], depth[2], depth[3]);
+        }
+        previous_cross = current_cross;
+        ++faces;
+    } while (--remaining != 0u);
+    {
+        sint32 average = (sint32)((uint32)previous_average + (uint32)render_order.bias);
+
+        if (previous_cross > 0 && (uint32)average < depth_limit)
+        {
+            uint32 *bucket = ot + (uint32)average;
+
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+            packet->tag = *bucket | 0x05000000u;
+            AddPrim(bucket, packet);
+            packet_offset += sizeof(*packet);
+        }
+    }
+    render_packet_publish(packet_offset);
+}
+
+static void mesh_draw_tri_flat_lit_tex(const MESH_FACE *faces, sint32 count)
+{
+    uint32 packet_offset;
+    POLY_FT3 *packet;
+    uint32 *ot;
+    uint32 depth_limit;
+    uint32 remaining;
+    sint32 previous_cross = -1;
+    sint32 previous_average = 0;
+
+    FUNCTION_MARKER(0x8001CA10u, "MAIN.EXE");
+    if (count == 0)
+        return;
+    packet_offset = render_packet_offset();
+    ot = render_order.ot;
+    depth_limit = render_order.depth_limit;
+    remaining = (uint32)count;
+    do
+    {
+        SVECTOR vertices[3];
+        SVECTOR normal;
+        sint32 screen[3];
+        sint32 depth[3];
+        sint32 flags;
+        sint32 average;
+        sint32 current_cross;
+        uint32 color;
+
+        memcpy(vertices, faces->v, sizeof(vertices));
+        gte_project3_full_depth(vertices, screen, depth, &flags);
+        average = (sint32)((uint32)previous_average + (uint32)render_order.bias);
+        if (previous_cross > 0 && (uint32)average < depth_limit)
+        {
+            uint32 *bucket = ot + (uint32)average;
+
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+            packet->tag = *bucket | 0x07000000u;
+            AddPrim(bucket, packet);
+            packet_offset += sizeof(*packet);
+        }
+        current_cross = NormalClip(screen[0], screen[1], screen[2]);
+        if (current_cross > 0)
+        {
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+            packet->xy0 = (uint32)screen[0];
+            packet->xy1 = (uint32)screen[1];
+            packet->xy2 = (uint32)screen[2];
+            normal = faces->normals[0];
+            color = faces->colors[0];
+            color = gte_normal_color_col(&normal, color);
+            packet->clut = faces->clut;
+            packet->tpage = faces->tpage;
+            packet->uv0 = (uint16)faces->v[0].pad;
+            packet->uv1 = (uint16)faces->v[1].pad;
+            packet->uv2 = (uint16)faces->v[2].pad;
+            packet->color0 = color;
+            previous_average = AverageZ3(depth[0], depth[1], depth[2]);
+        }
+        previous_cross = current_cross;
+        ++faces;
+    } while (--remaining != 0u);
+    {
+        sint32 average = (sint32)((uint32)previous_average + (uint32)render_order.bias);
+
+        if (previous_cross > 0 && (uint32)average < depth_limit)
+        {
+            uint32 *bucket = ot + (uint32)average;
+
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+            packet->tag = *bucket | 0x07000000u;
+            AddPrim(bucket, packet);
+            packet_offset += sizeof(*packet);
+        }
+    }
+    render_packet_publish(packet_offset);
+}
+
+static void mesh_draw_quad_flat_lit_tex(const MESH_FACE *faces, sint32 count)
+{
+    uint32 packet_offset;
+    POLY_FT4 *packet;
+    uint32 *ot;
+    uint32 depth_limit;
+    uint32 remaining;
+    sint32 previous_cross = -1;
+    sint32 previous_average = 0;
+
+    FUNCTION_MARKER(0x8001CBDCu, "MAIN.EXE");
+    if (count == 0)
+        return;
+    packet_offset = render_packet_offset();
+    ot = render_order.ot;
+    depth_limit = render_order.depth_limit;
+    remaining = (uint32)count;
+    do
+    {
+        SVECTOR vertices[3];
+        SVECTOR v3;
+        SVECTOR normal;
+        sint32 screen[4];
+        sint32 depth[4];
+        sint32 flags;
+        sint32 average;
+        sint32 current_cross;
+        uint32 color;
+
+        memcpy(vertices, faces->v, sizeof(vertices));
+        gte_project3_full_depth(vertices, screen, depth, &flags);
+        average = (sint32)((uint32)previous_average + (uint32)render_order.bias);
+        if (previous_cross > 0 && (uint32)average < depth_limit)
+        {
+            uint32 *bucket = ot + (uint32)average;
+
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+            packet->tag = *bucket | 0x09000000u;
+            AddPrim(bucket, packet);
+            packet_offset += sizeof(*packet);
+        }
+        current_cross = NormalClip(screen[0], screen[1], screen[2]);
+        if (current_cross > 0)
+        {
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+            packet->xy0 = (uint32)screen[0];
+            packet->xy1 = (uint32)screen[1];
+            packet->xy2 = (uint32)screen[2];
+            v3 = faces->v[3];
+            depth[3] = gte_project_full_depth(&v3, &screen[3], &flags);
+            packet->xy3 = (uint32)screen[3];
+            normal = faces->normals[0];
+            color = faces->colors[0];
+            color = gte_normal_color_col(&normal, color);
+            packet->clut = faces->clut;
+            packet->tpage = faces->tpage;
+            packet->uv0 = (uint16)faces->v[0].pad;
+            packet->uv1 = (uint16)faces->v[1].pad;
+            packet->uv2 = (uint16)faces->v[2].pad;
+            packet->uv3 = (uint16)faces->v[3].pad;
+            packet->color0 = color;
+            previous_average = AverageZ4(depth[0], depth[1], depth[2], depth[3]);
+        }
+        previous_cross = current_cross;
+        ++faces;
+    } while (--remaining != 0u);
+    {
+        sint32 average = (sint32)((uint32)previous_average + (uint32)render_order.bias);
+
+        if (previous_cross > 0 && (uint32)average < depth_limit)
+        {
+            uint32 *bucket = ot + (uint32)average;
+
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+            packet->tag = *bucket | 0x09000000u;
+            AddPrim(bucket, packet);
+            packet_offset += sizeof(*packet);
+        }
+    }
+    render_packet_publish(packet_offset);
+}
+
+static void mesh_draw_tri_gouraud_lit(const MESH_FACE *faces, sint32 count)
+{
+    uint32 packet_offset;
+    POLY_G3 *packet;
+    uint32 *ot;
+    uint32 depth_limit;
+    uint32 remaining;
+    sint32 previous_cross = -1;
+    sint32 previous_average = 0;
+
+    FUNCTION_MARKER(0x8001CDD4u, "MAIN.EXE");
+    if (count == 0)
+        return;
+    packet_offset = render_packet_offset();
+    ot = render_order.ot;
+    depth_limit = render_order.depth_limit;
+    remaining = (uint32)count;
+    do
+    {
+        SVECTOR vertices[3];
+        SVECTOR normal;
+        sint32 screen[3];
+        sint32 depth[3];
+        sint32 flags;
+        sint32 average;
+        sint32 current_cross;
+        uint32 color;
+
+        memcpy(vertices, faces->v, sizeof(vertices));
+        gte_project3_full_depth(vertices, screen, depth, &flags);
+        average = (sint32)((uint32)previous_average + (uint32)render_order.bias);
+        if (previous_cross > 0 && (uint32)average < depth_limit)
+        {
+            uint32 *bucket = ot + (uint32)average;
+
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+            packet->tag = *bucket | 0x06000000u;
+            AddPrim(bucket, packet);
+            packet_offset += sizeof(*packet);
+        }
+        current_cross = NormalClip(screen[0], screen[1], screen[2]);
+        if (current_cross > 0)
+        {
+            sint32 vertex;
+
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+
+            packet->xy0 = (uint32)screen[0];
+            packet->xy1 = (uint32)screen[1];
+            packet->xy2 = (uint32)screen[2];
+            for (vertex = 0; vertex < 3; ++vertex)
+            {
+                normal = faces->normals[vertex];
+                color = faces->colors[vertex];
+                color = mesh_color_eval(&normal, color, (uint32)vertex);
+                switch (vertex)
+                {
+                    case 0:
+                        packet->color0 = color;
+                        break;
+                    case 1:
+                        packet->color1 = color;
+                        break;
+                    case 2:
+                        packet->color2 = color;
+                        break;
+                }
+            }
+            previous_average = AverageZ3(depth[0], depth[1], depth[2]);
+        }
+        previous_cross = current_cross;
+        ++faces;
+    } while (--remaining != 0u);
+    {
+        sint32 average = (sint32)((uint32)previous_average + (uint32)render_order.bias);
+
+        if (previous_cross > 0 && (uint32)average < depth_limit)
+        {
+            uint32 *bucket = ot + (uint32)average;
+
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+            packet->tag = *bucket | 0x06000000u;
+            AddPrim(bucket, packet);
+            packet_offset += sizeof(*packet);
+        }
+    }
+    render_packet_publish(packet_offset);
+}
+
+static void mesh_draw_quad_gouraud_lit(const MESH_FACE *faces, sint32 count)
+{
+    uint32 packet_offset;
+    POLY_G4 *packet;
+    uint32 *ot;
+    uint32 depth_limit;
+    uint32 remaining;
+    sint32 previous_cross = -1;
+    sint32 previous_average = 0;
+
+    FUNCTION_MARKER(0x8001CFACu, "MAIN.EXE");
+    if (count == 0)
+        return;
+    packet_offset = render_packet_offset();
+    ot = render_order.ot;
+    depth_limit = render_order.depth_limit;
+    remaining = (uint32)count;
+    do
+    {
+        SVECTOR vertices[3];
+        SVECTOR v3;
+        SVECTOR normal;
+        sint32 screen[4];
+        sint32 depth[4];
+        sint32 flags;
+        sint32 average;
+        sint32 current_cross;
+        uint32 color;
+
+        memcpy(vertices, faces->v, sizeof(vertices));
+        gte_project3_full_depth(vertices, screen, depth, &flags);
+        average = (sint32)((uint32)previous_average + (uint32)render_order.bias);
+        if (previous_cross > 0 && (uint32)average < depth_limit)
+        {
+            uint32 *bucket = ot + (uint32)average;
+
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+            packet->tag = *bucket | 0x08000000u;
+            AddPrim(bucket, packet);
+            packet_offset += sizeof(*packet);
+        }
+        current_cross = NormalClip(screen[0], screen[1], screen[2]);
+        if (current_cross > 0)
+        {
+            sint32 vertex;
+
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+
+            packet->xy0 = (uint32)screen[0];
+            packet->xy1 = (uint32)screen[1];
+            packet->xy2 = (uint32)screen[2];
+            v3 = faces->v[3];
+            depth[3] = gte_project_full_depth(&v3, &screen[3], &flags);
+            packet->xy3 = (uint32)screen[3];
+            for (vertex = 0; vertex < 4; ++vertex)
+            {
+                normal = faces->normals[vertex];
+                color = faces->colors[vertex];
+                color = mesh_color_eval(&normal, color, (uint32)vertex);
+                switch (vertex)
+                {
+                    case 0:
+                        packet->color0 = color;
+                        break;
+                    case 1:
+                        packet->color1 = color;
+                        break;
+                    case 2:
+                        packet->color2 = color;
+                        break;
+                    case 3:
+                        packet->color3 = color;
+                        break;
+                }
+            }
+            previous_average = AverageZ4(depth[0], depth[1], depth[2], depth[3]);
+        }
+        previous_cross = current_cross;
+        ++faces;
+    } while (--remaining != 0u);
+    {
+        sint32 average = (sint32)((uint32)previous_average + (uint32)render_order.bias);
+
+        if (previous_cross > 0 && (uint32)average < depth_limit)
+        {
+            uint32 *bucket = ot + (uint32)average;
+
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+            packet->tag = *bucket | 0x08000000u;
+            AddPrim(bucket, packet);
+            packet_offset += sizeof(*packet);
+        }
+    }
+    render_packet_publish(packet_offset);
+}
+
+static void mesh_draw_tri_gouraud_lit_tex(const MESH_FACE *faces, sint32 count)
+{
+    uint32 packet_offset;
+    POLY_GT3 *packet;
+    uint32 *ot;
+    uint32 depth_limit;
+    uint32 remaining;
+    sint32 previous_cross = -1;
+    sint32 previous_average = 0;
+
+    FUNCTION_MARKER(0x8001D1CCu, "MAIN.EXE");
+    if (count == 0)
+        return;
+    packet_offset = render_packet_offset();
+    ot = render_order.ot;
+    depth_limit = render_order.depth_limit;
+    remaining = (uint32)count;
+    do
+    {
+        SVECTOR vertices[3];
+        SVECTOR normals[3];
+        sint32 screen[3];
+        sint32 depth[3];
+        sint32 flags;
+        sint32 average;
+        sint32 current_cross;
+        uint32 colors[3];
+        uint32 source_color;
+
+        memcpy(vertices, faces->v, sizeof(vertices));
+        gte_project3_full_depth(vertices, screen, depth, &flags);
+        average = (sint32)((uint32)previous_average + (uint32)render_order.bias);
+        if (previous_cross > 0 && (uint32)average < depth_limit)
+        {
+            uint32 *bucket = ot + (uint32)average;
+
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+            packet->tag = *bucket | 0x09000000u;
+            AddPrim(bucket, packet);
+            packet_offset += sizeof(*packet);
+        }
+        current_cross = NormalClip(screen[0], screen[1], screen[2]);
+        if (current_cross > 0)
+        {
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+            packet->xy0 = (uint32)screen[0];
+            packet->xy1 = (uint32)screen[1];
+            packet->xy2 = (uint32)screen[2];
+            memcpy(normals, faces->normals, sizeof(normals));
+            source_color = faces->colors[0];
+            mesh_color_eval3(normals, source_color, colors);
+            packet->clut = faces->clut;
+            packet->tpage = faces->tpage;
+            packet->uv0 = (uint16)faces->v[0].pad;
+            packet->uv1 = (uint16)faces->v[1].pad;
+            packet->uv2 = (uint16)faces->v[2].pad;
+            packet->color0 = colors[0];
+            packet->color1 = colors[1];
+            packet->color2 = colors[2];
+            previous_average = AverageZ3(depth[0], depth[1], depth[2]);
+        }
+        previous_cross = current_cross;
+        ++faces;
+    } while (--remaining != 0u);
+    {
+        sint32 average = (sint32)((uint32)previous_average + (uint32)render_order.bias);
+
+        if (previous_cross > 0 && (uint32)average < depth_limit)
+        {
+            uint32 *bucket = ot + (uint32)average;
+
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+            packet->tag = *bucket | 0x09000000u;
+            AddPrim(bucket, packet);
+            packet_offset += sizeof(*packet);
+        }
+    }
+    render_packet_publish(packet_offset);
+}
+
+static void mesh_draw_quad_gouraud_lit_tex(const MESH_FACE *faces, sint32 count)
+{
+    uint32 packet_offset;
+    POLY_GT4 *packet;
+    uint32 *ot;
+    uint32 depth_limit;
+    uint32 remaining;
+    sint32 previous_cross = -1;
+    sint32 previous_average = 0;
+
+    FUNCTION_MARKER(0x8001D3B0u, "MAIN.EXE");
+    if (count == 0)
+        return;
+    packet_offset = render_packet_offset();
+    ot = render_order.ot;
+    depth_limit = render_order.depth_limit;
+    remaining = (uint32)count;
+    do
+    {
+        SVECTOR vertices[3];
+        SVECTOR v3;
+        SVECTOR normals[3];
+        SVECTOR n3;
+        sint32 screen[4];
+        sint32 depth[4];
+        sint32 flags;
+        sint32 average;
+        sint32 current_cross;
+        uint32 colors[4];
+        uint32 source_color;
+
+        memcpy(vertices, faces->v, sizeof(vertices));
+        gte_project3_full_depth(vertices, screen, depth, &flags);
+        average = (sint32)((uint32)previous_average + (uint32)render_order.bias);
+        if (previous_cross > 0 && (uint32)average < depth_limit)
+        {
+            uint32 *bucket = ot + (uint32)average;
+
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+            packet->tag = *bucket | 0x0C000000u;
+            AddPrim(bucket, packet);
+            packet_offset += sizeof(*packet);
+        }
+        current_cross = NormalClip(screen[0], screen[1], screen[2]);
+        if (current_cross > 0)
+        {
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+            packet->xy0 = (uint32)screen[0];
+            packet->xy1 = (uint32)screen[1];
+            packet->xy2 = (uint32)screen[2];
+            v3 = faces->v[3];
+            depth[3] = gte_project_full_depth(&v3, &screen[3], &flags);
+            packet->xy3 = (uint32)screen[3];
+            memcpy(normals, faces->normals, sizeof(normals));
+            source_color = faces->colors[0];
+            mesh_color_eval3(normals, source_color, colors);
+            packet->clut = faces->clut;
+            packet->tpage = faces->tpage;
+            packet->uv0 = (uint16)faces->v[0].pad;
+            packet->uv1 = (uint16)faces->v[1].pad;
+            packet->uv2 = (uint16)faces->v[2].pad;
+            packet->uv3 = (uint16)faces->v[3].pad;
+            packet->color0 = colors[0];
+            packet->color1 = colors[1];
+            packet->color2 = colors[2];
+            n3 = faces->normals[3];
+            colors[3] = mesh_color_eval(&n3, source_color, 3u);
+            packet->color3 = colors[3];
+            previous_average = AverageZ4(depth[0], depth[1], depth[2], depth[3]);
+        }
+        previous_cross = current_cross;
+        ++faces;
+    } while (--remaining != 0u);
+    {
+        sint32 average = (sint32)((uint32)previous_average + (uint32)render_order.bias);
+
+        if (previous_cross > 0 && (uint32)average < depth_limit)
+        {
+            uint32 *bucket = ot + (uint32)average;
+
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+            packet->tag = *bucket | 0x0C000000u;
+            AddPrim(bucket, packet);
+            packet_offset += sizeof(*packet);
+        }
+    }
+    render_packet_publish(packet_offset);
+}
+
+void mesh_draw_model(uint32 *ot, uint32 depth_limit, const MESH_MODEL *model)
+{
+    render_set_order_depth(ot, depth_limit);
+    mesh_draw_tri_flat_lit(model->sets[0].faces, (sint32)model->sets[0].count);
+    mesh_draw_quad_flat_lit(model->sets[1].faces, (sint32)model->sets[1].count);
+    mesh_draw_tri_flat_lit_tex(model->sets[2].faces, (sint32)model->sets[2].count);
+    mesh_draw_quad_flat_lit_tex(model->sets[3].faces, (sint32)model->sets[3].count);
+    mesh_draw_tri_gouraud_lit(model->sets[4].faces, (sint32)model->sets[4].count);
+    mesh_draw_quad_gouraud_lit(model->sets[5].faces, (sint32)model->sets[5].count);
+    mesh_draw_tri_gouraud_lit_tex(model->sets[6].faces, (sint32)model->sets[6].count);
+    mesh_draw_quad_gouraud_lit_tex(model->sets[7].faces, (sint32)model->sets[7].count);
+}
+
+static void mesh_outline_tri(const MESH_FACE *faces, sint32 count)
+{
+    uint32 packet_offset = render_packet_offset();
+    uint32 *ot = render_order.ot;
+    uint32 depth_limit = render_order.depth_limit;
+    sint32 index;
+
+    FUNCTION_MARKER(0x8001D840u, "MAIN.EXE");
+    for (index = 0; index < count; ++index, ++faces)
+    {
+        sint32 screen[3];
+        sint32 depth[3];
+        sint32 flags;
+        sint32 cross;
+        sint32 average;
+        uint32 *bucket;
+        LINE_F4 *packet;
+        sint32 vertex;
+
+        for (vertex = 0; vertex < 3; ++vertex)
+            depth[vertex] = gte_project(&faces->v[vertex], &screen[vertex], &flags);
+        cross = NormalClip(screen[0], screen[1], screen[2]);
+        average = (sint32)((uint32)AverageZ3(depth[0], depth[1], depth[2]) + (uint32)render_order.bias);
+        if ((uint32)average >= depth_limit)
+            continue;
+        bucket = ot + (uint32)average;
+        packet = render_packet_at(packet_offset, sizeof(*packet));
+        packet->tag = 0x06000000u;
+        AddPrim(bucket, packet);
+        packet->color0 = cross > 0 ? 0x4CE8D0D0u : 0x4CA89090u;
+        packet->xy0 = (uint32)screen[0];
+        packet->xy1 = (uint32)screen[1];
+        packet->xy2 = (uint32)screen[2];
+        packet->xy3 = (uint32)screen[0];
+        packet->pad = 0x55555555u;
+        packet_offset += sizeof(*packet);
+    }
+    render_packet_publish(packet_offset);
+}
+
+static void mesh_outline_quad(const MESH_FACE *faces, sint32 count)
+{
+    uint32 packet_offset = render_packet_offset();
+    uint32 *ot = render_order.ot;
+    uint32 depth_limit = render_order.depth_limit;
+    sint32 index;
+
+    FUNCTION_MARKER(0x8001D680u, "MAIN.EXE");
+    for (index = 0; index < count; ++index, ++faces)
+    {
+        sint32 screen[4];
+        sint32 depth[4];
+        sint32 flags;
+        sint32 cross;
+        sint32 average;
+        uint32 *bucket;
+        MESH_QUAD_OUTLINE *packet;
+        sint32 vertex;
+
+        for (vertex = 0; vertex < 4; ++vertex)
+            depth[vertex] = gte_project(&faces->v[vertex], &screen[vertex], &flags);
+        cross = NormalClip(screen[0], screen[1], screen[2]);
+        average = (sint32)((uint32)AverageZ4(depth[0], depth[1], depth[2], depth[3]) + (uint32)render_order.bias);
+        if ((uint32)average >= depth_limit)
+            continue;
+        bucket = ot + (uint32)average;
+        packet = render_packet_at(packet_offset, sizeof(*packet));
+        packet->tag = 0x07000000u;
+        AddPrim(bucket, packet);
+        packet->color0 = cross > 0 ? 0x4CE8D0D0u : 0x4CA89090u;
+        const sint32 outline[5] = {screen[0], screen[1], screen[3], screen[2], screen[0]};
+        for (vertex = 0; vertex < 5; ++vertex)
+        {
+            packet->points[vertex].xy = (uint32)outline[vertex];
+        }
+        packet->pad = 0x55555555u;
+        packet_offset += sizeof(*packet);
+    }
+    render_packet_publish(packet_offset);
+}
+
+void mesh_outline_model(uint32 *ot, uint32 depth_limit, const MESH_MODEL *model)
+{
+    FUNCTION_MARKER(0x8001D9ECu, "MAIN.EXE");
+    render_set_order_depth(ot, depth_limit);
+    for (uint32 kind = 0; kind < 8u; ++kind)
+    {
+        const MESH_FACE_SET *set = &model->sets[kind];
+        if ((kind & 1u) != 0u)
+            mesh_outline_quad(set->faces, (sint32)set->count);
+        else
+            mesh_outline_tri(set->faces, (sint32)set->count);
+    }
+}
+
+void mesh_clear_archive(MESH_ARCHIVE *archive)
+{
+    for (uint32 idx = 0; idx < archive->count; ++idx)
+        mesh_clear_model(&archive->models[idx]);
+    free(archive->models);
+    memset(archive, 0, sizeof(*archive));
+}
+
+sint32 mesh_copy_model(const MESH_MODEL *src, MESH_MODEL *dst)
+{
+    MESH_MODEL model = {0};
+    if (!src || !dst)
+        return 0;
+    for (uint32 kind = 0; kind < 8u; ++kind)
+    {
+        const MESH_FACE_SET *set = &src->sets[kind];
+        if (!set->count)
+            continue;
+        if (!set->faces || set->count > INT32_MAX || set->count > SIZE_MAX / sizeof(MESH_FACE))
+            goto fail;
+        MESH_FACE_SET *copy = &model.sets[kind];
+        copy->faces = calloc(set->count, sizeof(*copy->faces));
+        if (!copy->faces)
+            goto fail;
+        copy->count = set->count;
+        memcpy(copy->faces, set->faces, (size_t)set->count * sizeof(*copy->faces));
+    }
+    mesh_clear_model(dst);
+    *dst = model;
+    return 1;
+fail:
+    mesh_clear_model(&model);
+    return 0;
+}
+
+static uint32 mesh_read_be_word(const uint8 *src)
+{
+    return ((uint32)src[0] << 24) | ((uint32)src[1] << 16) | ((uint32)src[2] << 8) | (uint32)src[3];
+}
+
+sint32 mesh_decode_archive(const uint8 *src, size_t size, MESH_ARCHIVE *dst)
+{
+    MESH_ARCHIVE archive = {0};
+    if (!src || !dst || size < 12u || memcmp(src, "FORM", 4u) || memcmp(src + 8u, "JETS", 4u))
+        return 0;
+    uint32 length = mesh_read_be_word(src + 4u);
+    if (length < 4u || length > size - 8u)
+        return 0;
+    size_t end = 8u + (size_t)length;
+    size_t offset = 12u;
+    uint32 count = 0u;
+    while (offset < end)
+    {
+        if (end - offset < 8u)
+            return 0;
+        uint32 bytes = mesh_read_be_word(src + offset + 4u);
+        size_t remaining = end - offset - 8u;
+        if (bytes > remaining || ((4u - (bytes & 3u)) & 3u) > remaining - bytes)
+            return 0;
+        if (memcmp(src + offset, "BOAT", 4u) == 0)
+            ++count;
+        offset += 8u + bytes + ((4u - (bytes & 3u)) & 3u);
+    }
+    if (count > SIZE_MAX / sizeof(MESH_MODEL))
+        return 0;
+    if (count)
+    {
+        archive.models = calloc(count, sizeof(*archive.models));
+        if (!archive.models)
+            return 0;
+    }
+    archive.count = count;
+    uint32 idx = 0u;
+    for (offset = 12u; offset < end;)
+    {
+        uint32 bytes = mesh_read_be_word(src + offset + 4u);
+        if (memcmp(src + offset, "BOAT", 4u) == 0)
+            if (!mesh_decode_model(src + offset + 8u, bytes, &archive.models[idx++]))
+                goto fail;
+        offset += 8u + bytes + ((4u - (bytes & 3u)) & 3u);
+    }
+    mesh_clear_archive(dst);
+    *dst = archive;
+    return 1;
+fail:
+    mesh_clear_archive(&archive);
+    return 0;
+}
+
+void mesh_clear_boat_models(MESH_BOAT_MODELS *models)
+{
+    mesh_clear_model(&models->main);
+    mesh_clear_model(&models->lod);
+    mesh_clear_model(&models->prop[0]);
+    mesh_clear_model(&models->prop[1]);
+    mesh_clear_model(&models->prop_lod);
+}
+
+sint32 mesh_load_boat_models(const MESH_ARCHIVE *archive, uint8 boat, sint32 level, uint8 variant, uint32 flags, MESH_BOAT_MODELS *dst)
+{
+    MESH_BOAT_MODELS models = {0};
+    if (!archive || !dst || level <= 0)
+        return 0;
+    uint32 base = (flags & 4u) ? 74u : (flags & 8u) ? 50u + 4u * (boat % 6u) : 14u + 4u * (boat % 9u);
+    if (variant)
+        base += 2u;
+    uint64 prop = 2u * ((uint64)(uint32)level - 1u) + 4u;
+    if (!archive->models || base + 1u >= archive->count || prop + 1u >= archive->count)
+        return 0;
+    if (!mesh_copy_model(&archive->models[base], &models.main)
+        || !mesh_copy_model(&archive->models[base + 1u], &models.lod)
+        || !mesh_copy_model(&archive->models[(uint32)prop], &models.prop[0])
+        || ((level == 2 || (uint32)(level - 4) < 2u) && !mesh_copy_model(&archive->models[(uint32)prop], &models.prop[1]))
+        || !mesh_copy_model(&archive->models[(uint32)prop + 1u], &models.prop_lod))
+    {
+        mesh_clear_boat_models(&models);
+        return 0;
+    }
+    mesh_clear_boat_models(dst);
+    *dst = models;
+    return 1;
+}
+
+void mesh_draw_lit_quads(uint32 *ordering, const MESH_MODEL *model, const SVECTOR *normal)
+{
+    sint32 count;
+    const MESH_FACE *face;
+    uint32 packet_offset;
+    POLY_FT4 *packet;
+    uint32 color;
+    sint32 previous_cross = -1;
+    sint32 previous_depth = 0;
+    uint32 remaining;
+
+    FUNCTION_MARKER(0x80033F54u, "MAIN.EXE");
+    if (model == NULL)
+        return;
+    count = (sint32)model->sets[3].count;
+    face = model->sets[3].faces;
+    if (count == 0)
+        return;
+    packet_offset = render_packet_offset();
+    {
+        uint32 source_color = face->colors[0];
+
+        color = gte_normal_color_col(normal, source_color);
+    }
+    remaining = (uint32)count;
+    while (remaining-- != 0u)
+    {
+        sint32 screen[4];
+        sint32 depths[4];
+        sint32 flags;
+        sint32 vertex;
+        sint32 cross;
+
+        for (vertex = 0; vertex < 3; ++vertex)
+            depths[vertex] = gte_project_full_depth(&face->v[vertex], &screen[vertex], &flags);
+        {
+            sint32 depth = (sint32)((uint32)previous_depth + (uint32)render_order.bias);
+
+            previous_depth = depth;
+            if (previous_cross > 0 && (uint32)depth < 99u)
+            {
+                uint32 *bucket = ordering + (uint32)depth;
+
+                packet = render_packet_at(packet_offset, sizeof(*packet));
+                packet->tag = 0x09000000u;
+                AddPrim(bucket, packet);
+                packet_offset += sizeof(*packet);
+            }
+        }
+        cross = NormalClip(screen[0], screen[1], screen[2]);
+        previous_cross = cross;
+        if (cross > 0)
+        {
+            sint32 average;
+
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+            packet->xy0 = (uint32)screen[0];
+            packet->xy1 = (uint32)screen[1];
+            packet->xy2 = (uint32)screen[2];
+            depths[3] = gte_project_full_depth(&face->v[3], &screen[3], &flags);
+            packet->clut = face->clut;
+            packet->tpage = face->tpage;
+            packet->uv0 = (uint16)face->v[0].pad;
+            packet->uv1 = (uint16)face->v[1].pad;
+            packet->uv2 = (uint16)face->v[2].pad;
+            packet->uv3 = (uint16)face->v[3].pad;
+            packet->xy3 = (uint32)screen[3];
+            average = AverageZ4(depths[0], depths[1], depths[2], depths[3]);
+            packet->color0 = color;
+            previous_depth = average;
+        }
+        ++face;
+    }
+    {
+        sint32 depth = (sint32)((uint32)previous_depth + (uint32)render_order.bias);
+
+        previous_depth = depth;
+        if (previous_cross > 0 && (uint32)depth < 99u)
+        {
+            uint32 *bucket = ordering + (uint32)depth;
+
+            packet = render_packet_at(packet_offset, sizeof(*packet));
+            packet->tag = 0x09000000u;
+            AddPrim(bucket, packet);
+            packet_offset += sizeof(*packet);
+        }
+    }
+    render_packet_publish(packet_offset);
 }

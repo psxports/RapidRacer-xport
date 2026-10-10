@@ -43,18 +43,18 @@ static sint32 mdec_release_queue(uint32 request)
     return 0;
 }
 
-sint32 mdec_stream_play(uint32 descriptor, sint32 (*callback)(void), sint32 mode)
+sint32 mdec_stream_play(uint32 desc, sint32 (*callback)(void), sint32 mode)
 {
     uint32 request = 0x800FF6E0u;
     sint32 retries;
 
     FUNCTION_MARKER(0x80062810u, "MAIN.EXE");
-    if (r_u32(descriptor) == 0u)
+    if (r_u32(desc) == 0u)
         return 3;
-    mdec_init_stream(descriptor);
+    mdec_init_stream(desc);
     if (cd_retry_read_sequence(request) == 0)
     {
-        mdec_stop_stream(descriptor);
+        mdec_stop_stream(desc);
         return 3;
     }
     for (retries = 0; retries < 5; ++retries)
@@ -64,34 +64,34 @@ sint32 mdec_stream_play(uint32 descriptor, sint32 (*callback)(void), sint32 mode
     }
     if (retries == 5)
     {
-        mdec_stop_stream(descriptor);
+        mdec_stop_stream(desc);
         return 3;
     }
     mdec_decode_request(request);
-    mdec_stop_stream(descriptor);
+    mdec_stop_stream(desc);
     return r_u16(0x800CD598u) != 0u ? 1 : 0;
 }
 
-sint32 mdec_init_stream(uint32 descriptor)
+sint32 mdec_init_stream(uint32 desc)
 {
-    sint16 width = (sint16)r_u16(descriptor + 8u);
-    sint16 first_y = (sint16)r_u16(descriptor + 10u);
-    sint16 second_y = (sint16)r_u16(descriptor + 12u);
-    sint16 third_y = (sint16)r_u16(descriptor + 14u);
-    sint16 height = (sint16)r_u16(descriptor + 16u);
+    sint16 width = (sint16)r_u16(desc + 8u);
+    sint16 first_y = (sint16)r_u16(desc + 10u);
+    sint16 second_y = (sint16)r_u16(desc + 12u);
+    sint16 third_y = (sint16)r_u16(desc + 14u);
+    sint16 height = (sint16)r_u16(desc + 16u);
     uint32 size;
 
     FUNCTION_MARKER(0x80062C14u, "MAIN.EXE");
     w_u32(0x800B6918u, r_u32(0x800A12A0u));
     global_fn_80068900(1u);
-    w_u16(0x800CD568u, r_u16(descriptor + 4u));
+    w_u16(0x800CD568u, r_u16(desc + 4u));
     w_u16(0x800CD56Au, (uint16)width);
     w_u16(0x800CD56Cu, (uint16)first_y);
     w_u16(0x800CD56Eu, (uint16)(second_y + 8));
     w_u16(0x800CD570u, (uint16)third_y);
     w_u16(0x800CD572u, (uint16)height);
-    w_u32(0x800CD574u, r_u32(descriptor + 20u));
-    w_u16(0x800CD578u, r_u16(descriptor + 28u));
+    w_u32(0x800CD574u, r_u32(desc + 20u));
+    w_u16(0x800CD578u, r_u16(desc + 28u));
     w_u32(0x800CD57Cu, 0u);
     w_u16(0x800CD598u, 0u);
     w_u16(0x800CD59Au, 0u);
@@ -107,12 +107,12 @@ sint32 mdec_init_stream(uint32 descriptor)
     w_u16(0x800CD5D2u, 18u);
     w_u16(0x800CD5D4u, 0u);
     w_u16(0x800CD5D6u, 256u);
-    w_u8(0x800CD5D9u, r_u16(descriptor + 4u) == 1u);
+    w_u8(0x800CD5D9u, r_u16(desc + 4u) == 1u);
     w_u8(0x800CD5C5u, r_u8(0x800CD5D9u));
     if (height == 240)
     {
-        display_clear_page_region(0, 0, 240, 512, 16, 0, 0, 0, 512, 0u, 0u, 0u);
-        display_clear_page_region(1, 0, 240, 512, 16, 0, 0, 0, 512, 0u, 0u, 0u);
+        display_clear_page_region(0, 0, 240, 512, 16, 0u, 0u, 0u);
+        display_clear_page_region(1, 0, 240, 512, 16, 0u, 0u, 0u);
     }
     w_u16(0x800CD580u, (uint16)mdec_scale_output_width((uint16)first_y));
     w_u16(0x800CD582u, (uint16)(second_y + 8));
@@ -123,7 +123,7 @@ sint32 mdec_init_stream(uint32 descriptor)
     w_u16(0x800CD58Cu, (uint16)mdec_scale_output_width((uint16)third_y));
     w_u16(0x800CD58Eu, (uint16)height);
     w_u16(0x800CD594u, (uint16)mdec_scale_output_width(16u));
-    size = r_u32(descriptor + 24u) != 0u ? r_u32(descriptor + 24u) : 132096u;
+    size = r_u32(desc + 24u) != 0u ? r_u32(desc + 24u) : 132096u;
     w_u32(0x800CD5A4u, arena_alloc_aligned(size));
     w_u32(0x800CD5A8u, arena_alloc_aligned(size));
     size = (r_u16(0x800CD568u) != 0u ? 48u : 32u) * (uint32)(sint32)height;
@@ -132,7 +132,7 @@ sint32 mdec_init_stream(uint32 descriptor)
     return 0;
 }
 
-sint32 mdec_stop_stream(uint32 descriptor)
+sint32 mdec_stop_stream(uint32 desc)
 {
     sint32 result = 512;
 
@@ -141,7 +141,7 @@ sint32 mdec_stop_stream(uint32 descriptor)
     cd_adjust_audio_volume(0u);
     CdControlB(CdlStop, 0, 0);
     w_u32(0x800A12A0u, r_u32(0x800B6918u));
-    if (r_u16(descriptor + 14u) == 512u)
+    if (r_u16(desc + 14u) == 512u)
     {
         result = r_u16(0x800CD568u);
         if (result != 0)

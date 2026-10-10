@@ -5,6 +5,22 @@
 
 struct BOAT;
 
+typedef struct
+{
+    uint16 music;
+    uint16 effects;
+    uint16 mode;
+    uint16 mono;
+    uint16 slider_value;
+    uint16 tracks[8];
+    uint32 track_slot;
+} SOUND_OPTIONS;
+
+extern SOUND_OPTIONS sound_options;
+extern const uint16 sound_default_tracks[8];
+
+void sound_step_track(sint32 direction);
+
 uint32 sound_queue_command(uint32 state, sint32 sound, sint32 command, uint32 argument);
 void voice_set_note(uint32 voice_state, sint16 octave, sint16 note);
 sint32 voice_update_volume(uint32 voice_state);

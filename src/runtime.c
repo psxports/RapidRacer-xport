@@ -53,7 +53,7 @@ static void runtime_dispatch_vsync(void)
 void runtime_set_vsync_cb(uint32 callback)
 {
     rr_vsync_guest_callback = callback;
-    VSyncCallback(callback ? (void *)runtime_dispatch_vsync : NULL);
+    VSyncCallback(callback ? runtime_dispatch_vsync : NULL);
 }
 
 typedef struct
@@ -201,15 +201,15 @@ uint32 runtime_build_cd_path(uint32 input)
     return runtime_build_cd_path_at(0x801FFE08u, input);
 }
 
-uint32 runtime_join_paths(uint32 prefix, uint32 suffix)
+uint32 runtime_join_paths(uint32 prefix, const char *suffix)
 {
     uint32 output = 0x801FFDB0u;
     uint32 cursor = output;
 
     while (r_u8(prefix) != 0u && cursor - output < 62u)
         w_u8(cursor++, r_u8(prefix++));
-    while (r_u8(suffix) != 0u && cursor - output < 62u)
-        w_u8(cursor++, r_u8(suffix++));
+    while ((uint8)*suffix != 0u && cursor - output < 62u)
+        w_u8(cursor++, (uint8)*suffix++);
     w_u8(cursor, 0u);
     return output;
 }

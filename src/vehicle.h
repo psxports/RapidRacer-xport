@@ -143,6 +143,7 @@ typedef struct BOAT
 } BOAT;
 
 BOAT_MENU *vehicle_menu(uint32 menu);
+extern const uint8 vehicle_base_levels[9];
 extern BOAT vehicle_boats[16];
 extern uint32 vehicle_racer_count;
 extern uint16 vehicle_leader_count;
@@ -163,7 +164,7 @@ enum
 
 sint32 vehicle_steer_edge(BOAT *boat);
 sint32 vehicle_config_feature_desc(BOAT_SETUP *output, sint32 index, sint32 mode);
-sint32 vehicle_init(BOAT *boat, sint16 segment, sint16 entry, sint32 driver, uint32 settings);
+sint32 vehicle_init(BOAT *boat, sint16 segment, sint16 entry, sint32 driver, sint32 cfg_idx);
 sint32 vehicle_init_slots(void);
 sint32 vehicle_damp_vel(BOAT *boat);
 sint32 vehicle_input(BOAT *boat, uint32 context);
@@ -174,7 +175,7 @@ sint32 vehicle_control_force(BOAT *boat);
 sint32 vehicle_steer(BOAT *boat);
 sint32 vehicle_reset_motion(BOAT *boat);
 void vehicle_sum_contacts(BOAT *boat, sint32 reset);
-void vehicle_sample_boundary(BOAT *boat);
+
 sint32 vehicle_solve_contacts(BOAT *boat);
 sint32 vehicle_contact_force(BOAT *boat, const ROUTE_CONTACT *control, sint32 *cross_x);
 sint32 vehicle_assign_list_identifiers(void);
