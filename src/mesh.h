@@ -1,17 +1,38 @@
-#ifndef RR_MESH_H
-#define RR_MESH_H
+#ifndef MESH_H
+#define MESH_H
 
 #include "psx.h"
+#include "utils.h"
 
 struct RACE_VIEW;
 
 #include <stddef.h>
 
+// JETS archive identifiers in native little-endian word order
+enum
+{
+    CHUNK_FORM = 0x4D524F46,
+    CHUNK_JETS = 0x5354454A,
+    CHUNK_BOAT = 0x54414F42,
+    CHUNK_TIMA = 0x414D4954
+};
+
+typedef struct
+{
+    uint32 id, size_be;
+} IFF_CHUNK;
+
+typedef struct
+{
+    IFF_CHUNK chunk;
+    uint32 type;
+} IFF_HEADER;
+
 struct BOAT;
 
 typedef struct
 {
-    SVECTOR v[4], normals[4];
+    SVECTOR v[4], n[4];
     uint32 colors[4];
     uint16 tpage, clut;
 } MESH_FACE;
@@ -44,34 +65,27 @@ extern MESH_MODEL mesh_event_models[4];
 typedef struct
 {
     uint32 enabled, rand_bit, rand_pair;
-} MESH_RENDER_STATE;
+} MESH_RENDER;
 
-extern MESH_RENDER_STATE mesh_render_state;
+extern MESH_RENDER mesh_render_state;
 
 void mesh_clear_boat_models(MESH_BOAT_MODELS *models);
 sint32 mesh_load_boat_models(const MESH_ARCHIVE *archive, uint8 boat, sint32 level, uint8 variant, uint32 flags, MESH_BOAT_MODELS *dst);
 
 // Dst must be zero-initialized or own a decoded resource
-sint32 mesh_decode_archive(const uint8 *src, size_t size, MESH_ARCHIVE *dst);
+sint32 mesh_decode_archive(const uint8 *src, uint32 size, MESH_ARCHIVE *dst);
 void mesh_clear_archive(MESH_ARCHIVE *archive);
 sint32 mesh_copy_model(const MESH_MODEL *src, MESH_MODEL *dst);
 
 // Dst must be zero-initialized or own a previously decoded model
-sint32 mesh_decode_model(const uint8 *src, size_t size, MESH_MODEL *dst);
+sint32 mesh_decode_model(const uint8 *src, uint32 size, MESH_MODEL *dst);
 void mesh_clear_model(MESH_MODEL *model);
-sint32 mesh_project_model(MESH_MODEL *model);
-void mesh_draw_model(uint32 *ot, uint32 depth_limit, const MESH_MODEL *model);
-void mesh_outline_model(uint32 *ot, uint32 depth_limit, const MESH_MODEL *model);
-void mesh_draw_lit_quads(uint32 *ot, const MESH_MODEL *model, const SVECTOR *normal);
 
+void mesh_draw_model(uint32 *ot, uint32 depth_limit, const MESH_MODEL *model);
 
 uint32 *mesh_prepare_player_ot_packet(const struct RACE_VIEW *state, sint32 player);
-sint32 mesh_vis_vert_project(const struct BOAT *boat);
-uint32 *mesh_prepare_racer_ot_packet(const struct RACE_VIEW *state, uint32 bucket, sint32 player);
-sint32 route_segment_is_in_window(const struct RACE_VIEW *entry, sint32 offset);
-sint32 mesh_order_bucket(const struct RACE_VIEW *view, const sint32 position[3], sint16 *depth, sint32 *visible);
+
 void mesh_render_racer_model(const struct RACE_VIEW *view, sint32 player);
 sint32 mesh_init_tex_templates(void);
-void mesh_fn_80034180(void);
 
-#endif /* RR_MESH_H */
+#endif /* MESH_H */

@@ -1,8 +1,11 @@
+#include "menu_pause.h"
+#include "hud.h"
+#include "river.h"
 #include "name.h"
 #include "ai.h"
 #include "psx_gpu.h"
 #include "camera.h"
-#include "display.h"
+#include "disp.h"
 #include "effects.h"
 #include "input.h"
 #include "mc.h"
@@ -11,77 +14,40 @@
 #include "pickup.h"
 #include "perf.h"
 #include "profile.h"
-#include "race_events.h"
 #include "route.h"
-#include "scene.h"
-#include "vehicle.h"
-#include "motion.h"
-#include "vehicle_select.h"
+#include "track.h"
+#include "boat.h"
+#include "utils.h"
+#include "upgrades.h"
 #include "cd.h"
-#include "results.h"
+#include "race.h"
 #include "sound.h"
 #include "arena.h"
 #include "callbacks.h"
-#include "intro.h"
+#include "movie.h"
 #include "menu.h"
 #include <stdio.h>
 #include <stdlib.h>
-#include "runtime.h"
-#include "global.h"
 #include "render.h"
 #include "game.h"
 #include "xport_trace.h"
 
+typedef struct
+{
+    const RACE_VIEW *view0;
+    const RACE_VIEW *view1;
+    const RACE_CFG *cfg;
+    sint32 warmup;
+} RACE_LOOP;
+
 // Timing from MAIN.EXE 800B3D88/800B69DC
-GAME_TIMING game_timing = {50u, 0u};
+GAME_TIMING game_timing = {50, 0};
 
-const RACE_VIEW race_views[2] = {{0u}, {1u}};
+const RACE_VIEW race_views[2] = {{0}, {1}};
 
-RACE_CFG race_cfg = {1u, {0u, 1u}, 3u, 1u, 1u, 0u};
+RACE_CFG race_cfg = {1, {0, 1}, 3, 1, 1, 0};
 uint32 race_paused;
-
-static void game_run_startup_constructors(void)
-{
-}
-
-static void game_init_backup_unit(void)
-{
-}
-
-static void race_debug_line(void)
-{
-    const BOAT *boat = vehicle_players[0];
-    char line[64];
-    int length = snprintf(line, sizeof(line), "depth %d mat %d\n", (sint32)((uint32)boat->contacts.points[3].height + (uint32)boat->contacts.points[4].height), boat->motion.transform.pose.t[1]);
-
-    if (length >= 0 && (uint32)length < sizeof(line))
-        guest_debug_append(line, (uint32)length);
-}
-
-void game_start(void)
-{
-    FUNCTION_MARKER(0x80010184u, "MAIN.EXE");
-    game_run_startup_constructors();
-    ResetCallback();
-    ResetGraph(0);
-    SetGraphDebug(0);
-    SetVideoMode(MODE_PAL);
-    InitGeom();
-    input_init();
-    mc_fn_80074d30(1u);
-    mc_fn_80074d84();
-    game_init_backup_unit();
-    game_reset_checkpoint_stack();
-    cd_init_drive();
-    cb_init_vblank_timer();
-    cb_init_pool();
-    game_init_defaults();
-    sound_init_audio();
-#if 0
-    perf_init(0);
-#endif
-    game_main_loop_continue(0);
-}
+uint32 race_start_phase;
 
 GAME_SELECTION game_selection;
 
@@ -95,307 +61,193 @@ RACE_PARTICIPANT race_participants[16];
 // Additional options from MAIN.EXE 800E0590/94 and 800E05B2
 GAME_OPTIONS game_options;
 
-sint32 race_loop(const RACE_VIEW *first, const RACE_VIEW *second, const RACE_CFG *cfg)
+sint32 game_update_racer_modes(const RACE_VIEW *state)
 {
-    PSX_RECT clear_area;
-    sint32 warmup = 2;
+    uint16 marker;
+    uint32 val;
+    sint32 participant_count;
+    sint32 mode;
+    sint32 idx;
 
-    FUNCTION_MARKER(0x800103C4u, "MAIN.EXE");
-    clear_area.x = (sint16)r_u16(0x800B3DACu);
-    clear_area.y = (sint16)r_u16(0x800B3DAEu);
-    clear_area.w = (sint16)r_u16(0x800B3DB0u);
-    clear_area.h = (sint16)r_u16(0x800B3DB2u);
-    DrawSync(0);
-    cb_wait_vblank();
-    SetDispMask(0);
-    ClearImage(&clear_area, 0u, 0u, 0u);
-    DrawSync(0);
-    cb_wait_vblank();
-    if (cfg->players == 1u)
+    FUNCTION_MARKER(0x8002CFA8, "MAIN.EXE");
+    marker = game_timing.ticks;
+    val = track_start->event_tick;
+    if (marker == val)
     {
-        PutDispEnv(&display_scene_frame(camera_for_view(first), 0)->disp);
-        PutDrawEnv(&display_scene_frame(camera_for_view(first), 0)->draw);
-    }
-    VSync(0);
-    game_timing.ticks = 0u;
-    display_state.scene_buffer = 0u;
-    if ((sint16)race_selection.format == 1)
+        effects_init_transform_object(state);
         sound_queue_command(sound_for_context(&race_views[0]), 11, 0);
-    return race_loop_resume(first, second, cfg, warmup);
-}
-
-sint32 game_render_frame(void)
-{
-    sint32 players = (sint32)race_cfg.players;
-    sint32 index;
-
-    FUNCTION_MARKER(0x800107A4u, "MAIN.EXE");
-#if 0
-    perf_frame_end();
-    {
-        sint16 buffer = (sint16)display_state.scene_buffer;
-        uint32 overlay_entry = 0x800DE238u + 1784u * (uint32)(sint32)buffer;
-
-        perf_render_graph(overlay_entry, buffer);
-        perf_render_current(overlay_entry, buffer);
     }
-#endif
-    if (players == 1 && game_timing.base_rate == game_timing.frame_rate)
+    participant_count = boat_racer_count;
+    if (participant_count > 0)
     {
-        const RACE_VIEW *state = &race_views[0];
-        uint32 buffer_index;
+        sint32 loop_mode = race_start_phase;
 
-        cb_sync_video_field();
-        ResetGraph(1);
-        buffer_index = display_state.scene_buffer;
-        DrawOTag(render_scene_ot(render_frame(camera_for_view(state), (sint32)buffer_index)) + 14);
-        if (render_capture_enabled != 0u)
+        idx = 0;
+        do
         {
-            buffer_index = display_state.scene_buffer;
-            effects_capture_screen_region(state, buffer_index);
-            buffer_index = display_state.scene_buffer;
-            DrawOTag(render_scene_ot(render_frame(camera_for_view(state), (sint32)buffer_index)) + 1);
+            BOAT *object = boat_racers[idx];
+            object->race.phase = object->race.phase == 1 ? 2 : 1;
+            if (loop_mode == 1)
+                object->race.mode = 3;
+            ++idx;
+        } while (idx < boat_racer_count);
+    }
+    mode = race_start_phase;
+    if (mode == 0)
+        return 1;
+    if (mode == 1)
+    {
+        camera_views[0].mode = 7;
+        camera_attract.phase = 30;
+    }
+    else if (mode == 4)
+    {
+        BOAT_MENU *menu = boat_player_menu(&race_views[0]);
+
+        menu->mode = mode;
+        return sound_queue_command(sound_for_context(&race_views[0]), 10, 0);
+    }
+    mode = race_start_phase;
+    if (mode <= 0)
+    {
+        return mode;
+    }
+
+    {
+        BOAT *object = boat_player(state);
+
+        if (object->race.phase == 2)
+        {
+            uint32 next;
+
+            object->race.mode = 4;
+            object = boat_player(state);
+            boat_init_motion(object);
+            object = boat_player(state);
+            object->route.speed = 0;
+            object = boat_player(state);
+            val = race_start_phase;
+            next = object->setup.throttle;
+            val += 1;
+            race_start_phase = val;
+            object->control.throttle = next;
         }
     }
-    else
     {
-        uint32 buffer_index;
+        BOAT *object = boat_tracks(state)[0];
 
-        VSync(2);
-        ResetGraph(1);
-        buffer_index = display_state.scene_buffer;
-        PutDrawEnv(&display_scene_frame(&camera_views[0], (sint32)buffer_index)->draw);
-        buffer_index = display_state.scene_buffer;
-        PutDispEnv(&display_scene_frame(&camera_views[0], (sint32)buffer_index)->disp);
-        for (index = 0; index < (sint32)race_cfg.players; ++index)
+        if (object->race.phase == 2)
         {
-            const RACE_VIEW *state = index == 0 ? &race_views[0] : &race_views[1];
-
-            buffer_index = display_state.scene_buffer;
-            DrawOTag(render_scene_ot(render_frame(camera_for_view(state), (sint32)buffer_index)) + 14);
-            if (render_capture_enabled != 0u)
-            {
-                buffer_index = display_state.scene_buffer;
-                effects_capture_screen_region(state, buffer_index);
-                buffer_index = display_state.scene_buffer;
-                DrawOTag(render_scene_ot(render_frame(camera_for_view(state), (sint32)buffer_index)) + 1);
-            }
+            object->race.mode = 5;
+            object = boat_tracks(state)[0];
+            boat_init_motion(object);
+            val = race_start_phase + 1;
+            race_start_phase = val;
         }
     }
-    // Host display adapter after original 0x80010960 frame submission
-    gpu_present();
-    return 0;
+    {
+        BOAT *object = boat_tracks(state)[1];
+
+        if (object->race.phase == 2)
+        {
+            object->race.mode = 5;
+            object = boat_tracks(state)[1];
+            boat_init_motion(object);
+            val = race_start_phase + 1;
+            race_start_phase = val;
+            return val;
+        }
+    }
+    return 5;
 }
 
-void race_init_runtime(const RACE_VIEW *first, const RACE_VIEW *second, const RACE_CFG *cfg)
+static void race_debug_line(void)
 {
-    uint32 first_output_state;
-    uint32 second_output_state;
-    uint32 call_argument;
-    uint32 mode;
-    sint32 font;
-    sint32 half_period;
-    uint8 parameter = 5u;
+    const BOAT *boat = boat_players[0];
+    char line[64];
+    int len = snprintf(line, sizeof(line), "depth %d mat %d\n", boat->contacts.points[3].height + boat->contacts.points[4].height, boat->pose.t[1]);
 
-    FUNCTION_MARKER(0x80010DDCu, "MAIN.EXE");
-    game_timing.frame_rate = race_cfg.players == 2u ? (uint32)((sint32)game_timing.base_rate / 2) : game_timing.base_rate;
-    race_paused = 0u;
-    half_period = (sint32)game_timing.base_rate / 2;
-    menu_state.confirm = MENU_CONFIRM_CLOSED;
-    motion_half_period = (sint32)((uint32)half_period);
-    render_init_packet_pools();
-    render_init_billboards();
-    if (race_cfg.variant != 2u)
-        render_capture_enabled = 1u;
-    if (race_cfg.mode == 8u)
-        race_events_init_showcase();
-    else
-    {
-        scene_select(cfg->course, cfg->variant);
-        mode = race_cfg.mode;
-        call_argument = cfg->course;
-        ai_config_template_desc((sint32)call_argument, mode == 5u ? 4u : race_selection.ai_variant);
-        object_node_flags_update_linked(route_resources.count);
-        game_select_state(cfg);
-        route_init_lanes(&route_resources, race_cfg.course);
-    }
-    vehicle_init_slots();
-    first_output_state = vehicle_legacy(vehicle_player(first));
-    vehicle_tracks(first)[1] = NULL;
-    vehicle_tracks(first)[0] = NULL;
-    w_u32(first_output_state + 2348u, 0x800B6B20u);
-    call_argument = 0u;
-    menu_init_race(first, call_argument, 0);
-    camera_init(camera_for_view(first));
-    if (race_cfg.players == 2u)
-    {
-        second_output_state = vehicle_legacy(vehicle_player(second));
-        vehicle_tracks(second)[1] = NULL;
-        vehicle_tracks(second)[0] = NULL;
-        w_u32(second_output_state + 2348u, 0x800B6B22u);
-        call_argument = 0u;
-        menu_init_race(second, call_argument, 1);
-        camera_init(camera_for_view(second));
-    }
-    else
-    {
-        vehicle_players[1] = NULL;
-        vehicle_tracks(second)[1] = NULL;
-        vehicle_tracks(second)[0] = NULL;
-    }
-    ai_sort_racers_by_rank(first, second);
-    pickup_write_racer_indices(race_selection.ranks);
-    render_init_materials((sint32)cfg->course);
-    render_init_prims(render_frame(&camera_views[0], 0));
-    render_init_prims(render_frame(&camera_views[0], 1));
-    if (cfg->players == 2u)
-    {
-        render_init_prims(render_frame(&camera_views[1], 0));
-        render_init_prims(render_frame(&camera_views[1], 1));
-    }
-    if (race_cfg.mode != 8u)
-        object_init_racer_object_groups(first, second, (sint32)cfg->players);
-    mode = cfg->players;
-    call_argument = cfg->layout;
-    render_init_context((sint32)mode, call_argument);
-    display_init_envs();
-    render_init_ui_prims();
-    runtime_load_font(960, 256);
-    if (cfg->players == 1u)
-        font = runtime_open_font(30, 200, 250, 230, 0, 512);
-    else
-        font = runtime_open_font(30, 32, 330, 50, 2, 512);
-    runtime_set_font_dump(font);
-    render_build_curve_scaled_lut();
-    mesh_init_tex_templates();
-    if (race_cfg.mode != 8u)
-        ai_assign_ctrl_states(&race_views[0], &race_views[1]);
-    cd_reset_audio();
-    CdControlB(14u, &parameter, 0);
-    VSync(3);
-    CdReadyCallback(cd_handle_ready_cb);
+    if (len >= 0 && len < sizeof(line))
+        FntPrint("%s", line);
 }
 
-sint32 game_select_state(const RACE_CFG *cfg)
+static sint32 game_init_defaults(void)
 {
-    sint32 result = cfg->variant == 1u ? 5 : 3;
+    sint32 idx;
 
-    FUNCTION_MARKER(0x80018C40u, "MAIN.EXE");
-    w_u32(0x800B67A0u, (uint32)result);
-    return result;
-}
-
-sint32 game_init_defaults(void)
-{
-    sint32 index;
-
-    FUNCTION_MARKER(0x80053A60u, "MAIN.EXE");
-    game_selection.ready = 0u;
-    game_selection.menu_variant = 0u;
-    for (index = 0; index < 3; ++index)
+    FUNCTION_MARKER(0x80053A60, "MAIN.EXE");
+    game_selection.ready = 0;
+    game_selection.menu_variant = 0;
+    for (idx = 0; idx < 3; ++idx)
     {
-        profile_at((uint32)index)->reset_pending = 1u;
-        profile_at((uint32)index)->reward_flags = 0u;
+        profile_at(idx)->reset_pending = 1;
+        profile_at(idx)->reward_flags = 0;
     }
-    profile_at(3u)->reset_pending = 1u;
-    profile_at(3u)->reward_flags = 0u;
-    for (index = 0; index < 18; ++index)
+    profile_at(3)->reset_pending = 1;
+    profile_at(3)->reward_flags = 0;
+    for (idx = 0; idx < 18; ++idx)
     {
-        PROFILE_SUMMARY *record = &profile_summaries[index];
-        record->rank = 50u;
-        record->profile = 50u;
-        record->lap_time[0] = 0u;
-        record->lap_time[1] = 0u;
-        record->lap_time[2] = 0u;
-        record->race_time[0] = 0u;
-        record->race_time[1] = 0u;
-        record->race_time[2] = 0u;
+        PROFILE_SUMMARY *rec = &profile_summaries[idx];
+        rec->rank = 50;
+        rec->profile = 50;
+        rec->lap_time[0] = 0;
+        rec->lap_time[1] = 0;
+        rec->lap_time[2] = 0;
+        rec->race_time[0] = 0;
+        rec->race_time[1] = 0;
+        rec->race_time[2] = 0;
     }
     profile_generate_opponents();
-    for (index = 0; index < 8; ++index)
-        sound_options.tracks[index] = sound_default_tracks[index];
-    game_selection.players = (uint16)((game_selection.players & 0xFF00u) | (uint8)(3u));
-    game_options.round_limit = 5u;
-    game_options.level = 0u;
+    for (idx = 0; idx < 8; ++idx)
+        sound_options.tracks[idx] = sound_default_tracks[idx];
+    game_selection.players = game_selection.players & 0xFF00u | 3;
+    game_options.round_limit = 5;
+    game_options.level = 0;
     name_reset_players();
-    sound_options.effects = 40u;
-    sound_mix.effects = 40u;
-    sound_options.music = 63u;
-    sound_mix.music = 63u;
-    vehicle_racer_count = (uint32)(8u);
-    vehicle_leader_count = (uint16)(8u);
-    vehicle_trailer_count = (uint16)(0u);
-    profile_selection.menu_slot = 0u;
-    profile_selection.mode_choice = 0u;
-    profile_selection.rules_slot = 0u;
-    profile_selection.controller = 0u;
-    input_calibrations[0].steer_center = (uint16)(0u);
-    input_calibrations[0].steer_range = (uint16)(4000u);
-    input_calibrations[0].accel_range = (uint16)(3500u);
-    input_calibrations[0].brake_range = (uint16)(3500u);
-    input_calibrations[1].steer_center = (uint16)(0u);
-    input_calibrations[1].steer_range = (uint16)(4000u);
-    input_calibrations[1].accel_range = (uint16)(3500u);
-    input_calibrations[1].brake_range = (uint16)(3500u);
-    input_calibrations[0].stick_center = (uint16)(0u);
-    input_calibrations[0].stick_range = (uint16)(4000u);
-    input_calibrations[1].stick_center = (uint16)(0u);
-    input_calibrations[1].stick_range = (uint16)(4000u);
-    for (index = 0; index < 5; ++index)
-        vehicle_select_init_player_profile((uint32)index);
-    game_selection.attract = 0u;
-    name_reels.code = (uint32)game_random_next() & 0xFFFFFu;
-    return (sint32)name_reels.code;
+    sound_options.effects = 40;
+    sound_mix.effects = 40;
+    sound_options.music = 63;
+    sound_mix.music = 63;
+    boat_racer_count = 8;
+    boat_leader_count = 8;
+    boat_trailer_count = 0;
+    profile_selection.menu_slot = 0;
+    profile_selection.mode_choice = 0;
+    profile_selection.rules_slot = 0;
+    profile_selection.pad = 0;
+    input_calibrations[0].steer_center = 0;
+    input_calibrations[0].steer_range = 4000;
+    input_calibrations[0].accel_range = 3500;
+    input_calibrations[0].brake_range = 3500;
+    input_calibrations[1].steer_center = 0;
+    input_calibrations[1].steer_range = 4000;
+    input_calibrations[1].accel_range = 3500;
+    input_calibrations[1].brake_range = 3500;
+    input_calibrations[0].stick_center = 0;
+    input_calibrations[0].stick_range = 4000;
+    input_calibrations[1].stick_center = 0;
+    input_calibrations[1].stick_range = 4000;
+    for (idx = 0; idx < 5; ++idx)
+        upgrades_init_player_profile(idx);
+    game_selection.attract = 0;
+    name_reels.code = random_next() & 0xFFFFF;
+    return name_reels.code;
 }
 
-void guest_debug_append(const char *text, uint32 length)
+static void race_begin_loop(RACE_LOOP *state, const RACE_VIEW *view0, const RACE_VIEW *view1, const RACE_CFG *cfg, sint32 warmup)
 {
-    uint32 capacity = r_u32(0x800A0074u);
-    uint32 output = r_u32(0x800A007Cu);
-    uint32 used = r_u32(0x800A0080u);
-    uint32 index;
-
-    if (used > capacity)
-        return;
-    for (index = 0u; index < length; ++index)
-    {
-        w_u8(output + used, (uint8)text[index]);
-        ++used;
-        if (used > capacity)
-        {
-            w_u32(0x800A0080u, used);
-            return;
-        }
-    }
-    w_u8(output + used, 0u);
-    w_u32(0x800A0080u, used);
-}
-
-sint32 race_loop_resume(const RACE_VIEW *first, const RACE_VIEW *second, const RACE_CFG *cfg, sint32 warmup)
-{
-    RR_RACE_LOOP_STATE state;
-    sint32 step;
-
-    race_begin_loop(&state, first, second, cfg, warmup);
-    while ((step = race_loop_before_frame(&state)) > 0)
-        race_loop_after_frame(&state);
-    return step < 0 ? 0 : race_finish_loop(&state);
-}
-
-void race_begin_loop(RR_RACE_LOOP_STATE *state, const RACE_VIEW *first, const RACE_VIEW *second, const RACE_CFG *cfg, sint32 warmup)
-{
-    state->first = first;
-    state->second = second;
+    state->view0 = view0;
+    state->view1 = view1;
     state->cfg = cfg;
     state->warmup = warmup;
 }
 
-sint32 race_loop_before_frame(RR_RACE_LOOP_STATE *state)
+static sint32 race_loop_before_frame(RACE_LOOP *state)
 {
     sint32 buffer;
     sint32 dispatch_argument;
-    const RACE_VIEW *first = state->first;
-    const RACE_VIEW *second = state->second;
+    const RACE_VIEW *view0 = state->view0;
+    const RACE_VIEW *view1 = state->view1;
     const RACE_CFG *cfg = state->cfg;
 
 #if 0
@@ -405,34 +257,34 @@ sint32 race_loop_before_frame(RR_RACE_LOOP_STATE *state)
     // Host quit boundary for original loop at 0x800104AC
     if (xport_isquit())
         return -1;
-    if (cfg->players == 1u && game_timing.base_rate == game_timing.frame_rate)
+    if (cfg->players == 1 && game_timing.base_rate == game_timing.frame_rate)
     {
-        game_timing.ticks = (uint16)(game_timing.ticks + 2u);
-        if (game_timing.ticks == 65022u)
-            game_timing.ticks = 0u;
-        buffer = 1 - (sint32)display_state.scene_buffer;
-        display_state.scene_buffer = (uint32)buffer;
+        game_timing.ticks = game_timing.ticks + 2u;
+        if (game_timing.ticks == 65022)
+            game_timing.ticks = 0;
+        buffer = 1 - disp_state.scene_buffer;
+        disp_state.scene_buffer = buffer;
         if (buffer != 0)
         {
             input_update_states();
-            if (state->warmup == 0 && menu_run_pause(first) != 0)
+            if (state->warmup == 0 && menu_pause_run(view0) != 0)
                 return 0;
-            vehicle_input(vehicle_player(first), first);
+            boat_input(boat_player(view0), view0);
         }
         dispatch_argument = buffer;
     }
     else
     {
-        game_timing.ticks = (uint16)(game_timing.ticks + 4u);
-        if (game_timing.ticks == 65022u)
-            game_timing.ticks = 0u;
-        buffer = 1 - (sint32)display_state.scene_buffer;
-        display_state.scene_buffer = (uint32)buffer;
+        game_timing.ticks = game_timing.ticks + 4u;
+        if (game_timing.ticks == 65022)
+            game_timing.ticks = 0;
+        buffer = 1 - disp_state.scene_buffer;
+        disp_state.scene_buffer = buffer;
         input_update_states();
-        if (state->warmup == 0 && (menu_run_pause(first) != 0 || menu_run_pause(second) != 0))
+        if (state->warmup == 0 && (menu_pause_run(view0) != 0 || menu_pause_run(view1) != 0))
             return 0;
-        vehicle_input(vehicle_player(first), first);
-        vehicle_input(vehicle_player(second), second);
+        boat_input(boat_player(view0), view0);
+        boat_input(boat_player(view1), view1);
         race_update_racers(0);
         dispatch_argument = 1;
     }
@@ -440,11 +292,11 @@ sint32 race_loop_before_frame(RR_RACE_LOOP_STATE *state)
 #if 0
     perf_mark_frame();
 #endif
-    if (race_cfg.mode == 8u)
-        vehicle_update_route_segments(first);
-    else if (race_cfg.mode == 5u && game_timing.ticks >= 0x0E10u)
+    if (race_cfg.mode == 8)
+        boat_update_route_segs(view0);
+    else if (race_cfg.mode == 5 && game_timing.ticks >= 0x0E10u)
         return 0;
-    if ((sint16)game_selection.selection != 0)
+    if (game_selection.selection != 0)
         return 0;
     render_select_prim_pool(buffer);
     cb_dispatch_list();
@@ -453,21 +305,21 @@ sint32 race_loop_before_frame(RR_RACE_LOOP_STATE *state)
 #if 0
     perf_mark_frame();
 #endif
-    camera_update(camera_for_view(first), vehicle_player(first));
-    scene_render_player(first, buffer);
+    camera_update(camera_for_view(view0), boat_player(view0));
+    track_render_player(view0, buffer);
 #if 0
     perf_mark_frame();
 #endif
-    if (race_cfg.mode == 5u)
+    if (race_cfg.mode == 5)
         cd_update_audio(1);
     else
-        vehicle_update_audio(first);
-    if (cfg->players == 2u)
+        boat_update_audio(view0);
+    if (cfg->players == 2)
     {
-        camera_update(camera_for_view(second), vehicle_player(second));
-        scene_render_player(second, buffer);
-        if (race_cfg.mode != 5u)
-            vehicle_update_audio(second);
+        camera_update(camera_for_view(view1), boat_player(view1));
+        track_render_player(view1, buffer);
+        if (race_cfg.mode != 5)
+            boat_update_audio(view1);
     }
 #if 0
     perf_mark_frame();
@@ -475,23 +327,141 @@ sint32 race_loop_before_frame(RR_RACE_LOOP_STATE *state)
     return 1;
 }
 
-void race_loop_after_frame(RR_RACE_LOOP_STATE *state)
+static void race_loop_after_frame(RACE_LOOP *state)
 {
     game_render_frame();
     if (state->warmup != 0 && --state->warmup == 0)
         SetDispMask(1);
 }
 
-sint32 race_finish_loop(RR_RACE_LOOP_STATE *state)
+static sint32 race_finish_loop(RACE_LOOP *state)
 {
-    display_state.scene_buffer = 1u - display_state.scene_buffer;
-    if (race_paused == 0u && race_cfg.players == 1u)
-        display_sync_swap_buf();
+    disp_state.scene_buffer = 1 - disp_state.scene_buffer;
+    if (race_paused == 0 && race_cfg.players == 1)
+        disp_sync_swap_buf();
     pickup_write_racer_indices(race_selection.ranks);
     return effects_run_expanding_circle_trans();
 }
 
-void game_main_loop_continue(sint32 menu_already_returned)
+static sint32 race_loop_resume(const RACE_VIEW *view0, const RACE_VIEW *view1, const RACE_CFG *cfg, sint32 warmup)
+{
+    RACE_LOOP state;
+    sint32 step;
+
+    race_begin_loop(&state, view0, view1, cfg, warmup);
+    while ((step = race_loop_before_frame(&state)) > 0)
+        race_loop_after_frame(&state);
+    return step < 0 ? 0 : race_finish_loop(&state);
+}
+
+static sint32 race_loop(const RACE_VIEW *view0, const RACE_VIEW *view1, const RACE_CFG *cfg)
+{
+    // Race clear area from MAIN.EXE 800B3DAC
+    PSX_RECT clear_area = {0, 0, 512, 512};
+    sint32 warmup = 2;
+
+    FUNCTION_MARKER(0x800103C4, "MAIN.EXE");
+    DrawSync(0);
+    cb_wait_vblank();
+    SetDispMask(0);
+    ClearImage(&clear_area, 0, 0, 0);
+    DrawSync(0);
+    cb_wait_vblank();
+    if (cfg->players == 1)
+    {
+        PutDispEnv(&disp_scene_frame(camera_for_view(view0), 0)->disp);
+        PutDrawEnv(&disp_scene_frame(camera_for_view(view0), 0)->draw);
+    }
+    VSync(0);
+    game_timing.ticks = 0;
+    disp_state.scene_buffer = 0;
+    if (race_selection.format == 1)
+        sound_queue_command(sound_for_context(&race_views[0]), 11, 0);
+    return race_loop_resume(view0, view1, cfg, warmup);
+}
+
+static void race_init_runtime(const RACE_VIEW *view0, const RACE_VIEW *view1, const RACE_CFG *cfg)
+{
+    uint32 call_argument;
+    uint32 mode;
+    sint32 font;
+    sint32 half_period;
+    uint8 parameter = 5;
+
+    FUNCTION_MARKER(0x80010DDC, "MAIN.EXE");
+    game_timing.frame_rate = race_cfg.players == 2 ? ((sint32)game_timing.base_rate / 2) : game_timing.base_rate;
+    race_paused = 0;
+    half_period = (sint32)game_timing.base_rate / 2;
+    menu_pause_reset();
+    boat_half_period = half_period;
+    render_init_packet_pools();
+    render_init_billboards();
+    if (race_cfg.variant != 2)
+        render_capture_enabled = 1;
+    if (race_cfg.mode == 8)
+        river_init_showcase();
+    else
+    {
+        track_select(cfg->course, cfg->variant);
+        mode = race_cfg.mode;
+        call_argument = cfg->course;
+        ai_config_template_desc(call_argument, mode == 5 ? 4u : race_selection.ai_variant);
+        object_node_flags_update_linked(route_resources.count);
+        route_init_lanes(&route_resources, race_cfg.course);
+    }
+    boat_init_slots();
+    boat_tracks(view0)[1] = NULL;
+    boat_tracks(view0)[0] = NULL;
+    call_argument = 0;
+    race_init_player(view0, call_argument, 0);
+    camera_init(camera_for_view(view0));
+    if (race_cfg.players == 2)
+    {
+        boat_tracks(view1)[1] = NULL;
+        boat_tracks(view1)[0] = NULL;
+        call_argument = 0;
+        race_init_player(view1, call_argument, 1);
+        camera_init(camera_for_view(view1));
+    }
+    else
+    {
+        boat_players[1] = NULL;
+        boat_tracks(view1)[1] = NULL;
+        boat_tracks(view1)[0] = NULL;
+    }
+    ai_sort_racers_by_rank(view0, view1);
+    pickup_write_racer_indices(race_selection.ranks);
+    render_init_materials(cfg->course);
+    render_init_prims(render_frame(&camera_views[0], 0));
+    render_init_prims(render_frame(&camera_views[0], 1));
+    if (cfg->players == 2)
+    {
+        render_init_prims(render_frame(&camera_views[1], 0));
+        render_init_prims(render_frame(&camera_views[1], 1));
+    }
+    if (race_cfg.mode != 8)
+        object_init_racer_object_grps(view0, view1, cfg->players);
+    mode = cfg->players;
+    hud_init_context(mode);
+    disp_init_envs();
+    render_init_ui_prims();
+    FntLoad(960, 256);
+    if (cfg->players == 1)
+        font = FntOpen(30, 200, 250, 230, 0, 512);
+    else
+        font = FntOpen(30, 32, 330, 50, 2, 512);
+    SetDumpFnt(font);
+    render_build_curve_scaled_lut();
+    mesh_init_tex_templates();
+    if (race_cfg.mode != 8)
+        ai_assign_ctrl_states(&race_views[0], &race_views[1]);
+    cd_reset_audio();
+    CdControlB(14, &parameter, 0);
+    VSync(3);
+    CdReadyCallback(cd_handle_ready_cb);
+}
+
+static void game_main_loop_continue(sint32 menu_already_returned)
 {
     for (;;)
     {
@@ -499,24 +469,23 @@ void game_main_loop_continue(sint32 menu_already_returned)
             return;
         if (!menu_already_returned)
         {
-            game_push_checkpoint();
-            game_push_checkpoint();
-            if ((sint16)game_selection.selection == -5)
-                game_selection.selection = 0u;
+            arena_push();
+            arena_push();
+            if (game_selection.selection == -5)
+                game_selection.selection = 0;
             else
                 menu_update_select_mode();
         }
         menu_already_returned = 0;
         SpuSetKey(SPU_OFF, SPU_ALLCH);
         sound_release_bank_allocs();
-        game_pop_checkpoint();
+        arena_pop();
         race_config_results();
-        mesh_render_state.enabled = 1u;
-        render_capture_enabled = 0u;
+        mesh_render_state.enabled = 1;
+        render_capture_enabled = 0;
         cd_load_course_assets(&race_cfg);
         sound_init_race_audio();
         race_init_runtime(&race_views[0], &race_views[1], &race_cfg);
-        w_u32(0x800B6BB4u, guest_swap_stack_ptr(0x1F8003C0u));
         effects_register_mode();
         race_loop(&race_views[0], &race_views[1], &race_cfg);
         // Preserve the existing host quit boundary before scene cleanup
@@ -525,15 +494,109 @@ void game_main_loop_continue(sint32 menu_already_returned)
         cb_clear_active_list();
         cb_clear_list(&cb_players[0]);
         cb_clear_list(&cb_players[1]);
-        guest_swap_stack_ptr(r_u32(0x800B6BB4u));
-        sound_config_reverb_depth(0u, 0u);
+        sound_config_reverb_depth(0, 0);
         SpuSetReverb(0);
         sound_reset_recs(sound_for_context(&race_views[0]));
-        if (race_cfg.players == 2u)
+        if (race_cfg.players == 2)
             sound_reset_recs(sound_for_context(&race_views[1]));
         SpuSetKey(SPU_OFF, SPU_ALLCH);
         sound_release_bank_allocs();
-        game_pop_checkpoint();
-        menu_startup_tim_display();
+        arena_pop();
+        menu_startup_tim_disp();
     }
+}
+
+void game_start(void)
+{
+    FUNCTION_MARKER(0x80010184, "MAIN.EXE");
+    ResetCallback();
+    ResetGraph(0);
+    SetGraphDebug(0);
+    SetVideoMode(MODE_PAL);
+    InitGeom();
+    input_init();
+    arena_reset();
+    cd_init_drive();
+    cb_init_vblank_timer();
+    cb_init_pool();
+    game_init_defaults();
+    sound_init_audio();
+#if 0
+    perf_init(0);
+#endif
+    game_main_loop_continue(0);
+}
+
+sint32 game_render_frame(void)
+{
+    sint32 players = race_cfg.players;
+    sint32 idx;
+
+    FUNCTION_MARKER(0x800107A4, "MAIN.EXE");
+#if 0
+    perf_frame_end();
+    sint16 buffer = disp_state.scene_buffer;
+    uint32 *overlay_entry = render_scene_ot(render_frame(&camera_views[0], buffer));
+
+    perf_render_graph(overlay_entry, buffer);
+    perf_render_cur(overlay_entry, buffer);
+#endif
+    if (players == 1 && game_timing.base_rate == game_timing.frame_rate)
+    {
+        const RACE_VIEW *state = &race_views[0];
+        uint32 buffer_idx;
+
+        cb_sync_video_field();
+        ResetGraph(1);
+        buffer_idx = disp_state.scene_buffer;
+        DrawOTag(render_scene_ot(render_frame(camera_for_view(state), buffer_idx)) + 14);
+        if (render_capture_enabled != 0)
+        {
+            buffer_idx = disp_state.scene_buffer;
+            effects_capture_scr_region(state, buffer_idx);
+            buffer_idx = disp_state.scene_buffer;
+            DrawOTag(render_scene_ot(render_frame(camera_for_view(state), buffer_idx)) + 1);
+        }
+    }
+    else
+    {
+        uint32 buffer_idx;
+
+        VSync(2);
+        ResetGraph(1);
+        buffer_idx = disp_state.scene_buffer;
+        PutDrawEnv(&disp_scene_frame(&camera_views[0], buffer_idx)->draw);
+        buffer_idx = disp_state.scene_buffer;
+        PutDispEnv(&disp_scene_frame(&camera_views[0], buffer_idx)->disp);
+        for (idx = 0; idx < (sint32)race_cfg.players; ++idx)
+        {
+            const RACE_VIEW *state = idx == 0 ? &race_views[0] : &race_views[1];
+
+            buffer_idx = disp_state.scene_buffer;
+            DrawOTag(render_scene_ot(render_frame(camera_for_view(state), buffer_idx)) + 14);
+            if (render_capture_enabled != 0)
+            {
+                buffer_idx = disp_state.scene_buffer;
+                effects_capture_scr_region(state, buffer_idx);
+                buffer_idx = disp_state.scene_buffer;
+                DrawOTag(render_scene_ot(render_frame(camera_for_view(state), buffer_idx)) + 1);
+            }
+        }
+    }
+    // Host display adapter after original 0x80010960 frame submission
+    gpu_present();
+    return 0;
+}
+
+uint32 xport_libsnd_sequence_call(uint32 target, uint32 argc, const uint32 *args)
+{
+#ifndef NDEBUG
+    fprintf(stderr, "Rapid Racer has no LibSnd sequence callback binding: target=%08X argc=%u\n", target, argc);
+#endif
+    abort();
+}
+
+void xport_main(void)
+{
+    game_start();
 }

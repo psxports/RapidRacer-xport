@@ -1,5 +1,5 @@
-#ifndef RR_TEXT_H
-#define RR_TEXT_H
+#ifndef TEXT_H
+#define TEXT_H
 
 #include "psx.h"
 #include <stddef.h>
@@ -25,9 +25,8 @@ extern TEXT_RECORD text_menu[TEXT_MENU_CAPACITY];
 extern TEXT_RECORD text_hud[TEXT_HUD_CAPACITY];
 extern sint16 text_menu_count;
 extern sint16 text_hud_count;
-char *text_bind(uint32 address);
 void text_reset(void);
-void text_load_menu(const uint8 *descs, char *strings, size_t count);
+void text_load_menu(const uint8 *descs, char *strings, uint32 count);
 
 enum
 {
@@ -54,38 +53,34 @@ typedef struct
     sint16 map[256];
     TEXT_METRIC metrics[TEXT_FONT_CAPACITY];
     uint8 kerning[TEXT_FONT_CAPACITY * TEXT_FONT_CAPACITY];
-    size_t count;
-    uint16 texture_x, texture_y, clut_y, space;
+    uint32 count;
+    uint16 tex_x, tex_y, clut_y, space;
     TEXT_GLYPH pending[2][TEXT_GLYPH_CAPACITY];
-    size_t pending_count[2];
+    uint32 pending_count[2];
 } TEXT_FONT;
 
 extern TEXT_FONT text_fonts[TEXT_FONT_COUNT];
 void text_init_fonts(void);
 uint16 text_char_width(uint32 font_idx, uint8 ch);
-void text_load_kerning(size_t font, const uint8 *data, size_t count);
+void text_load_kerning(uint32 font, const uint8 *data, uint32 count);
 
-sint32 text_parse_signed_decimal(char *text);
+sint32 text_parse_int(char *text);
 
-sint32 text_find_char_index(char *value, char *values);
-sint32 text_format_decimal_digits(sint32 value, char *output, sint16 digits);
+sint16 text_find_char_idx(const char *val, const char *vals);
+sint32 text_format_digits(sint32 val, char *output, sint16 digits);
 
-sint32 text_emit_glyph(uint8 character, sint16 x, sint16 y);
-sint32 text_render_glyphs(char *text, sint32 x, sint16 y);
-sint32 text_emit_clipped(uint8 character, sint16 x, sint16 y, sint8 adjustment);
-sint32 text_render_clipped(char *text, sint32 x, sint16 y, sint8 adjustment);
 sint32 text_render_recs(void);
 
 const char *text_boat_name(uint32 idx);
 void text_init_hud(void);
 void text_show_pause(uint8 language);
-uint32 text_set_menu_visible(sint32 index, sint8 value);
-uint32 text_set_hud_visible(sint32 index, sint8 value);
+uint32 text_set_menu_visible(sint32 idx, sint8 val);
+uint32 text_set_hud_visible(sint32 idx, sint8 val);
 sint32 text_clear_hud(void);
 sint32 text_clear_names(void);
 sint32 text_clear_boat_names(void);
-sint32 text_measure_width(char *text);
 
-uint32 text_clear_menu_range(sint16 first, sint32 count);
+uint32 text_clear_menu_range(sint16 start, sint32 count);
 
-#endif /* RR_TEXT_H */
+sint32 text_parse_digits(const uint8 *text, sint32 len);
+#endif /* TEXT_H */

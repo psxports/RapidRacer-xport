@@ -1,5 +1,5 @@
-#ifndef RR_TRAIL_H
-#define RR_TRAIL_H
+#ifndef TRAIL_H
+#define TRAIL_H
 
 #include "psx.h"
 
@@ -17,4 +17,4 @@ sint32 trail_init_tex_templates8(void);
 sint32 trail_render_flare(struct BOAT *boat, uint32 *ot, uint32 depth_limit);
 sint32 trail_init(struct BOAT *boat);
 
-#endif /* RR_TRAIL_H */
+#endif /* TRAIL_H */

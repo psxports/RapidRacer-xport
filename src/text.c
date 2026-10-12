@@ -1,8 +1,9 @@
+#include "hud.h"
 #include <string.h>
 #include "sprite.h"
 #include <stdlib.h>
 #include "text.h"
-#include "global.h"
+#include "utils.h"
 #include "xport_trace.h"
 
 // Immutable font metrics extracted from the reviewed MAIN.EXE
@@ -23,246 +24,236 @@ static const TEXT_METRIC text_metrics_2[] = {
 };
 static const uint16 text_spaces[3] = {8, 8, 6};
 
-sint32 text_parse_signed_decimal(char *text)
+sint32 text_parse_int(char *text)
 {
-    sint32 value = 0;
+    sint32 val = 0;
     sint32 negative = 0;
     uint8 character;
 
-    FUNCTION_MARKER(0x800159D8u, "MAIN.EXE");
-    character = (uint8)text[0];
+    FUNCTION_MARKER(0x800159D8, "MAIN.EXE");
+    character = text[0];
     while (character == ' ' || character == '\n' || character == '\t')
     {
         ++text;
-        character = (uint8)text[0];
+        character = text[0];
     }
     if (character == '-')
     {
         negative = 1;
-        character = (uint8) * ++text;
+        character = *++text;
     }
-    while ((uint32)(character - '0') < 10u)
+    while ((uint32)(character - '0') < 10)
     {
-        value = math_add_wrap_s32(math_mul_lo_s32(value, 10), (sint32)character - '0');
-        character = (uint8) * ++text;
+        val = mul32(val, 10) + (character - '0');
+        character = *++text;
     }
     if (negative)
-        return (sint32)(0u - (uint32)value);
-    return value;
+        return -val;
+    return val;
 }
 
-sint32 text_find_char_index(char *value, char *values)
+sint16 text_find_char_idx(const char *val, const char *vals)
 {
-    sint32 index = 0;
+    sint16 idx = 0;
     uint8 target;
-    uint8 current;
+    uint8 cur;
 
-    FUNCTION_MARKER(0x8001F438u, "MAIN.EXE");
-    current = (uint8)values[0];
-    if (current == 0u)
+    FUNCTION_MARKER(0x8001F438, "MAIN.EXE");
+    cur = vals[0];
+    if (cur == 0)
         return 0;
-    target = (uint8)value[0];
-    current = (uint8)values[0];
+    target = val[0];
+    cur = vals[0];
     for (;;)
     {
-        if (current == target)
-            return (sint16)index;
-        ++values;
-        current = (uint8)values[0];
-        index = (sint16)(index + 1);
-        if (current == 0u)
+        if (cur == target)
+            return idx;
+        ++vals;
+        cur = vals[0];
+        idx = idx + 1;
+        if (cur == 0)
             return 0;
     }
 }
 
-sint32 text_format_decimal_digits(sint32 value, char *output, sint16 digits)
+sint32 text_format_digits(sint32 val, char *output, sint16 digits)
 {
-    sint32 number = (sint16)value;
+    sint16 number = val;
     sint32 result;
 
-    FUNCTION_MARKER(0x8001F484u, "MAIN.EXE");
+    FUNCTION_MARKER(0x8001F484, "MAIN.EXE");
+    result = number % 10 + '0';
     if (digits == 2)
     {
-        if (number != 0)
-        {
-            output[0] = (uint8)(number / 10 + '0');
-            result = number % 10 + '0';
-            output[1u] = (uint8)result;
-        }
-        else
-        {
-            result = '0';
-            output[0] = '0';
-            output[1u] = '0';
-        }
+        output[0] = number / 10 + '0';
+        output[1] = result;
     }
     else
-    {
-        result = number != 0 ? number % 10 + '0' : '0';
-        output[0] = (uint8)result;
-    }
+        output[0] = result;
     return result;
 }
 
 TEXT_FONT text_fonts[TEXT_FONT_COUNT];
-static size_t text_font_index;
+static uint32 text_font_idx;
 
 static const uint8 *const text_alphabets[TEXT_FONT_COUNT] = {text_alphabet_0, text_alphabet_1, text_alphabet_2};
 static const TEXT_METRIC *const text_metrics[TEXT_FONT_COUNT] = {text_metrics_0, text_metrics_1, text_metrics_2};
-static const size_t text_counts[TEXT_FONT_COUNT] = {sizeof(text_alphabet_0), sizeof(text_alphabet_1), sizeof(text_alphabet_2)};
+static const uint32 text_counts[TEXT_FONT_COUNT] = {sizeof(text_alphabet_0), sizeof(text_alphabet_1), sizeof(text_alphabet_2)};
 
 uint16 text_char_width(uint32 font_idx, uint8 ch)
 {
-    size_t idx = 0u;
+    uint32 idx = 0;
 
     if (font_idx >= TEXT_FONT_COUNT)
         abort();
-    while (idx + 1u < text_counts[font_idx] && text_alphabets[font_idx][idx] != ch)
+    while (idx + 1 < text_counts[font_idx] && text_alphabets[font_idx][idx] != ch)
         ++idx;
     return text_metrics[font_idx][idx].width;
 }
 
 void text_init_fonts(void)
 {
-    FUNCTION_MARKER(0x80050E98u, "MAIN.EXE");
-    static const uint16 texture_x[3] = {960, 910, 922};
-    static const uint16 texture_y[3] = {256, 256, 352};
+    FUNCTION_MARKER(0x80050E98, "MAIN.EXE");
+    static const uint16 tex_x[3] = {960, 910, 922};
+    static const uint16 tex_y[3] = {256, 256, 352};
     static const uint16 clut_y[3] = {450, 445, 444};
-    static const uint8 adjustment[3] = {5, 2, 2};
-    size_t group, row, column;
+    static const uint8 adjust[3] = {5, 2, 2};
+    uint32 grp, row, column;
     memset(text_fonts, 0, sizeof(text_fonts));
-    text_font_index = 0;
-    for (group = 0; group < TEXT_FONT_COUNT; ++group)
+    text_font_idx = 0;
+    for (grp = 0; grp < TEXT_FONT_COUNT; ++grp)
     {
-        TEXT_FONT *font = &text_fonts[group];
-        font->count = text_counts[group];
-        font->texture_x = texture_x[group];
-        font->texture_y = texture_y[group];
-        font->clut_y = clut_y[group];
-        font->space = text_spaces[group];
+        TEXT_FONT *font = &text_fonts[grp];
+        font->count = text_counts[grp];
+        font->tex_x = tex_x[grp];
+        font->tex_y = tex_y[grp];
+        font->clut_y = clut_y[grp];
+        font->space = text_spaces[grp];
         for (row = 0; row < 256; ++row)
             font->map[row] = -1;
         for (row = 0; row < font->count; ++row)
-            font->map[text_alphabets[group][row]] = (sint16)row;
+            font->map[text_alphabets[grp][row]] = row;
         for (row = 0; row < 26; ++row)
             font->map['A' + row] = font->map['a' + row];
-        memcpy(font->metrics, text_metrics[group], font->count * sizeof(TEXT_METRIC));
+        memcpy(font->metrics, text_metrics[grp], font->count * sizeof(TEXT_METRIC));
         for (row = 0; row < font->count; ++row)
             for (column = 0; column < font->count; ++column)
-                font->kerning[row * font->count + column] = (uint8)(font->metrics[row].width - adjustment[group]);
+                font->kerning[row * font->count + column] = font->metrics[row].width - adjust[grp];
     }
 }
 
-void text_load_kerning(size_t group, const uint8 *data, size_t count)
+void text_load_kerning(uint32 grp, const uint8 *data, uint32 count)
 {
     TEXT_FONT *font;
-    if (group >= TEXT_FONT_COUNT)
+    if (grp >= TEXT_FONT_COUNT)
         abort();
-    font = &text_fonts[group];
+    font = &text_fonts[grp];
     if (count != font->count || count > TEXT_FONT_CAPACITY)
         abort();
     memcpy(font->kerning, data, count * count);
 }
 
-static sint32 text_emit(uint8 character, sint16 x, sint16 y, sint8 adjustment)
+static sint32 text_emit(uint8 character, sint16 x, sint16 y, sint8 adjust)
 {
-    TEXT_FONT *font = &text_fonts[text_font_index];
+    TEXT_FONT *font = &text_fonts[text_font_idx];
     sint16 glyph = font->map[character];
-    size_t buffer = (size_t)sprite_text_buffer();
+    uint32 buffer = spr_text_buffer();
     const TEXT_METRIC *metric;
     TEXT_GLYPH *output;
     sint32 height;
-    if (glyph < 0 || (size_t)glyph >= font->count || font->pending_count[buffer] >= TEXT_GLYPH_CAPACITY)
+    if (glyph < 0 || (uint32)glyph >= font->count || font->pending_count[buffer] >= TEXT_GLYPH_CAPACITY)
         return -1;
     metric = &font->metrics[glyph];
-    height = (sint16)metric->height + (adjustment > 0 ? -adjustment : adjustment);
+    height = (sint16)metric->height + (adjust > 0 ? -adjust : adjust);
     if (height < 0)
         return height;
     output = &font->pending[buffer][font->pending_count[buffer]++];
     output->x = x;
-    output->y = (sint16)(y + (adjustment > 0 ? adjustment : 0));
-    output->u = (uint8)(4 * (font->texture_x % 64) + metric->u);
-    output->v = (uint8)(font->texture_y + metric->v + (adjustment > 0 ? adjustment : 0));
+    output->y = y + (adjust > 0 ? adjust : 0);
+    output->u = 4 * (font->tex_x % 64) + metric->u;
+    output->v = font->tex_y + metric->v + (adjust > 0 ? adjust : 0);
     output->width = metric->width;
-    output->height = (uint16)height;
-    return (sint32)font->pending_count[buffer];
+    output->height = height;
+    return font->pending_count[buffer];
 }
 
-sint32 text_emit_glyph(uint8 character, sint16 x, sint16 y)
+static sint32 text_emit_glyph(uint8 character, sint16 x, sint16 y)
 {
-    FUNCTION_MARKER(0x80051470u, "MAIN.EXE");
+    FUNCTION_MARKER(0x80051470, "MAIN.EXE");
     return text_emit(character, x, y, 0);
 }
 
-static sint32 text_draw(char *text, sint32 x, sint16 y, sint8 adjustment, sint32 clipped)
+static sint32 text_draw(char *text, sint32 x, sint16 y, sint8 adjust, sint32 clipped)
 {
-    TEXT_FONT *font = &text_fonts[text_font_index];
+    TEXT_FONT *font = &text_fonts[text_font_idx];
     if (!text)
         return 0;
     while (*text)
     {
-        uint8 current = (uint8)*text++;
-        uint8 next = (uint8)*text;
-        sint16 first = font->map[current];
-        sint16 second = font->map[next];
-        if (current == ' ' || current == '_')
-            x = (sint32)((uint32)x + font->space);
-        else if (first >= 0 && (size_t)first < font->count)
+        uint8 cur = *text++;
+        uint8 next = *text;
+        sint16 glyph = font->map[cur];
+        sint16 next_glyph = font->map[next];
+        if (cur == ' ' || cur == '_')
+            x = x + font->space;
+        else if (glyph >= 0 && (uint32)glyph < font->count)
         {
-            text_emit(current, (sint16)x, y, adjustment);
+            text_emit(cur, x, y, adjust);
             if (next == 0)
                 return 0;
             if (next == ' ' || next == '_')
-                x = (sint32)((uint32)x + (clipped ? font->space : font->metrics[first].width));
-            else if (second >= 0 && (size_t)second < font->count)
-                x = (sint32)((uint32)x + font->kerning[(size_t)first * font->count + second]);
+                x = x + (clipped ? font->space : font->metrics[glyph].width);
+            else if (next_glyph >= 0 && (uint32)next_glyph < font->count)
+                x = x + font->kerning[glyph * font->count + next_glyph];
         }
     }
     return 0;
 }
 
-sint32 text_render_glyphs(char *text, sint32 x, sint16 y)
+static sint32 text_render_glyphs(char *text, sint32 x, sint16 y)
 {
-    FUNCTION_MARKER(0x80051664u, "MAIN.EXE");
+    FUNCTION_MARKER(0x80051664, "MAIN.EXE");
     return text_draw(text, x, y, 0, 0);
 }
 
-sint32 text_emit_clipped(uint8 character, sint16 x, sint16 y, sint8 adjustment)
+static sint32 text_emit_clipped(uint8 character, sint16 x, sint16 y, sint8 adjust)
 {
-    FUNCTION_MARKER(0x8005183Cu, "MAIN.EXE");
-    return text_emit(character, x, y, adjustment);
+    FUNCTION_MARKER(0x8005183C, "MAIN.EXE");
+    return text_emit(character, x, y, adjust);
 }
 
-sint32 text_render_clipped(char *text, sint32 x, sint16 y, sint8 adjustment)
+static sint32 text_render_clipped(char *text, sint32 x, sint16 y, sint8 adjust)
 {
-    FUNCTION_MARKER(0x80051A7Cu, "MAIN.EXE");
-    return text_draw(text, x, y, adjustment, 1);
+    FUNCTION_MARKER(0x80051A7C, "MAIN.EXE");
+    return text_draw(text, x, y, adjust, 1);
 }
 
-static void text_render_record(TEXT_RECORD *record)
+static sint32 text_measure_width(char *text);
+
+static void text_render_rec(TEXT_RECORD *rec)
 {
-    sint32 x = record->x;
-    if (record->visible != 1 || record->font >= TEXT_FONT_COUNT || !record->text)
+    sint32 x = rec->x;
+    if (rec->visible != 1 || rec->font >= TEXT_FONT_COUNT || !rec->text)
         return;
-    text_font_index = record->font;
-    if (record->centered == 1)
+    text_font_idx = rec->font;
+    if (rec->centered == 1)
     {
-        sint32 width = text_measure_width(record->text);
-        x -= (width + (width < 0)) >> 1;
+        sint32 width = text_measure_width(rec->text);
+        x -= width + (width < 0) >> 1;
     }
-    text_draw(record->text, (sint16)x, (sint16)record->y, record->style, record->style != 0);
+    text_draw(rec->text, (sint16)x, rec->y, rec->style, rec->style != 0);
 }
 
 sint32 text_render_recs(void)
 {
-    FUNCTION_MARKER(0x80051F48u, "MAIN.EXE");
-    sint32 index;
+    FUNCTION_MARKER(0x80051F48, "MAIN.EXE");
+    sint32 idx;
     if (text_hud_count > TEXT_HUD_CAPACITY || text_menu_count > TEXT_MENU_CAPACITY)
         abort();
-    for (index = text_hud_count; index-- > 0;)
-        text_render_record(&text_hud[index]);
-    for (index = 0; index < text_menu_count; ++index)
-        text_render_record(&text_menu[index]);
+    for (idx = text_hud_count; idx-- > 0;)
+        text_render_rec(&text_hud[idx]);
+    for (idx = 0; idx < text_menu_count; ++idx)
+        text_render_rec(&text_menu[idx]);
     return 0;
 }
 
@@ -271,16 +262,7 @@ static char text_hud_status[] = "loading";
 static char text_hud_time[] = "beta 008";
 static char text_hud_paused[] = "Sep 22 1997";
 static char text_hud_names[10][8] = {
-    "aaaa",
-    "aaaa",
-    "aaaa",
-    "aaaa",
-    "aaaa",
-    "aaaa",
-    "aaaa",
-    "aaaa",
-    "aaaa",
-    "aaaa",
+    "aaaa", "aaaa", "aaaa", "aaaa", "aaaa", "aaaa", "aaaa", "aaaa", "aaaa", "aaaa",
 };
 static char text_boats[3][9][14] = {
     {
@@ -318,201 +300,197 @@ static char text_boats[3][9][14] = {
     },
 };
 static char text_pause_msgs[5][45] = {
-    "game paused. controller removed",
-    "jeu stopp\351 car manette retir\351e",
-    "spiel unterbrochen. controller entfernt",
-    "gioco in pausa. controller eliminato",
-    "juego detenido porque se ha quitado el mando",
+    "game paused. controller removed", "jeu stopp\351 car manette retir\351e", "spiel unterbrochen. controller entfernt", "gioco in pausa. controller eliminato", "juego detenido porque se ha quitado el mando",
 };
 
 const char *text_boat_name(uint32 idx)
 {
-    if (idx >= 9u)
+    if (idx >= 9)
         abort();
     return text_boats[0][idx];
 }
 
 void text_init_hud(void)
 {
-    TEXT_RECORD *records;
+    TEXT_RECORD *recs;
     sint32 row;
     sint32 column;
 
-    FUNCTION_MARKER(0x80052144u, "MAIN.EXE");
-    text_hud_count = 121u;
-    records = text_hud;
-    records[0].font = 0u;
-    records[0].centered = 0u;
-    records[0].visible = 0u;
-    records[0].text = text_hud_status;
-    records[0].x = 190u;
-    records[0].y = 100u;
-    records = text_hud;
-    records[1].text = text_hud_time;
-    records[1].x = 300u;
-    records[1].font = 1u;
-    records[1].centered = 0u;
-    records[1].visible = 0u;
-    records[1].y = 168u;
-    records = text_hud;
-    records[2].text = text_hud_paused;
-    records[2].font = 1u;
-    records[2].centered = 0u;
-    records[2].visible = 0u;
-    records[2].x = 256u;
-    records[2].y = 100u;
+    FUNCTION_MARKER(0x80052144, "MAIN.EXE");
+    text_hud_count = 121;
+    recs = text_hud;
+    recs[0].font = 0;
+    recs[0].centered = 0;
+    recs[0].visible = 0;
+    recs[0].text = text_hud_status;
+    recs[0].x = 190;
+    recs[0].y = 100;
+    recs = text_hud;
+    recs[1].text = text_hud_time;
+    recs[1].x = 300;
+    recs[1].font = 1;
+    recs[1].centered = 0;
+    recs[1].visible = 0;
+    recs[1].y = 168;
+    recs = text_hud;
+    recs[2].text = text_hud_paused;
+    recs[2].font = 1;
+    recs[2].centered = 0;
+    recs[2].visible = 0;
+    recs[2].x = 256;
+    recs[2].y = 100;
     for (row = 0; row < 10; ++row)
     {
-        TEXT_RECORD *record = &text_hud[row + 3];
-        record[0].text = text_hud_names[row];
-        record[0].font = 1u;
-        record[0].centered = 0u;
-        record[0].x = 124u;
-        record[0].y = (uint16)(12 * row + 50);
-        record[0].visible = 0u;
+        TEXT_RECORD *rec = &text_hud[row + 3];
+        rec[0].text = text_hud_names[row];
+        rec[0].font = 1;
+        rec[0].centered = 0;
+        rec[0].x = 124;
+        rec[0].y = 12 * row + 50;
+        rec[0].visible = 0;
     }
     for (row = 0; row < 9; ++row)
     {
         for (column = 0; column < 10; ++column)
         {
-            TEXT_RECORD *record = &text_hud[(10 * (row)) + column + 31];
-            record[0].font = 1u;
-            record[0].x = 124u;
-            record[0].y = (uint16)(12 * column + 50);
-            record[0].text = text_boats[0][row];
-            record[0].centered = 0u;
-            record[0].visible = 0u;
+            TEXT_RECORD *rec = &text_hud[10 * row + column + 31];
+            rec[0].font = 1;
+            rec[0].x = 124;
+            rec[0].y = 12 * column + 50;
+            rec[0].text = text_boats[0][row];
+            rec[0].centered = 0;
+            rec[0].visible = 0;
         }
     }
     for (row = 0; row < 9; ++row)
     {
-        TEXT_RECORD *record = &text_hud[row + 13];
-        record[0].text = text_boats[1][row];
-        record[0].font = 1u;
-        record[0].centered = 0u;
-        record[0].x = 124u;
-        record[0].y = 170u;
-        record[0].visible = 0u;
+        TEXT_RECORD *rec = &text_hud[row + 13];
+        rec[0].text = text_boats[1][row];
+        rec[0].font = 1;
+        rec[0].centered = 0;
+        rec[0].x = 124;
+        rec[0].y = 170;
+        rec[0].visible = 0;
     }
     for (row = 0; row < 9; ++row)
     {
-        TEXT_RECORD *record = &text_hud[row + 22];
-        record[0].text = text_boats[2][row];
-        record[0].font = 1u;
-        record[0].centered = 0u;
-        record[0].x = 124u;
-        record[0].y = 170u;
-        record[0].visible = 0u;
+        TEXT_RECORD *rec = &text_hud[row + 22];
+        rec[0].text = text_boats[2][row];
+        rec[0].font = 1;
+        rec[0].centered = 0;
+        rec[0].x = 124;
+        rec[0].y = 170;
+        rec[0].visible = 0;
     }
 }
 
 void text_show_pause(uint8 language)
 {
     char *message = language < 5u ? text_pause_msgs[language] : NULL;
-    uint8 font = language < 5u ? (language == 0u ? 1u : 2u) : 0u;
-    TEXT_RECORD *record = &text_hud[2];
-    FUNCTION_MARKER(0x80052418u, "MAIN.EXE");
+    uint8 font = language < 5u ? language == 0 ? 1u : 2u : 0u;
+    TEXT_RECORD *rec = &text_hud[2];
+    FUNCTION_MARKER(0x80052418, "MAIN.EXE");
     if (message)
-        record->text = message;
-    record->font = font;
-    record->visible = 1;
-    record->centered = 1;
-    record->x = 256;
-    record->y = 230;
+        rec->text = message;
+    rec->font = font;
+    rec->visible = 1;
+    rec->centered = 1;
+    rec->x = 256;
+    rec->y = 230;
 }
 
-uint32 text_set_menu_visible(sint32 index, sint8 value)
+uint32 text_set_menu_visible(sint32 idx, sint8 val)
 {
-    TEXT_RECORD *records = text_menu;
+    TEXT_RECORD *recs = text_menu;
 
-    FUNCTION_MARKER(0x800524C8u, "MAIN.EXE");
-    if (index < 0 || index >= TEXT_MENU_CAPACITY)
+    FUNCTION_MARKER(0x800524C8, "MAIN.EXE");
+    if (idx < 0 || idx >= TEXT_MENU_CAPACITY)
         abort();
-    records[index].visible = (uint8)value;
+    recs[idx].visible = val;
     return 1;
 }
 
-uint32 text_set_hud_visible(sint32 index, sint8 value)
+uint32 text_set_hud_visible(sint32 idx, sint8 val)
 {
-    TEXT_RECORD *records = text_hud;
+    TEXT_RECORD *recs = text_hud;
 
-    FUNCTION_MARKER(0x800524E4u, "MAIN.EXE");
-    if (index < 0 || index >= TEXT_HUD_CAPACITY)
+    FUNCTION_MARKER(0x800524E4, "MAIN.EXE");
+    if (idx < 0 || idx >= TEXT_HUD_CAPACITY)
         abort();
-    records[index].visible = (uint8)value;
+    recs[idx].visible = val;
     return 1;
 }
 
 sint32 text_clear_hud(void)
 {
-    sint16 count = (sint16)text_hud_count;
-    TEXT_RECORD *records = text_hud;
-    sint32 index;
+    sint16 count = text_hud_count;
+    TEXT_RECORD *recs = text_hud;
+    sint32 idx;
 
-    FUNCTION_MARKER(0x80052500u, "MAIN.EXE");
+    FUNCTION_MARKER(0x80052500, "MAIN.EXE");
     if (count > TEXT_HUD_CAPACITY)
         abort();
     if (count <= 0)
         return count;
-    for (index = 0; index < count; ++index)
+    for (idx = 0; idx < count; ++idx)
     {
-        records[index].visible = 0u;
-        records[index].style = 0u;
+        recs[idx].visible = 0;
+        recs[idx].style = 0;
     }
     return 0;
 }
 
 sint32 text_clear_names(void)
 {
-    sint32 index;
+    sint32 idx;
 
-    FUNCTION_MARKER(0x80052568u, "MAIN.EXE");
-    for (index = 0; index < 10; ++index)
+    FUNCTION_MARKER(0x80052568, "MAIN.EXE");
+    for (idx = 0; idx < 10; ++idx)
     {
-        TEXT_RECORD *records = text_hud;
-        records[index + 3].visible = 0u;
-        records = text_hud;
-        records[index + 3].style = 0u;
+        TEXT_RECORD *recs = text_hud;
+        recs[idx + 3].visible = 0;
+        recs = text_hud;
+        recs[idx + 3].style = 0;
     }
     return 0;
 }
 
 sint32 text_clear_boat_names(void)
 {
-    sint32 index;
+    sint32 idx;
 
-    FUNCTION_MARKER(0x800525B4u, "MAIN.EXE");
-    for (index = 0; index < 90; ++index)
+    FUNCTION_MARKER(0x800525B4, "MAIN.EXE");
+    for (idx = 0; idx < 90; ++idx)
     {
-        TEXT_RECORD *records = text_hud;
-        records[index + 31].visible = 0u;
-        records = text_hud;
-        records[index + 31].style = 0u;
+        TEXT_RECORD *recs = text_hud;
+        recs[idx + 31].visible = 0;
+        recs = text_hud;
+        recs[idx + 31].style = 0;
     }
     return 0;
 }
 
-sint32 text_measure_width(char *text)
+static sint32 text_measure_width(char *text)
 {
-    FUNCTION_MARKER(0x80052600u, "MAIN.EXE");
-    TEXT_FONT *font = &text_fonts[text_font_index];
+    FUNCTION_MARKER(0x80052600, "MAIN.EXE");
+    TEXT_FONT *font = &text_fonts[text_font_idx];
     uint32 width = 0;
     if (!text)
         return 0;
     while (*text)
     {
-        uint8 current = (uint8)*text++;
-        uint8 next = (uint8)*text;
-        sint16 first = font->map[current];
-        sint16 second = font->map[next];
-        if (current == ' ' || current == '_')
+        uint8 cur = *text++;
+        uint8 next = *text;
+        sint16 glyph = font->map[cur];
+        sint16 next_glyph = font->map[next];
+        if (cur == ' ' || cur == '_')
             width += font->space;
-        else if (first >= 0 && (size_t)first < font->count)
+        else if (glyph >= 0 && (uint32)glyph < font->count)
         {
             if (!next || next == ' ' || next == '_')
-                width += font->metrics[first].width;
-            else if (second >= 0 && (size_t)second < font->count)
-                width += font->kerning[(size_t)first * font->count + second];
+                width += font->metrics[glyph].width;
+            else if (next_glyph >= 0 && (uint32)next_glyph < font->count)
+                width += font->kerning[glyph * font->count + next_glyph];
         }
     }
     return (sint16)width;
@@ -530,44 +508,59 @@ void text_reset(void)
     text_menu_count = text_hud_count = 0;
 }
 
-void text_load_menu(const uint8 *descs, char *strings, size_t count)
+void text_load_menu(const uint8 *descs, char *strings, uint32 count)
 {
-    size_t index;
+    uint32 idx;
     if (count > TEXT_MENU_CAPACITY)
         abort();
-    for (index = 0; index < count; ++index)
+    for (idx = 0; idx < count; ++idx)
     {
-        TEXT_RECORD *record = &text_menu[index];
-        const uint8 *source = descs + index * 16u;
-        record->text = strings;
-        record->x = (uint16)(source[8] | ((uint16)source[9] << 8));
-        record->y = (uint16)(source[10] | ((uint16)source[11] << 8));
-        record->font = source[12];
-        record->visible = source[13];
-        record->centered = source[14];
-        record->style = source[15];
-        while ((uint8)*strings != 0u)
+        TEXT_RECORD *rec = &text_menu[idx];
+        const uint8 *src = descs + idx * 16;
+        rec->text = strings;
+        rec->x = xport_load_le16(src + 8u);
+        rec->y = xport_load_le16(src + 10u);
+        rec->font = src[12];
+        rec->visible = src[13];
+        rec->centered = src[14];
+        rec->style = src[15];
+        while (*strings != 0)
             ++strings;
         ++strings;
     }
-    text_menu_count = (sint16)count;
+    text_menu_count = count;
 }
 
-char *text_bind(uint32 address)
+uint32 text_clear_menu_range(sint16 start, sint32 count)
 {
-    // Strings remain owned by legacy resource/profile storage until stages 4 and 5
-    return address ? (char *)psx_addr(address, 1u) : NULL;
-}
-
-uint32 text_clear_menu_range(sint16 first, sint32 count)
-{
-    sint32 index;
-    FUNCTION_MARKER(0x80050524u, "MAIN.EXE");
+    sint32 idx;
+    FUNCTION_MARKER(0x80050524, "MAIN.EXE");
     if (count <= 0)
         return 0;
-    if (first < 0 || first >= TEXT_MENU_CAPACITY || count > TEXT_MENU_CAPACITY - first)
+    if (start < 0 || start >= TEXT_MENU_CAPACITY || count > TEXT_MENU_CAPACITY - start)
         abort();
-    for (index = count; index-- > 0;)
-        text_menu[first + index].visible = 0;
+    for (idx = count; idx-- > 0;)
+        text_menu[start + idx].visible = 0;
     return 1;
+}
+
+sint32 text_parse_digits(const uint8 *text, sint32 len)
+{
+    sint32 result = 0;
+    sint16 idx = 0;
+    sint16 remaining = len;
+
+    while (--remaining != -1)
+    {
+        sint32 digit = text[idx] - '0';
+
+        if (remaining == 2)
+            result += 100 * digit;
+        else if (remaining == 1)
+            result += 10 * digit;
+        else if (remaining == 0)
+            result += digit;
+        ++idx;
+    }
+    return result;
 }

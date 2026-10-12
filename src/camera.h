@@ -1,5 +1,5 @@
-#ifndef RR_CAMERA_H
-#define RR_CAMERA_H
+#ifndef CAMERA_H
+#define CAMERA_H
 
 #include "psx.h"
 
@@ -11,35 +11,25 @@ struct BOAT;
 
 typedef struct
 {
-    sint32 height;
-    sint32 pitch;
-    sint32 target_height;
-    sint32 min_segments;
-    sint16 up_offset;
-    sint16 follow_offset;
-} CAMERA_SETTINGS;
-
-typedef struct
-{
     const struct ROUTE_SEGMENT *route;
     uint32 mode;
     MATRIX rotation;
-    sint32 position[3];
+    sint32 pos[3];
     uint32 blend;
-    uint16 direction;
+    uint16 dir;
     uint16 visible[3];
     uint32 distance;
     uint32 orbit_phase;
     sint16 edge_offset[2];
-} CAMERA_STATE;
+} CAMERA;
 
 typedef struct
 {
-    sint32 position[3];
-    sint32 direction[3];
+    sint32 pos[3];
+    sint32 dir[3];
     const struct ROUTE_SEGMENT *route;
-    uint32 index;
-    sint16 segment;
+    uint32 idx;
+    sint16 seg;
     sint16 timer;
     uint16 steps;
     uint16 cursor;
@@ -48,21 +38,14 @@ typedef struct
 } CAMERA_ATTRACT;
 
 extern CAMERA_ATTRACT camera_attract;
-extern CAMERA_STATE camera_views[2];
+extern CAMERA camera_views[2];
 extern const MATRIX camera_identity;
-CAMERA_STATE *camera_for_view(const struct RACE_VIEW *context);
-sint32 camera_init(CAMERA_STATE *camera);
+CAMERA *camera_for_view(const struct RACE_VIEW *context);
+sint32 camera_init(CAMERA *camera);
 
-sint32 camera_update_trans(const struct BOAT *boat, CAMERA_STATE *control, CAMERA_ATTRACT *state);
-sint32 camera_update_target(sint32 idx, const struct ROUTE_SEGMENT *seg, sint32 position[3], sint32 direction[3]);
-sint32 camera_update(CAMERA_STATE *camera, struct BOAT *boat);
-sint32 camera_smooth_target_state(sint32 output[3], uint32 *smoothing, const CAMERA_SETTINGS *settings, const MATRIX *pose, sint32 front, sint32 rear);
-void camera_smooth_edges(sint32 position[3], const struct BOAT *boat, sint16 edge_offset[2]);
-sint32 camera_build_xform(sint32 output[3], MATRIX *rotation, const CAMERA_SETTINGS *settings, const MATRIX *pose);
-MATRIX *camera_build_target_rot(const sint32 first[3], const sint32 second[3], MATRIX *rotation, const CAMERA_SETTINGS *settings);
-sint32 camera_classify_env_dir(CAMERA_STATE *camera);
+sint32 camera_update(CAMERA *camera, struct BOAT *boat);
+
 void camera_config_lighting(const struct BOAT *boat, const MATRIX *input);
-sint32 camera_bias_matrix(const CAMERA_STATE *camera, const MATRIX *source, sint32 unbiased);
-sint32 camera_mul_lo(sint32 left, sint32 right);
+void camera_bias_matrix(const CAMERA *camera, const MATRIX *src, sint32 unbiased);
 
-#endif /* RR_CAMERA_H */
+#endif /* CAMERA_H */

@@ -1,5 +1,5 @@
-#ifndef RR_GAME_H
-#define RR_GAME_H
+#ifndef GAME_H
+#define GAME_H
 
 #include "psx.h"
 
@@ -25,18 +25,10 @@ extern uint32 race_paused;
 
 typedef struct
 {
-    const RACE_VIEW *first;
-    const RACE_VIEW *second;
-    const RACE_CFG *cfg;
-    sint32 warmup;
-} RR_RACE_LOOP_STATE;
-
-typedef struct
-{
-    uint16 selection;
+    sint16 selection;
     uint16 mode;
     uint16 rules;
-    uint16 previous_mode;
+    uint16 prev_mode;
     uint16 flags;
     uint8 ready;
     uint8 event;
@@ -65,7 +57,7 @@ typedef struct
     uint16 round_limit;
     uint8 unlock_courses;
     uint8 result_filter;
-    uint8 no_current;
+    uint8 no_cur;
     uint8 split_layout;
     uint8 players_only;
     uint8 handicap[2];
@@ -96,23 +88,13 @@ typedef struct
 
 extern RACE_PARTICIPANT race_participants[16];
 
-void game_start(void);
+extern uint32 race_start_phase;
+sint32 game_update_racer_modes(const RACE_VIEW *view);
 
-sint32 race_loop(const RACE_VIEW *first, const RACE_VIEW *second, const RACE_CFG *cfg);
+void game_start(void);
 
 sint32 game_render_frame(void);
 
-void race_init_runtime(const RACE_VIEW *first, const RACE_VIEW *second, const RACE_CFG *cfg);
-
-sint32 game_select_state(const RACE_CFG *cfg);
-sint32 game_init_defaults(void);
-void guest_debug_append(const char *text, uint32 length);
-sint32 race_loop_resume(const RACE_VIEW *first, const RACE_VIEW *second, const RACE_CFG *cfg, sint32 warmup);
-void race_begin_loop(RR_RACE_LOOP_STATE *state, const RACE_VIEW *first, const RACE_VIEW *second, const RACE_CFG *cfg, sint32 warmup);
-sint32 race_loop_before_frame(RR_RACE_LOOP_STATE *state);
-void race_loop_after_frame(RR_RACE_LOOP_STATE *state);
-sint32 race_finish_loop(RR_RACE_LOOP_STATE *state);
-
-void game_main_loop_continue(sint32 menu_already_returned);
-
-#endif /* RR_GAME_H */
+uint32 xport_libsnd_sequence_call(uint32 target, uint32 argc, const uint32 *args);
+void xport_main(void);
+#endif /* GAME_H */

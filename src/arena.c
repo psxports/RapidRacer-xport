@@ -2,72 +2,89 @@
 #include "xport_trace.h"
 #include <stdlib.h>
 
-uint32 game_reset_checkpoint_stack(void)
+typedef struct ARENA_BLOCK
 {
-    uint32 result = r_u32(0x800A12A0u);
+    struct ARENA_BLOCK *prev;
+    void *data;
+} ARENA_BLOCK;
 
-    FUNCTION_MARKER(0x8001EFE4u, "MAIN.EXE");
-    w_u16(0x800B67C0u, 0u);
-    w_u16(0x800B6BD0u, 0u);
-    w_u32(0x800B7E20u, result);
-    return result;
+typedef struct ARENA_MARK
+{
+    struct ARENA_MARK *prev;
+    ARENA_BLOCK *block;
+} ARENA_MARK;
+
+static ARENA_BLOCK *arena_blocks;
+static ARENA_MARK *arena_marks;
+static uint32 arena_depth;
+
+void arena_reset(void)
+{
+    FUNCTION_MARKER(0x8001EFE4, "MAIN.EXE");
+    while (arena_marks)
+    {
+        ARENA_MARK *mark = arena_marks;
+        arena_marks = mark->prev;
+        free(mark);
+    }
+    arena_depth = 0;
 }
 
-uint32 game_push_checkpoint(void)
+uint32 arena_push(void)
 {
-    uint32 index;
+    ARENA_MARK *mark;
 
-    FUNCTION_MARKER(0x8001F02Cu, "MAIN.EXE");
-    w_u16(0x800B67C0u, (uint16)(r_u16(0x800B67C0u) + 1u));
-    index = (uint32)r_u16(0x800B67C0u) * 4u;
-    w_u32(0x800B7E20u + index, r_u32(0x800A12A0u));
-    return index;
+    FUNCTION_MARKER(0x8001F02C, "MAIN.EXE");
+    if (arena_depth == UINT16_MAX)
+        abort();
+    mark = (ARENA_MARK *)malloc(sizeof(*mark));
+    if (!mark)
+        abort();
+    mark->prev = arena_marks;
+    mark->block = arena_blocks;
+    arena_marks = mark;
+    return ++arena_depth * 4u;
 }
 
-sint32 game_pop_checkpoint(void)
+sint32 arena_pop(void)
 {
-    uint32 index = (uint32)r_u16(0x800B67C0u);
-    uint32 cursor = r_u32(0x800B7E20u + index * 4u);
+    ARENA_MARK *mark = arena_marks;
 
-    FUNCTION_MARKER(0x8001F060u, "MAIN.EXE");
-    w_u16(0x800B67C0u, (uint16)(index - 1u));
-    w_u32(0x800A12A0u, cursor);
-    return (sint32)index - 1;
+    FUNCTION_MARKER(0x8001F060, "MAIN.EXE");
+    if (!mark)
+        abort();
+    while (arena_blocks != mark->block)
+    {
+        ARENA_BLOCK *block = arena_blocks;
+        arena_blocks = block->prev;
+        free(block->data);
+        free(block);
+    }
+    arena_marks = mark->prev;
+    free(mark);
+    return --arena_depth;
 }
 
-uint32 game_alloc_arena_bytes(sint32 size)
+void *arena_alloc(uint32 size)
 {
-    uint32 result = r_u32(0x800A12A0u);
+    ARENA_BLOCK *block;
+    void *data;
 
-    FUNCTION_MARKER(0x8001F090u, "MAIN.EXE");
-    w_u32(0x800A12A0u, result + (((uint32)size + 3u) >> 2) * 4u);
-    return result;
-}
-
-uint32 arena_activate_scope(void)
-{
-    FUNCTION_MARKER(0x8001F0B8u, "MAIN.EXE");
-    w_u16(0x800B6BD0u, 1u);
-    return r_u32(0x800A12A0u);
-}
-
-uint32 arena_release_aligned(sint32 size)
-{
-    uint32 result = r_u32(0x800A12A0u);
-
-    FUNCTION_MARKER(0x8001F0D0u, "MAIN.EXE");
-    w_u16(0x800B6BD0u, 0u);
-    w_u32(0x800A12A0u, result + (((uint32)size + 3u) >> 2) * 4u);
-    return result;
-}
-
-uint32 arena_alloc_aligned(uint32 size)
-{
-    uint32 result = r_u32(0x800A12A0u);
-
-    FUNCTION_MARKER(0x800635B0u, "MAIN.EXE");
-    if ((size & 3u) != 0u)
-        size = (size + 4u) & 0xFFFFFFFCu;
-    xport_update_u32(0x800A12A0u, XPORT_MEMORY_UPDATE_ADD, size);
-    return result;
+    FUNCTION_MARKER(0x8001F090, "MAIN.EXE");
+    if (size > UINT32_MAX - 3u)
+        return NULL;
+    size = size + 3 & ~3u;
+    data = malloc(size ? size : 4u);
+    if (!data)
+        return NULL;
+    block = (ARENA_BLOCK *)malloc(sizeof(*block));
+    if (!block)
+    {
+        free(data);
+        return NULL;
+    }
+    block->data = data;
+    block->prev = arena_blocks;
+    arena_blocks = block;
+    return data;
 }

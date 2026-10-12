@@ -1,5 +1,5 @@
-#ifndef RR_TOURNAMENT_H
-#define RR_TOURNAMENT_H
+#ifndef TOURNAMENT_H
+#define TOURNAMENT_H
 
 #include "input.h"
 
@@ -14,9 +14,9 @@ typedef struct
     uint8 points[5];
     uint16 leader;
     uint16 match_count;
-} TOURNAMENT_MATCH_STATE;
+} TOURNAMENT_MATCH;
 
-extern TOURNAMENT_MATCH_STATE tournament_matches;
+extern TOURNAMENT_MATCH tournament_matches;
 
 enum
 {
@@ -33,9 +33,9 @@ typedef struct
     uint8 player;
     uint8 status[TOURNAMENT_GRID_ROUNDS][TOURNAMENT_GRID_PLAYERS];
     uint16 seconds[TOURNAMENT_GRID_ROUNDS][TOURNAMENT_GRID_PLAYERS];
-} TOURNAMENT_GRID_STATE;
+} TOURNAMENT_GRID;
 
-extern TOURNAMENT_GRID_STATE tournament_grid;
+extern TOURNAMENT_GRID tournament_grid;
 
 typedef struct
 {
@@ -51,38 +51,35 @@ typedef struct
     uint8 player;
     uint8 races[16];
     uint8 points[16];
-} TOURNAMENT_CHAMP_STATE;
+} TOURNAMENT_CHAMP;
 
-extern TOURNAMENT_CHAMP_STATE tournament_champ;
+extern TOURNAMENT_CHAMP tournament_champ;
 
 void tournament_clear_extra_rounds(void);
 
-sint32 tournament_draw_grid(void);
 sint32 tournament_reset_grid(void);
-sint32 tournament_target_time(uint16 course, sint16 index);
+
 sint32 tournament_refresh_grid(void);
-sint32 tournament_update_grid_input(CONTROLLER_STATE *input);
+sint32 tournament_update_grid_input(PAD *input);
 sint32 tournament_sync_grid(void);
-sint32 tournament_enter_race(void);
-sint32 tournament_grid_complete(void);
+
 sint32 tournament_refresh_player_name(void);
-sint32 tournament_record_result(uint32 unused1, uint32 unused2, uint32 unused3, uint32 unused4);
-sint32 tournament_init_match_order(void);
+sint32 tournament_rec_result(uint32 unused1, uint32 unused2, uint32 unused3, uint32 unused4);
+
 sint32 tournament_init_round(void);
-sint32 tournament_draw_match_highlight(void);
+
 sint32 tournament_refresh_matches(void);
-sint32 tournament_update_match_input(CONTROLLER_STATE *input);
+sint32 tournament_update_match_input(PAD *input);
 sint32 tournament_sync_match(void);
-sint32 tournament_record_match_result(void);
+sint32 tournament_rec_match_result(void);
 sint32 tournament_refresh_standings(void);
-sint32 tournament_advance_round(CONTROLLER_STATE *input);
+sint32 tournament_advance_round(PAD *input);
 sint32 tournament_refresh_leader(void);
 sint32 tournament_reset_result_rows(void);
-sint32 tournament_init_profile(void);
-sint32 tournament_refresh_table(void);
-sint32 tournament_init_table(void);
-sint32 tournament_update_mode_input(CONTROLLER_STATE *input);
-sint32 tournament_reset_text(void);
-sint32 tournament_record_champ_result(void);
 
-#endif /* RR_TOURNAMENT_H */
+sint32 tournament_init_table(void);
+sint32 tournament_update_mode_input(PAD *input);
+sint32 tournament_reset_text(void);
+sint32 tournament_rec_champ_result(void);
+
+#endif /* TOURNAMENT_H */

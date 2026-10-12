@@ -1,5 +1,5 @@
-#ifndef RR_PICKUP_H
-#define RR_PICKUP_H
+#ifndef PICKUP_H
+#define PICKUP_H
 
 #include "psx.h"
 
@@ -28,10 +28,8 @@ void pickup_restore(void);
 struct BOAT;
 uint32 pickup_scan(const struct BOAT *boat);
 
-sint32 pickup_apply_command(const struct RACE_VIEW *state, struct BOAT_MENU *menu, sint16 command);
-sint32 pickup_update_slot_countdown(struct BOAT_MENU *menu, sint16 slot);
 sint32 pickup_update_slots(const struct RACE_VIEW *state, uint32 *ot, const struct BOAT *boat);
 sint32 pickup_write_racer_indices(uint8 *output);
 sint32 pickup_update_racer_flags(void);
 
-#endif /* RR_PICKUP_H */
+#endif /* PICKUP_H */

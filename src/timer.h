@@ -1,5 +1,5 @@
-#ifndef RR_TIMER_H
-#define RR_TIMER_H
+#ifndef TIMER_H
+#define TIMER_H
 
 #include "psx.h"
 
@@ -15,18 +15,15 @@ extern TIME_REC race_bonus_time;
 extern TIME_REC race_freeze_time;
 extern TIME_REC race_end_time;
 
-sint32 time_increment(TIME_REC *dst);
-sint32 time_decrement(TIME_REC *dst);
+sint32 time_inc(TIME_REC *dst);
+sint32 time_dec(TIME_REC *dst);
 
-sint32 time_format(TIME_REC *dst, sint32 value);
+sint32 time_format(TIME_REC *dst, sint32 val);
 sint32 time_init(TIME_REC *dst);
 sint32 time_copy(TIME_REC *dst, const TIME_REC *src);
 sint32 time_add(TIME_REC *dst, const TIME_REC *src);
 sint32 time_sub(TIME_REC *dst, const TIME_REC *src);
 
+sint32 time_init_disp(void);
 
-void timer_format_text(uint8 *output, sint32 value);
-
-sint32 time_init_display(void);
-
-#endif /* RR_TIMER_H */
+#endif /* TIMER_H */

@@ -2,8 +2,8 @@
 #include "sprite.h"
 #include "psx_gpu.h"
 #include "arena.h"
-#include "display.h"
-#include "global.h"
+#include "disp.h"
+#include "utils.h"
 #include "menu.h"
 #include "render.h"
 #include "xport_trace.h"
@@ -24,132 +24,127 @@ enum
     SPRITE_CLIP_CAPACITY = 5
 };
 
-static SPRITE_CLIP sprite_clips[SPRITE_CLIP_CAPACITY];
-static uint16 sprite_clip_count;
+static SPRITE_CLIP spr_clips[SPRITE_CLIP_CAPACITY];
+static uint16 spr_clip_count;
 
 // Sprite packet owners keep stable addresses for the shared GPU registry
-static SPRITE_RENDER sprite_label_packets[10];
-static SPRITE_RENDER sprite_image_packets[160];
-static SPRITE_RENDER sprite_notice_packets[10];
-SPRITE_RENDER sprite_glyphs[52];
-uint16 sprite_buffers_active;
+static SPRITE_RENDER spr_label_packets[10];
+static SPRITE_RENDER spr_image_packets[160];
+static SPRITE_RENDER spr_notice_packets[10];
+SPRITE_RENDER spr_glyphs[52];
+uint16 spr_buffers_active;
 
 // Menu text packets from MAIN.EXE 800EA690/800EC5D0/800EE518 and 800D71F0
-static SPRT sprite_text_packets[TEXT_FONT_COUNT][2][TEXT_GLYPH_CAPACITY];
-static DR_TPAGE sprite_text_modes[TEXT_FONT_COUNT][2];
+static SPRT spr_text_packets[TEXT_FONT_COUNT][2][TEXT_GLYPH_CAPACITY];
+static DR_TPAGE spr_text_modes[TEXT_FONT_COUNT][2];
 // Notice background owner from MAIN.EXE 800D6BC8
-static TILE sprite_notice_tiles[2];
+static TILE spr_notice_tiles[2];
 
-void sprite_register_packets(void)
+void spr_register_packets(void)
 {
-    if (!gpu_register_packet_range(sprite_label_packets, sizeof(sprite_label_packets)) || !gpu_register_packet_range(sprite_image_packets, sizeof(sprite_image_packets)) || !gpu_register_packet_range(sprite_notice_packets, sizeof(sprite_notice_packets)) || !gpu_register_packet_range(sprite_glyphs, sizeof(sprite_glyphs)) || !gpu_register_packet_range(sprite_text_packets, sizeof(sprite_text_packets)) || !gpu_register_packet_range(sprite_text_modes, sizeof(sprite_text_modes)) || !gpu_register_packet_range(sprite_notice_tiles, sizeof(sprite_notice_tiles)))
+    if (!gpu_register_packet_range(spr_label_packets, sizeof(spr_label_packets)) || !gpu_register_packet_range(spr_image_packets, sizeof(spr_image_packets)) || !gpu_register_packet_range(spr_notice_packets, sizeof(spr_notice_packets)) || !gpu_register_packet_range(spr_glyphs, sizeof(spr_glyphs)) || !gpu_register_packet_range(spr_text_packets, sizeof(spr_text_packets)) || !gpu_register_packet_range(spr_text_modes, sizeof(spr_text_modes)) || !gpu_register_packet_range(spr_notice_tiles, sizeof(spr_notice_tiles)))
         abort();
 }
 
-SPRITE_RENDER *sprite_render_at(SPRITE_RENDER *base, sint32 index)
+SPRITE_RENDER *spr_render_at(SPRITE_RENDER *base, sint32 idx)
 {
-    size_t count;
-    if (base == sprite_label_packets)
+    uint32 count;
+    if (base == spr_label_packets)
         count = 10;
-    else if (base == sprite_image_packets)
+    else if (base == spr_image_packets)
         count = 160;
-    else if (base == sprite_notice_packets)
+    else if (base == spr_notice_packets)
         count = 10;
-    else if (base == sprite_glyphs)
+    else if (base == spr_glyphs)
         count = 52;
     else
         abort();
-    if (index < 0 || (size_t)index >= count)
+    if (idx < 0 || (uint32)idx >= count)
         abort();
-    return base + index;
+    return base + idx;
 }
 
 // UI array from MAIN.EXE 800B6A74
-UI_RECORD sprite_records[180];
+UI_RECORD spr_recs[180];
 
 // Label descriptors from MAIN.EXE 800957C4
-SPRITE_IMAGE sprite_labels[8] = {{.path = "BACK\\F01.TIM"}, {.path = "BACK\\F02.TIM"}, {.path = "BACK\\F03.TIM"}, {.path = "BACK\\F04.TIM"}, {.path = "BACK\\F05.TIM"}, {.path = "BACK\\F06.TIM"}, {.path = "BACK\\F07.TIM"}, {.path = "BACK\\F08.TIM"}};
+SPRITE_IMAGE spr_labels[8] = {{.path = "BACK\\F01.TIM"}, {.path = "BACK\\F02.TIM"}, {.path = "BACK\\F03.TIM"}, {.path = "BACK\\F04.TIM"}, {.path = "BACK\\F05.TIM"}, {.path = "BACK\\F06.TIM"}, {.path = "BACK\\F07.TIM"}, {.path = "BACK\\F08.TIM"}};
 
 // Working descriptors from MAIN.EXE 800E35C0/800E5B48
-SPRITE_IMAGE sprite_images[160];
-SPRITE_IMAGE sprite_notices[10];
+SPRITE_IMAGE spr_images[160];
+SPRITE_IMAGE spr_notices[10];
 
-static uint16 sprite_image_u16(const uint8 *source)
+void spr_decode_image(SPRITE_IMAGE *image, const uint8 *src)
 {
-    return (uint16)(source[0] | ((uint16)source[1] << 8));
-}
-
-void sprite_decode_image(SPRITE_IMAGE *image, const uint8 *source)
-{
-    memcpy(image->path, source, 60);
+    memcpy(image->path, src, 60);
     image->path[60] = 0;
-    image->mode = source[30];
-    image->reserved = source[31];
-    image->u = sprite_image_u16(source + 32);
-    image->v = sprite_image_u16(source + 34);
-    image->width = sprite_image_u16(source + 36);
-    image->height = sprite_image_u16(source + 38);
-    image->tpage_x = sprite_image_u16(source + 40);
-    image->tpage_y = sprite_image_u16(source + 42);
-    image->clut_x = sprite_image_u16(source + 44);
-    image->clut_y = sprite_image_u16(source + 46);
-    image->x = sprite_image_u16(source + 48);
-    image->y = sprite_image_u16(source + 50);
-    image->tpage = sprite_image_u16(source + 52);
-    image->clut = sprite_image_u16(source + 54);
+    image->mode = src[30];
+    image->reserved = src[31];
+    image->u = xport_load_le16(src + 32);
+    image->v = xport_load_le16(src + 34);
+    image->width = xport_load_le16(src + 36);
+    image->height = xport_load_le16(src + 38);
+    image->tpage_x = xport_load_le16(src + 40);
+    image->tpage_y = xport_load_le16(src + 42);
+    image->clut_x = xport_load_le16(src + 44);
+    image->clut_y = xport_load_le16(src + 46);
+    image->x = xport_load_le16(src + 48);
+    image->y = xport_load_le16(src + 50);
+    image->tpage = xport_load_le16(src + 52);
+    image->clut = xport_load_le16(src + 54);
 }
 
-void sprite_encode_image(const SPRITE_IMAGE *image, uint8 *target)
+static void spr_encode_image(const SPRITE_IMAGE *image, uint8 *target)
 {
     memcpy(target, image->path, 30);
-    target[30] = (uint8)(image->mode);
-    target[31] = (uint8)(image->reserved);
-    target[32] = (uint8)(image->u);
-    target[33] = (uint8)(image->u >> 8);
-    target[34] = (uint8)(image->v);
-    target[35] = (uint8)(image->v >> 8);
-    target[36] = (uint8)(image->width);
-    target[37] = (uint8)(image->width >> 8);
-    target[38] = (uint8)(image->height);
-    target[39] = (uint8)(image->height >> 8);
-    target[40] = (uint8)(image->tpage_x);
-    target[41] = (uint8)(image->tpage_x >> 8);
-    target[42] = (uint8)(image->tpage_y);
-    target[43] = (uint8)(image->tpage_y >> 8);
-    target[44] = (uint8)(image->clut_x);
-    target[45] = (uint8)(image->clut_x >> 8);
-    target[46] = (uint8)(image->clut_y);
-    target[47] = (uint8)(image->clut_y >> 8);
-    target[48] = (uint8)(image->x);
-    target[49] = (uint8)(image->x >> 8);
-    target[50] = (uint8)(image->y);
-    target[51] = (uint8)(image->y >> 8);
-    target[52] = (uint8)(image->tpage);
-    target[53] = (uint8)(image->tpage >> 8);
-    target[54] = (uint8)(image->clut);
-    target[55] = (uint8)(image->clut >> 8);
+    target[30] = image->mode;
+    target[31] = image->reserved;
+    target[32] = image->u;
+    target[33] = image->u >> 8;
+    target[34] = image->v;
+    target[35] = image->v >> 8;
+    target[36] = image->width;
+    target[37] = image->width >> 8;
+    target[38] = image->height;
+    target[39] = image->height >> 8;
+    target[40] = image->tpage_x;
+    target[41] = image->tpage_x >> 8;
+    target[42] = image->tpage_y;
+    target[43] = image->tpage_y >> 8;
+    target[44] = image->clut_x;
+    target[45] = image->clut_x >> 8;
+    target[46] = image->clut_y;
+    target[47] = image->clut_y >> 8;
+    target[48] = image->x;
+    target[49] = image->x >> 8;
+    target[50] = image->y;
+    target[51] = image->y >> 8;
+    target[52] = image->tpage;
+    target[53] = image->tpage >> 8;
+    target[54] = image->clut;
+    target[55] = image->clut >> 8;
     // Preserve the unused disk tail without interpreting it as a runtime pointer
     memcpy(target + 56, image->path + 56, 4);
 }
 
-void sprite_refresh_image_path(SPRITE_IMAGE *image)
+void spr_refresh_image_path(SPRITE_IMAGE *image)
 {
     uint8 packed[60];
-    sprite_encode_image(image, packed);
+    spr_encode_image(image, packed);
     memcpy(image->path, packed, 60);
     image->path[60] = 0;
 }
 
-void sprite_set_image_path(SPRITE_IMAGE *image, const char *path)
+void spr_set_image_path(SPRITE_IMAGE *image, const char *path)
 {
     uint8 packed[60];
-    size_t length = strlen(path);
-    if (length >= sizeof(packed))
+    size_t len = strlen(path);
+    if (len >= sizeof(packed))
         abort();
     // Long names overlay metadata in the compatible file format
-    sprite_encode_image(image, packed);
-    memcpy(packed, path, length + 1);
-    sprite_decode_image(image, packed);
+    spr_encode_image(image, packed);
+    memcpy(packed, path, len + 1);
+    spr_decode_image(image, packed);
 }
 
 // Pixel scale from MAIN.EXE 80081008/81810 and page width from 80081816
@@ -157,48 +152,48 @@ static const struct
 {
     sint16 scale;
     sint16 page_width;
-} sprite_pixel_modes[4] = {{4, 256}, {2, 128}, {1, 64}, {256, 0}};
+} spr_pixel_modes[4] = {{4, 256}, {2, 128}, {1, 64}, {256, 0}};
 
-sint32 sprite_pixel_scale(uint8 mode)
+sint32 spr_pixel_scale(uint8 mode)
 {
     if (mode >= 4u)
         abort();
-    return sprite_pixel_modes[mode].scale;
+    return spr_pixel_modes[mode].scale;
 }
 
-static const SPRITE_IMAGE *sprite_image_source(sint16 kind, sint16 index)
+static const SPRITE_IMAGE *spr_image_src(sint16 kind, sint16 idx)
 {
     static const struct
     {
         const SPRITE_IMAGE *images;
-        size_t count;
-    } groups[3] = {{sprite_labels, 8}, {sprite_images, 160}, {sprite_notices, 10}};
+        uint32 count;
+    } grps[3] = {{spr_labels, 8}, {spr_images, 160}, {spr_notices, 10}};
 
-    if (kind < 0 || kind >= 3 || index < 0 || (size_t)index >= groups[kind].count)
+    if (kind < 0 || kind >= 3 || idx < 0 || (uint32)idx >= grps[kind].count)
         abort();
-    return &groups[kind].images[index];
+    return &grps[kind].images[idx];
 }
 
-sint32 sprite_flush_pending(sint32 ordering_index)
+sint32 spr_flush_pending(sint32 ordering_idx)
 {
-    sint32 selector = (sint16)display_state.buffer;
-    LINE_F2 *packet;
+    sint32 selector = disp_state.buffer;
+    LINE_F2 *line;
     uint32 *table;
 
-    FUNCTION_MARKER(0x800455C8u, "MAIN.EXE");
-    if (selector < 0 || selector >= 2 || ordering_index < 0 || ordering_index >= 40 || display_state.line_count > 200u)
+    FUNCTION_MARKER(0x800455C8, "MAIN.EXE");
+    if (selector < 0 || selector >= 2 || ordering_idx < 0 || ordering_idx >= 40 || disp_state.line_count > 200u)
         abort();
-    table = display_order_slot(selector, ordering_index);
-    if (display_state.line_count != 0u)
+    table = disp_order_slot(selector, ordering_idx);
+    if (disp_state.line_count != 0)
     {
-        packet = display_line_buffer(selector);
+        line = disp_line_buffer(selector);
         do
         {
-            AddPrim(table, packet++);
-            --display_state.line_count;
-        } while (display_state.line_count != 0u);
+            AddPrim(table, line++);
+            --disp_state.line_count;
+        } while (disp_state.line_count != 0);
     }
-    return ordering_index;
+    return ordering_idx;
 }
 
 typedef struct
@@ -209,357 +204,333 @@ typedef struct
 } SPRITE_LABEL_ANIMATION;
 
 // Label animation from MAIN.EXE 800B40B6/40B8/F0478
-static SPRITE_LABEL_ANIMATION sprite_label_anim;
+static SPRITE_LABEL_ANIMATION spr_label_anim;
 
 // Label positions from MAIN.EXE 800967A4/967AC
-static const sint16 sprite_label_positions[4][2] = {{0, 0}, {256, 0}, {0, 120}, {256, 120}};
+static const sint16 spr_label_pos[4][2] = {{0, 0}, {256, 0}, {0, 120}, {256, 120}};
 
-sint32 sprite_reset_labels(void)
+sint32 spr_reset_labels(void)
 {
-    FUNCTION_MARKER(0x80046654u, "MAIN.EXE");
-    sprite_label_anim.phase = 0u;
-    sprite_label_anim.ticks = 0u;
-    return sprite_animate_labels();
+    FUNCTION_MARKER(0x80046654, "MAIN.EXE");
+    spr_label_anim.phase = 0;
+    spr_label_anim.ticks = 0;
+    return spr_animate_labels();
 }
 
-sint32 sprite_animate_labels(void)
+static sint32 spr_build_draw_packet(SPRITE_RENDER *output, const SPRITE_IMAGE *src, sint32 x, sint32 y, sint32 unused5, sint32 unused6, sint32 unused7, sint32 unused8, sint32 width, sint32 height)
 {
-    sint32 phase = (uint16)sprite_label_anim.phase;
-    UI_RECORD *base = sprite_records;
-    sint32 index;
+    sint32 src_height;
 
-    FUNCTION_MARKER(0x8004667Cu, "MAIN.EXE");
-    for (index = 0; index < 4; ++index)
+    FUNCTION_MARKER(0x80046B80, "MAIN.EXE");
+    output->kind = 1;
+    setSprt(&output->simple);
+    setRGB0(&output->simple, 0x80, 0x80, 0x80);
+    output->simple.p[0].attr = src->clut;
+    output->clut_x = (sint16)src->clut_x;
+    output->clut_y = (sint16)src->clut_y;
+    output->tpage_x = (sint16)src->tpage_x;
+    src_height = (sint16)src->tpage_y;
+    output->offset_y = 0;
+    output->offset_x = 0;
+    output->u = x;
+    output->v = y;
+    output->width = width;
+    output->height = height;
+    setUV0(&output->simple, x, y);
+    setWH(&output->simple, width, height);
+    output->tpage_y = src_height;
+    output->last_orientation = 0;
+    output->orientation = 0;
+    output->mode = src->mode;
+    SetDrawMode1(&output->draw_mode, 1, 0, src->tpage);
+    return output->draw_mode.code[0];
+}
+
+static sint32 render_dispatch_rec(SPRITE_RENDER *output, sint16 src_idx, sint16 kind)
+{
+    const SPRITE_IMAGE *src;
+
+    FUNCTION_MARKER(0x80046C84, "MAIN.EXE");
+    src = spr_image_src(kind, src_idx);
+    if (kind == 1)
+        return menu_build_spr_packet(output, src, (sint16)src->u, (sint16)src->v, 0, 0, 0, 0, (sint16)src->width, (sint16)src->height);
+    return spr_build_draw_packet(output, src, (sint16)src->u, (sint16)src->v, 0, 0, 0, 0, (sint16)src->width, (sint16)src->height);
+}
+
+sint32 spr_animate_labels(void)
+{
+    sint32 phase = spr_label_anim.phase;
+    UI_RECORD *base = spr_recs;
+    sint32 idx;
+
+    FUNCTION_MARKER(0x8004667C, "MAIN.EXE");
+    for (idx = 0; idx < 4; ++idx)
     {
         ++phase;
-        sprite_label_anim.frames[index] = (uint16)phase;
+        spr_label_anim.frames[idx] = phase;
         if (phase == 8)
             phase = 0;
     }
-    sprite_label_anim.ticks = (uint16)(sprite_label_anim.ticks + 1u);
-    if ((sint16)menu_asset_counts.labels == 8)
+    spr_label_anim.ticks++;
+    if (menu_asset_counts.labels == 8)
     {
-        for (index = 0; index < 8; ++index)
-            base[index + 160].type = 0u;
-        for (index = 0; index < 4; ++index)
+        for (idx = 0; idx < 8; ++idx)
+            base[idx + 160].type = 0;
+        for (idx = 0; idx < 4; ++idx)
         {
-            sint16 source_index = (sint16)sprite_label_anim.frames[index] - 1;
-            render_dispatch_rec(sprite_render_at(sprite_label_packets, index), source_index, 0);
-            sprite_init_anim_rec((sint16)(index + 160), sprite_label_packets, 1, (sint16)index, sprite_label_positions[index][0], sprite_label_positions[index][1], 1);
+            sint16 src_idx = spr_label_anim.frames[idx] - 1;
+            render_dispatch_rec(spr_render_at(spr_label_packets, idx), src_idx, 0);
+            spr_init_anim_rec(idx + 160, spr_label_packets, 1, idx, spr_label_pos[idx][0], spr_label_pos[idx][1], 1);
         }
     }
-    if ((sint16)sprite_label_anim.ticks == 6)
+    if (spr_label_anim.ticks == 6)
     {
-        sprite_label_anim.ticks = 0u;
-        phase = (sint16)sprite_label_anim.phase + 1;
+        spr_label_anim.ticks = 0;
+        phase = (sint16)spr_label_anim.phase + 1;
         if (phase == 8)
             phase = 0;
-        sprite_label_anim.phase = (uint16)phase;
+        spr_label_anim.phase = phase;
         return phase;
     }
     return 6;
 }
 
-sint32 render_alloc_rec_bufs(void)
+static sint32 render_alloc_rec_bufs(void)
 {
-    FUNCTION_MARKER(0x8004684Cu, "MAIN.EXE");
-    sprite_register_packets();
-    game_push_checkpoint();
-    sprite_buffers_active = 1u;
-    display_state.line_count = 0u;
+    FUNCTION_MARKER(0x8004684C, "MAIN.EXE");
+    spr_register_packets();
+    arena_push();
+    spr_buffers_active = 1;
+    disp_state.line_count = 0;
     return 1;
 }
 
-sint32 render_release_rec_bufs(void)
+static sint32 render_release_rec_bufs(void)
 {
     sint32 enabled;
 
-    FUNCTION_MARKER(0x800468ACu, "MAIN.EXE");
-    enabled = (sint16)sprite_buffers_active;
+    FUNCTION_MARKER(0x800468AC, "MAIN.EXE");
+    enabled = (sint16)spr_buffers_active;
     if (enabled != 0)
-        return game_pop_checkpoint();
+        return arena_pop();
     return enabled;
 }
 
-sint32 menu_build_sprite_packet(SPRITE_RENDER *output, const SPRITE_IMAGE *source, sint32 x, sint32 y, sint32 unused5, sint32 unused6, sint32 unused7, sint32 unused8, sint32 width, sint32 height)
+sint32 menu_build_spr_packet(SPRITE_RENDER *output, const SPRITE_IMAGE *src, sint32 x, sint32 y, sint32 unused5, sint32 unused6, sint32 unused7, sint32 unused8, sint32 width, sint32 height)
 {
-    uint32 index;
+    sint32 idx;
     sint32 divisor;
     sint32 limit;
     sint32 visible_width;
     sint32 overflow_width;
-    sint32 source_height;
+    sint32 src_height;
     sint32 right_edge;
-    SPRITE_CLIP *record;
+    SPRITE_CLIP *rec;
     uint16 selector;
 
-    FUNCTION_MARKER(0x800468D4u, "MAIN.EXE");
-    output->kind = 0u;
-    index = source->mode;
-    divisor = sprite_pixel_scale(source->mode);
-    limit = sprite_pixel_modes[index].page_width;
-    visible_width = (sint32)((uint32)width - 1u);
-    right_edge = divisor != 0 ? (sint32)((uint32)x + (uint32)(sint32)(sint16)(width / divisor)) : 0;
+    FUNCTION_MARKER(0x800468D4, "MAIN.EXE");
+    output->kind = 0;
+    idx = src->mode;
+    divisor = spr_pixel_scale(src->mode);
+    limit = spr_pixel_modes[idx].page_width;
+    visible_width = width - 1u;
+    right_edge = divisor != 0 ? x + (sint16)(width / divisor) : 0;
     if (divisor != 0 && right_edge >= limit)
     {
-        sint32 clipped_width = (sint32)((uint32)limit - (uint32)x);
+        sint32 clipped_width = limit - x;
 
-        overflow_width = (sint32)((uint32)visible_width - (uint32)clipped_width);
+        overflow_width = visible_width - clipped_width;
         visible_width = clipped_width;
-        selector = sprite_clip_count;
+        selector = spr_clip_count;
         if (selector >= SPRITE_CLIP_CAPACITY)
             abort();
-        record = &sprite_clips[selector];
-        record->quad.tag = (record->quad.tag & 0x00FFFFFFu) | 0x09000000u;
-        record->quad.code = 46u;
-        record->quad.r0 = 0x80u;
-        record->quad.g0 = 0x80u;
-        record->quad.b0 = 0x80u;
-        record->quad.tpage = (uint16)getTPage((sint32)index, 0, (sint16)source->tpage_x + visible_width, (sint16)source->tpage_y);
-        record->quad.clut = (uint16)getClut((sint16)source->clut_x, (sint16)source->clut_y);
-        record->offset_y = 0u;
-        record->offset_x = 0u;
-        record->u = 0u;
-        record->v = (uint32)y;
-        record->width = (uint32)(sint16)overflow_width;
-        record->height = (uint32)height;
-        selector = sprite_clip_count;
-        sprite_clip_count = (uint16)(selector + 1u);
-        output->clip_index = selector;
-        record->quad.u0 = 0u;
-        record->quad.v0 = (uint8)y;
-        record->quad.u1 = 0u;
-        record->quad.v1 = (uint8)((uint32)y + (uint32)height);
-        record->quad.u2 = (uint8)overflow_width;
-        record->quad.v2 = (uint8)y;
-        record->quad.u3 = (uint8)overflow_width;
-        record->quad.v3 = (uint8)((uint32)y + (uint32)height);
+        rec = &spr_clips[selector];
+        setPolyFT4(&rec->quad);
+        setSemiTrans(&rec->quad, 1);
+        setRGB0(&rec->quad, 0x80, 0x80, 0x80);
+        rec->quad.p[1].attr = getTPage(idx, 0, src->tpage_x + visible_width, src->tpage_y);
+        rec->quad.p[0].attr = getClut(src->clut_x, src->clut_y);
+        rec->offset_y = 0;
+        rec->offset_x = 0;
+        rec->u = 0;
+        rec->v = y;
+        rec->width = (sint16)overflow_width;
+        rec->height = height;
+        selector = spr_clip_count;
+        spr_clip_count = selector + 1u;
+        output->clip_idx = selector;
+        setUV4(&rec->quad, 0, y, 0, y + height, overflow_width, y, overflow_width, y + height);
     }
     else
     {
-        output->clip_index = 0u;
+        output->clip_idx = 0;
     }
 
-    output->quad.tag = (output->quad.tag & 0x00FFFFFFu) | ((uint32)(9u) << 24);
-    output->quad.code = 46u;
-    output->quad.r0 = 0x80u;
-    output->quad.g0 = 0x80u;
-    output->quad.b0 = 0x80u;
-    output->quad.tpage = source->tpage;
-    output->quad.clut = source->clut;
-    output->clut_x = (uint32)(sint16)source->clut_x;
-    output->clut_y = (uint32)(sint16)source->clut_y;
-    output->tpage_x = (uint32)(sint16)source->tpage_x;
-    source_height = (sint16)source->tpage_y;
-    output->offset_y = 0u;
-    output->offset_x = 0u;
-    output->u = (uint32)x;
-    output->v = (uint32)y;
-    output->width = (uint32)visible_width;
-    output->height = (uint32)height;
-    output->tpage_y = (uint32)source_height;
-    output->quad.u0 = (uint8)x;
-    output->quad.v0 = (uint8)y;
-    output->quad.u1 = (uint8)x;
-    output->quad.v1 = (uint8)((uint32)y + (uint32)height);
-    output->quad.u2 = (uint8)((uint32)x + (uint32)visible_width);
-    output->quad.v2 = (uint8)y;
-    output->quad.u3 = (uint8)((uint32)x + (uint32)visible_width);
-    output->quad.v3 = (uint8)((uint32)y + (uint32)height);
-    output->last_orientation = 0u;
-    output->orientation = 0u;
-    output->mode = (uint8)index;
-    return (sint32)((uint32)x + (uint32)visible_width);
+    setPolyFT4(&output->quad);
+    setSemiTrans(&output->quad, 1);
+    setRGB0(&output->quad, 0x80, 0x80, 0x80);
+    output->quad.p[1].attr = src->tpage;
+    output->quad.p[0].attr = src->clut;
+    output->clut_x = (sint16)src->clut_x;
+    output->clut_y = (sint16)src->clut_y;
+    output->tpage_x = (sint16)src->tpage_x;
+    src_height = (sint16)src->tpage_y;
+    output->offset_y = 0;
+    output->offset_x = 0;
+    output->u = x;
+    output->v = y;
+    output->width = visible_width;
+    output->height = height;
+    output->tpage_y = src_height;
+    setUV4(&output->quad, x, y, x, y + height, x + visible_width, y, x + visible_width, y + height);
+
+    output->last_orientation = 0;
+    output->orientation = 0;
+    output->mode = idx;
+    return x + visible_width;
 }
 
-sint32 sprite_build_draw_packet(SPRITE_RENDER *output, const SPRITE_IMAGE *source, sint32 x, sint32 y, sint32 unused5, sint32 unused6, sint32 unused7, sint32 unused8, sint32 width, sint32 height)
-{
-    sint32 source_height;
-
-    FUNCTION_MARKER(0x80046B80u, "MAIN.EXE");
-    output->kind = 1u;
-    output->simple.tag = (output->simple.tag & 0x00FFFFFFu) | ((uint32)(4u) << 24);
-    output->simple.code = 100u;
-    output->simple.r0 = 0x80u;
-    output->simple.g0 = 0x80u;
-    output->simple.b0 = 0x80u;
-    output->simple.clut = source->clut;
-    output->clut_x = (uint32)(sint16)source->clut_x;
-    output->clut_y = (uint32)(sint16)source->clut_y;
-    output->tpage_x = (uint32)(sint16)source->tpage_x;
-    source_height = (sint16)source->tpage_y;
-    output->offset_y = 0u;
-    output->offset_x = 0u;
-    output->u = (uint32)x;
-    output->v = (uint32)y;
-    output->width = (uint32)width;
-    output->height = (uint32)height;
-    output->simple.u0 = (uint8)x;
-    output->simple.v0 = (uint8)y;
-    output->simple.w = (uint16)width;
-    output->simple.h = (uint16)height;
-    output->tpage_y = (uint32)source_height;
-    output->last_orientation = 0u;
-    output->orientation = 0u;
-    output->mode = source->mode;
-    SetDrawMode1(&output->draw_mode, 1, 0, source->tpage);
-    return (sint32)(uint32)output->draw_mode.code[0];
-}
-
-sint32 render_dispatch_rec(SPRITE_RENDER *output, sint16 source_index, sint16 kind)
-{
-    const SPRITE_IMAGE *source;
-
-    FUNCTION_MARKER(0x80046C84u, "MAIN.EXE");
-    source = sprite_image_source(kind, source_index);
-    if (kind == 1)
-        return menu_build_sprite_packet(output, source, (sint16)source->u, (sint16)source->v, 0, 0, 0, 0, (sint16)source->width, (sint16)source->height);
-    return sprite_build_draw_packet(output, source, (sint16)source->u, (sint16)source->v, 0, 0, 0, 0, (sint16)source->width, (sint16)source->height);
-}
-
-UI_RECORD *sprite_init_anim_rec(sint16 index, SPRITE_RENDER *data, sint8 type, sint16 value, sint16 first, sint16 second, sint8 flags)
+UI_RECORD *spr_init_anim_rec(sint16 idx, SPRITE_RENDER *data, sint8 type, sint16 val, sint16 x, sint16 y, sint8 flags)
 {
     UI_RECORD *address;
-    UI_RECORD *record;
+    UI_RECORD *rec;
 
-    FUNCTION_MARKER(0x80046D18u, "MAIN.EXE");
-    if (index < 0 || index >= 180)
+    FUNCTION_MARKER(0x80046D18, "MAIN.EXE");
+    if (idx < 0 || idx >= 180)
         abort();
-    sprite_render_at(data, value);
-    address = (sprite_records + (sint32)index);
-    record = address;
-    record->active = 1u;
-    record->data = data;
-    record->type = (uint8)type;
-    record->value = (uint16)value;
-    record->x = (uint16)first;
-    record->y = (uint16)second;
-    record->flags = (uint8)flags;
-    record->transition_active = 0u;
-    record->command = 0u;
-    record->inset_x = 0u;
-    record->inset_y = 0u;
-    record->delta_x = 0u;
-    record->delta_y = 0u;
-    record->layer = 0u;
+    spr_render_at(data, val);
+    address = spr_recs + idx;
+    rec = address;
+    rec->active = 1;
+    rec->data = data;
+    rec->type = type;
+    rec->val = val;
+    rec->x = x;
+    rec->y = y;
+    rec->flags = flags;
+    rec->transition_active = 0;
+    rec->command = 0;
+    rec->inset_x = 0;
+    rec->inset_y = 0;
+    rec->delta_x = 0;
+    rec->delta_y = 0;
+    rec->layer = 0;
     return address;
 }
 
 sint32 render_init_recs(void)
 {
-    UI_RECORD *records;
-    const SPRITE_IMAGE *source_table;
+    UI_RECORD *recs;
+    const SPRITE_IMAGE *src_table;
     sint32 count;
     sint32 mode;
-    sint32 index;
+    sint32 idx;
 
-    FUNCTION_MARKER(0x80046DE0u, "MAIN.EXE");
-    sprite_clip_count = 0u;
+    FUNCTION_MARKER(0x80046DE0, "MAIN.EXE");
+    spr_clip_count = 0;
     render_release_rec_bufs();
     render_alloc_rec_bufs();
-    records = sprite_records;
-    for (index = 0; index < 180; ++index)
+    recs = spr_recs;
+    for (idx = 0; idx < 180; ++idx)
     {
-        records[index].type = 0u;
-        records[index].value = 0u;
+        recs[idx].type = 0;
+        recs[idx].val = 0;
     }
-    count = (sint16)menu_asset_counts.labels;
+    count = menu_asset_counts.labels;
     if (count == 8)
     {
-        for (index = 0; index < 8; ++index)
-            records[index + 160].type = 0u;
+        for (idx = 0; idx < 8; ++idx)
+            recs[idx + 160].type = 0;
     }
     else
-        for (index = 0; index < count; ++index)
+        for (idx = 0; idx < count; ++idx)
         {
-            render_dispatch_rec(sprite_render_at(sprite_label_packets, index), (sint16)index, 0);
-            sprite_init_anim_rec((sint16)(index + 160), sprite_label_packets, 1, (sint16)index, (sint16)(index << 7), 0, 1);
+            render_dispatch_rec(spr_render_at(spr_label_packets, idx), idx, 0);
+            spr_init_anim_rec(idx + 160, spr_label_packets, 1, idx, idx << 7, 0, 1);
         }
     count = (sint16)menu_notice.lines;
-    for (index = 0; index < count; ++index)
+    for (idx = 0; idx < count; ++idx)
     {
-        sint32 first = 0;
-        sint32 second = 0;
+        sint32 x = 0;
+        sint32 y = 0;
         mode = (sint16)menu_notice.type;
         if (mode == 1 || mode == 2)
         {
-            first = (index << 7) + 128;
-            second = 50;
+            x = (idx << 7) + 128;
+            y = 50;
         }
         else if (mode == 3)
         {
-            first = 116 * index + 47;
-            second = 63;
+            x = 116 * idx + 47;
+            y = 63;
         }
         else if (mode == 4)
         {
-            first = 116 * index + 50;
-            second = 55;
+            x = 116 * idx + 50;
+            y = 55;
         }
-        render_dispatch_rec(sprite_render_at(sprite_notice_packets, index), (sint16)index, 2);
-        sprite_init_anim_rec((sint16)(index + 170), sprite_notice_packets, 1, (sint16)index, (sint16)first, (sint16)second, 1);
+        render_dispatch_rec(spr_render_at(spr_notice_packets, idx), idx, 2);
+        spr_init_anim_rec(idx + 170, spr_notice_packets, 1, idx, x, y, 1);
     }
-    source_table = sprite_images;
-    count = (sint16)menu_asset_counts.sprites;
-    for (index = 0; index < count; ++index)
+    src_table = spr_images;
+    count = menu_asset_counts.sprs;
+    for (idx = 0; idx < count; ++idx)
     {
-        render_dispatch_rec(sprite_render_at(sprite_image_packets, index), (sint16)index, 1);
-        sprite_init_anim_rec((sint16)index, sprite_image_packets, 1, (sint16)index, (sint16)source_table[index].x, (sint16)source_table[index].y, 1);
+        render_dispatch_rec(spr_render_at(spr_image_packets, idx), idx, 1);
+        spr_init_anim_rec(idx, spr_image_packets, 1, idx, src_table[idx].x, src_table[idx].y, 1);
     }
-    return sprite_animate_labels();
+    return spr_animate_labels();
 }
 
-sint32 scene_release_render_bufs(void)
+sint32 track_release_render_bufs(void)
 {
-    FUNCTION_MARKER(0x8004715Cu, "MAIN.EXE");
+    FUNCTION_MARKER(0x8004715C, "MAIN.EXE");
     return render_release_rec_bufs();
 }
 
-sint32 sprite_config_prim(SPRITE_RENDER *state, sint32 x, sint32 y)
+static sint32 spr_config_prim(SPRITE_RENDER *state, sint32 x, sint32 y)
 {
     uint32 width = state->width;
-    sint32 kind = (sint32)state->kind;
+    sint32 kind = state->kind;
     uint32 height = state->height;
     sint32 bottom;
     sint32 right;
 
-    FUNCTION_MARKER(0x8004717Cu, "MAIN.EXE");
+    FUNCTION_MARKER(0x8004717C, "MAIN.EXE");
     if (kind != 0)
     {
         if (kind == 1)
         {
-            state->simple.x0 = (uint16)x;
-            state->simple.y0 = (uint16)y;
+            setXY0(&state->simple, x, y);
         }
         return 1;
     }
-    bottom = (sint32)((uint32)y + height);
-    right = (sint32)((uint32)x + width);
-    state->quad.x0 = (uint16)x;
-    state->quad.y0 = (uint16)y;
-    state->quad.x1 = (uint16)x;
-    state->quad.y1 = (uint16)bottom;
-    state->quad.x2 = (uint16)right;
-    state->quad.y2 = (uint16)y;
-    state->quad.x3 = (uint16)right;
-    state->quad.y3 = (uint16)bottom;
+    bottom = y + height;
+    right = x + width;
+    setXY0(&state->quad, x, y);
+    state->quad.p[1].xy.x = x;
+    state->quad.p[1].xy.y = bottom;
+    state->quad.p[2].xy.x = right;
+    state->quad.p[2].xy.y = y;
+    state->quad.p[3].xy.x = right;
+    state->quad.p[3].xy.y = bottom;
     return right;
 }
 
-SPRITE_RENDER *sprite_set_orient(UI_RECORD *address, sint8 orientation)
+SPRITE_RENDER *spr_set_orient(UI_RECORD *address, sint8 orientation)
 {
     UI_RECORD *owner = address;
-    sint16 record_index;
-    SPRITE_RENDER *record;
+    sint16 rec_idx;
+    SPRITE_RENDER *rec;
 
-    FUNCTION_MARKER(0x800471D8u, "MAIN.EXE");
-    record_index = (sint16)owner->value;
-    record = sprite_render_at(owner->data, record_index);
-    record->orientation = (uint8)orientation;
-    return record;
+    FUNCTION_MARKER(0x800471D8, "MAIN.EXE");
+    rec_idx = owner->val;
+    rec = spr_render_at(owner->data, rec_idx);
+    rec->orientation = orientation;
+    return rec;
 }
 
-sint32 sprite_config_uv_orientation(SPRITE_RENDER *state)
+static sint32 spr_config_uv_orientation(SPRITE_RENDER *state)
 {
     uint8 orientation;
     uint32 width;
@@ -574,17 +545,17 @@ sint32 sprite_config_uv_orientation(SPRITE_RENDER *state)
     uint8 y[4];
     uint8 swap;
 
-    FUNCTION_MARKER(0x800471FCu, "MAIN.EXE");
-    orientation = (uint8)state->orientation;
+    FUNCTION_MARKER(0x800471FC, "MAIN.EXE");
+    orientation = state->orientation;
     width = state->width;
     x_base = state->u;
     height = state->height;
-    x0 = (uint8)x_base;
-    x1 = (uint8)(width + x_base);
+    x0 = x_base;
+    x1 = width + x_base;
     state->last_orientation = orientation;
     y_base = state->v;
-    y0 = (uint8)y_base;
-    y1 = (uint8)(height + y_base);
+    y0 = y_base;
+    y1 = height + y_base;
     x[0] = x0;
     x[1] = x0;
     x[2] = x1;
@@ -593,14 +564,14 @@ sint32 sprite_config_uv_orientation(SPRITE_RENDER *state)
     y[1] = y1;
     y[2] = y0;
     y[3] = y1;
-    if (orientation == 1u)
+    if (orientation == 1)
     {
         x[0] = x1;
         x[1] = x1;
         x[2] = x0;
         x[3] = x0;
     }
-    if (orientation == 2u)
+    if (orientation == 2)
     {
         swap = x[0];
         x[0] = x[1];
@@ -615,7 +586,7 @@ sint32 sprite_config_uv_orientation(SPRITE_RENDER *state)
         y[2] = y[3];
         y[3] = swap;
     }
-    if (orientation == 3u)
+    if (orientation == 3)
     {
         swap = x[0];
         x[0] = x[3];
@@ -630,27 +601,21 @@ sint32 sprite_config_uv_orientation(SPRITE_RENDER *state)
         y[2] = y[1];
         y[1] = swap;
     }
-    state->quad.u0 = x[0];
-    state->quad.v0 = y[0];
-    state->quad.u1 = x[1];
-    state->quad.v1 = y[1];
-    state->quad.u2 = x[2];
-    state->quad.v2 = y[2];
-    state->quad.u3 = x[3];
-    state->quad.v3 = y[3];
+    setUV4(&state->quad, x[0], y[0], x[1], y[1], x[2], y[2], x[3], y[3]);
+
     return y[3];
 }
 
-sint32 sprite_submit_anim(SPRITE_RENDER *state, sint32 x, sint32 y, sint32 ordering_index)
+static sint32 spr_submit_anim(SPRITE_RENDER *state, sint32 x, sint32 y, sint32 ordering_idx)
 {
-    sint32 selector = (sint16)display_state.buffer;
+    sint32 selector = disp_state.buffer;
     uint32 *table;
 
-    FUNCTION_MARKER(0x800473A4u, "MAIN.EXE");
-    if (selector < 0 || selector >= 2 || ordering_index < 0 || ordering_index >= 40)
+    FUNCTION_MARKER(0x800473A4, "MAIN.EXE");
+    if (selector < 0 || selector >= 2 || ordering_idx < 0 || ordering_idx >= 40)
         abort();
-    table = display_order_slot(selector, ordering_index);
-    sprite_config_prim(state, x, y);
+    table = disp_order_slot(selector, ordering_idx);
+    spr_config_prim(state, x, y);
     if (state->kind == 1)
     {
         AddPrim(table, &state->simple);
@@ -659,676 +624,623 @@ sint32 sprite_submit_anim(SPRITE_RENDER *state, sint32 x, sint32 y, sint32 order
     else if (state->kind == 0)
         AddPrim(table, &state->quad);
     if (state->orientation != state->last_orientation)
-        return sprite_config_uv_orientation(state);
+        return spr_config_uv_orientation(state);
     return state->last_orientation;
 }
 
-sint32 sprite_apply_prim_vram_mask(UI_RECORD *owner)
+sint32 spr_apply_prim_vram_mask(UI_RECORD *owner)
 {
-    sint16 record_index = (sint16)owner->value;
-    SPRITE_RENDER *record = sprite_render_at(owner->data, record_index);
-    PSX_RECT rectangle;
-    uint16 pixels[16];
-    uint32 index;
+    sint16 rec_idx = owner->val;
+    SPRITE_RENDER *rec = spr_render_at(owner->data, rec_idx);
+    PSX_RECT rect;
+    uint16 pal[16];
+    uint32 idx;
     uint8 mode;
     uint8 flags;
     uint32 tpage_x;
     uint32 tpage_y;
 
-    FUNCTION_MARKER(0x80047454u, "MAIN.EXE");
-    mode = (uint8)record->mode;
-    if (mode != 0u)
+    FUNCTION_MARKER(0x80047454, "MAIN.EXE");
+    mode = rec->mode;
+    if (mode != 0)
         return mode;
-    rectangle.x = (sint16)(uint16)record->clut_x;
-    rectangle.y = (sint16)(uint16)record->clut_y;
-    rectangle.w = 16;
-    rectangle.h = 1;
-    StoreImage(&rectangle, (uint32 *)pixels);
+    rect.x = rec->clut_x;
+    rect.y = rec->clut_y;
+    rect.w = 16;
+    rect.h = 1;
+    StoreImage(&rect, (uint32 *)pal);
     DrawSync(0);
-    pixels[0] &= UINT16_C(0x7FFF);
-    for (index = 1u; index < 16u; ++index)
-        pixels[index] |= UINT16_C(0x8000);
-    LoadImagePSX(&rectangle, (uint32 *)pixels);
-    mode = (uint8)record->mode;
-    tpage_x = record->tpage_x;
-    tpage_y = record->tpage_y;
-    record->quad.tpage = (uint16)getTPage(mode, 3, (sint16)tpage_x, (sint16)tpage_y);
-    flags = (uint8)record->quad.code;
-    flags = (uint8)(flags | 2u);
-    record->quad.code = flags;
+    pal[0] &= 0x7FFF;
+    for (idx = 1; idx < 16; ++idx)
+        pal[idx] |= 0x8000;
+    LoadImagePSX(&rect, (uint32 *)pal);
+    mode = rec->mode;
+    tpage_x = rec->tpage_x;
+    tpage_y = rec->tpage_y;
+    rec->quad.p[1].attr = getTPage(mode, 3, tpage_x, tpage_y);
+    flags = rec->quad.rgbc.code;
+    flags = flags | 2u;
+    rec->quad.rgbc.code = flags;
     return flags;
 }
 
-sint32 sprite_enable_semitransparency(UI_RECORD *owner)
+sint32 spr_enable_semitransparency(UI_RECORD *owner)
 {
-    SPRITE_RENDER *record = sprite_render_at(owner->data, (sint16)owner->value);
-    PSX_RECT rectangle;
-    uint16 pixels[16];
-    uint32 index;
+    SPRITE_RENDER *rec = spr_render_at(owner->data, owner->val);
+    PSX_RECT rect;
+    uint16 pal[16];
+    uint32 idx;
 
-    FUNCTION_MARKER(0x80047548u, "MAIN.EXE");
-    if ((uint8)record->mode != 0u)
-        return (uint8)record->mode;
-    rectangle.x = (sint16)(uint16)record->clut_x;
-    rectangle.y = (sint16)(uint16)record->clut_y;
-    rectangle.w = 16;
-    rectangle.h = 1;
-    StoreImage(&rectangle, (uint32 *)pixels);
+    FUNCTION_MARKER(0x80047548, "MAIN.EXE");
+    if (rec->mode != 0)
+        return rec->mode;
+    rect.x = rec->clut_x;
+    rect.y = rec->clut_y;
+    rect.w = 16;
+    rect.h = 1;
+    StoreImage(&rect, (uint32 *)pal);
     DrawSync(0);
-    pixels[0] &= UINT16_C(0x7FFF);
-    for (index = 1u; index < 16u; ++index)
-        pixels[index] |= UINT16_C(0x8000);
-    LoadClut((uint32 *)pixels, (sint32)record->clut_x, (sint32)record->clut_y);
-    record->quad.tpage = (uint16)getTPage((uint8)record->mode, 0, (sint16)record->tpage_x, (sint16)record->tpage_y);
-    record->quad.code |= 2u;
-    return (uint8)record->quad.code;
+    pal[0] &= 0x7FFF;
+    for (idx = 1; idx < 16; ++idx)
+        pal[idx] |= 0x8000;
+    LoadClut((uint32 *)pal, rec->clut_x, rec->clut_y);
+    rec->quad.p[1].attr = getTPage(rec->mode, 0, rec->tpage_x, rec->tpage_y);
+    rec->quad.rgbc.code |= 2;
+    return rec->quad.rgbc.code;
 }
 
-sint32 sprite_disable_semitransparency(UI_RECORD *owner)
+sint32 spr_disable_semitransparency(UI_RECORD *owner)
 {
-    SPRITE_RENDER *record = sprite_render_at(owner->data, (sint16)owner->value);
-    PSX_RECT rectangle;
-    uint16 pixels[16];
-    uint32 index;
+    SPRITE_RENDER *rec = spr_render_at(owner->data, owner->val);
+    PSX_RECT rect;
+    uint16 pal[16];
+    uint32 idx;
 
-    FUNCTION_MARKER(0x8004763Cu, "MAIN.EXE");
-    if ((uint8)record->mode != 0u)
-        return (uint8)record->mode;
-    rectangle.x = (sint16)(uint16)record->clut_x;
-    rectangle.y = (sint16)(uint16)record->clut_y;
-    rectangle.w = 16;
-    rectangle.h = 1;
-    StoreImage(&rectangle, (uint32 *)pixels);
+    FUNCTION_MARKER(0x8004763C, "MAIN.EXE");
+    if (rec->mode != 0)
+        return rec->mode;
+    rect.x = rec->clut_x;
+    rect.y = rec->clut_y;
+    rect.w = 16;
+    rect.h = 1;
+    StoreImage(&rect, (uint32 *)pal);
     DrawSync(0);
-    for (index = 1u; index < 16u; ++index)
-        pixels[index] &= UINT16_C(0x7FFF);
-    LoadClut((uint32 *)pixels, (sint32)record->clut_x, (sint32)record->clut_y);
+    for (idx = 1; idx < 16; ++idx)
+        pal[idx] &= 0x7FFF;
+    LoadClut((uint32 *)pal, rec->clut_x, rec->clut_y);
     DrawSync(0);
-    record->quad.tpage = (uint16)getTPage((uint8)record->mode, 0, (sint16)record->tpage_x, (sint16)record->tpage_y);
-    record->quad.code &= (uint8)~2u;
-    return (uint8)record->quad.code;
+    rec->quad.p[1].attr = getTPage(rec->mode, 0, rec->tpage_x, rec->tpage_y);
+    rec->quad.rgbc.code &= ~2u;
+    return rec->quad.rgbc.code;
 }
 
-sint32 sprite_clear_anim_recs(void)
+sint32 spr_clear_anim_recs(void)
 {
     UI_RECORD *base;
-    uint32 index;
+    uint32 idx;
 
-    FUNCTION_MARKER(0x80047724u, "MAIN.EXE");
-    base = sprite_records;
-    for (index = 0u; index < 180u; ++index)
+    FUNCTION_MARKER(0x80047724, "MAIN.EXE");
+    base = spr_recs;
+    for (idx = 0; idx < 180; ++idx)
     {
-        UI_RECORD *record = (base + index);
-        record->command = 0u;
-        record->inset_y = 0u;
-        record->delta_y = 0u;
-        record->inset_x = 0u;
-        record->delta_x = 0u;
+        UI_RECORD *rec = base + idx;
+        rec->command = 0;
+        rec->inset_y = 0;
+        rec->delta_y = 0;
+        rec->inset_x = 0;
+        rec->delta_x = 0;
     }
     return 0;
 }
 
-sint32 sprite_apply_inset(UI_RECORD *address)
+sint32 spr_apply_inset(UI_RECORD *address)
 {
     UI_RECORD *owner = address;
-    SPRITE_RENDER *record = sprite_render_at(owner->data, (uint16)owner->value);
-    sint32 delta_x = (sint16)owner->inset_x;
-    sint32 delta_y = (sint16)owner->inset_y;
+    SPRITE_RENDER *rec = spr_render_at(owner->data, owner->val);
+    sint16 delta_x = owner->inset_x;
+    sint16 delta_y = owner->inset_y;
     sint32 result = delta_y;
 
-    FUNCTION_MARKER(0x800477ACu, "MAIN.EXE");
+    FUNCTION_MARKER(0x800477AC, "MAIN.EXE");
     if (delta_x != 0)
     {
-        owner->x = (uint16)((sint16)owner->x + delta_x);
-        record->width -= (uint32)(2 * delta_x);
+        owner->x = owner->x + delta_x;
+        rec->width -= 2 * delta_x;
     }
     if (delta_y != 0)
     {
-        owner->y = (uint16)((sint16)owner->y + delta_y);
-        record->height -= (uint32)(2 * delta_y);
-        result = (sint32)record->height;
+        owner->y = owner->y + delta_y;
+        rec->height -= 2 * delta_y;
+        result = rec->height;
     }
-    owner->command = 0u;
-    owner->delta_x = 0u;
-    owner->delta_y = 0u;
-    owner->inset_x = 0u;
-    owner->inset_y = 0u;
+    owner->command = 0;
+    owner->delta_x = 0;
+    owner->delta_y = 0;
+    owner->inset_x = 0;
+    owner->inset_y = 0;
     return result;
 }
 
-sint32 menu_move_sprite_rec(UI_RECORD *address, sint8 command, sint16 first, sint16 second, sint32 step_x, sint32 step_y, sint32 unused7, sint32 unused8, sint16 unused9, sint16 unused10)
+sint32 menu_move_spr_rec(UI_RECORD *address, sint8 command, sint16 inset_x, sint16 inset_y, sint32 step_x, sint32 step_y)
 {
     UI_RECORD *owner = address;
-    sint32 index;
+    sint32 idx;
     sint32 delta_x;
     sint32 delta_y;
-    SPRITE_RENDER *record;
+    SPRITE_RENDER *rec;
     sint32 result;
 
-    FUNCTION_MARKER(0x800478DCu, "MAIN.EXE");
-    index = (sint16)owner->value;
-    delta_x = (sint16)owner->inset_x;
-    record = sprite_render_at(owner->data, index);
+    FUNCTION_MARKER(0x800478DC, "MAIN.EXE");
+    idx = owner->val;
+    delta_x = owner->inset_x;
+    rec = spr_render_at(owner->data, idx);
     if (delta_x != 0)
     {
-        uint16 position = (uint16)(owner->x + (uint32)delta_x);
-        uint32 sprite_position;
+        uint16 pos = owner->x + delta_x;
+        uint32 spr_pos;
 
-        delta_x = (sint16)owner->inset_x;
-        owner->x = position;
-        sprite_position = record->width - (uint32)delta_x;
-        record->width = sprite_position;
-        delta_x = (sint16)owner->inset_x;
-        sprite_position -= (uint32)delta_x;
-        record->width = sprite_position;
+        delta_x = owner->inset_x;
+        owner->x = pos;
+        spr_pos = rec->width - delta_x;
+        rec->width = spr_pos;
+        delta_x = owner->inset_x;
+        spr_pos -= delta_x;
+        rec->width = spr_pos;
     }
-    delta_y = (sint16)owner->inset_y;
+    delta_y = owner->inset_y;
     result = delta_y;
     if (delta_y != 0)
     {
-        uint16 position = (uint16)(owner->y + (uint32)delta_y);
-        uint32 sprite_position;
+        uint16 pos = owner->y + delta_y;
+        uint32 spr_pos;
 
-        delta_y = (sint16)owner->inset_y;
-        owner->y = position;
-        sprite_position = record->height - (uint32)delta_y;
-        record->height = sprite_position;
-        delta_y = (sint16)owner->inset_y;
-        sprite_position -= (uint32)delta_y;
-        record->height = sprite_position;
-        result = (sint32)sprite_position;
+        delta_y = owner->inset_y;
+        owner->y = pos;
+        spr_pos = rec->height - delta_y;
+        rec->height = spr_pos;
+        delta_y = owner->inset_y;
+        spr_pos -= delta_y;
+        rec->height = spr_pos;
+        result = spr_pos;
     }
-    owner->command = (uint8)command;
-    owner->returning = 0u;
-    owner->step_x = (uint16)step_x;
-    owner->step_y = (uint16)step_y;
-    owner->inset_y = 0u;
-    owner->delta_y = 0u;
-    owner->inset_x = 0u;
-    owner->delta_x = 0u;
-    owner->target_first = (uint16)first;
-    owner->target_second = (uint16)second;
+    owner->command = command;
+    owner->returning = 0;
+    owner->step_x = step_x;
+    owner->step_y = step_y;
+    owner->inset_y = 0;
+    owner->delta_y = 0;
+    owner->inset_x = 0;
+    owner->delta_x = 0;
+    owner->target0 = inset_x;
+    owner->target1 = inset_y;
     return result;
 }
 
-sint32 sprite_init_trans(UI_RECORD *address, sint32 target_x, sint16 target_y, sint16 target_first, sint16 target_second, sint16 duration)
+sint32 spr_init_trans(UI_RECORD *address, sint32 target_x, sint16 target_y, sint16 target0, sint16 target1, sint16 duration)
 {
     UI_RECORD *state = address;
     uint16 x = state->x;
     uint16 x_offset = state->inset_x;
     uint16 y;
     uint16 y_offset;
-    uint32 current_x;
-    uint32 current_y;
+    uint32 cur_x;
+    uint32 cur_y;
     sint16 delta_x;
     sint16 delta_y;
     sint16 divisor = duration;
     sint32 velocity_x = 0;
     sint32 velocity_y = 0;
-    uint16 first;
-    uint16 second;
-    sint32 first_velocity = 0;
-    sint32 second_velocity = 0;
+    sint32 velocity0 = 0;
+    sint32 velocity1 = 0;
     sint32 result;
 
-    FUNCTION_MARKER(0x800479BCu, "MAIN.EXE");
-    state->transition_active = 1u;
+    FUNCTION_MARKER(0x800479BC, "MAIN.EXE");
+    state->transition_active = 1;
     y = state->y;
     y_offset = state->inset_y;
-    state->transition_target_x = (uint16)target_x;
-    state->transition_target_y = (uint16)target_y;
-    state->transition_x = 0u;
-    state->transition_y = 0u;
-    current_x = (uint32)x + (uint32)x_offset;
-    current_y = (uint32)y + (uint32)y_offset;
-    delta_x = (sint16)(uint16)((uint32)target_x - current_x);
-    delta_y = (sint16)(uint16)((uint32)(sint32)target_y - current_y);
-    state->transition_base_y = (uint16)current_y;
-    state->transition_ticks = (uint8)duration;
-    state->transition_base_x = (uint16)current_x;
+    state->transition_target_x = target_x;
+    state->transition_target_y = target_y;
+    state->transition_x = 0;
+    state->transition_y = 0;
+    cur_x = x + x_offset;
+    cur_y = y + y_offset;
+    delta_x = target_x - cur_x;
+    delta_y = target_y - cur_y;
+    state->transition_base_y = cur_y;
+    state->transition_ticks = duration;
+    state->transition_base_x = cur_x;
     if (delta_x != 0)
-        velocity_x = math_div_s32((sint32)((uint32)(uint16)delta_x << 16), divisor);
+        velocity_x = (sint32)((uint32)(uint16)delta_x << 16) / divisor;
     if (delta_y != 0)
-        velocity_y = math_div_s32((sint32)((uint32)(uint16)delta_y << 16), divisor);
-    first = state->delta_x;
-    second = state->delta_y;
-    state->transition_step_y = (uint32)velocity_y;
-    state->transition_step_x = (uint32)velocity_x;
-    state->transition_base_first = first;
-    first = state->delta_x;
-    state->transition_target_first = (uint16)target_first;
-    state->transition_target_second = (uint16)target_second;
-    state->transition_first = 0u;
-    state->transition_second = 0u;
-    state->transition_base_second = second;
-    second = state->delta_y;
-    delta_x = (sint16)(uint16)((uint32)(sint32)target_first - (uint32)first);
-    delta_y = (sint16)(uint16)((uint32)(sint32)target_second - (uint32)second);
+        velocity_y = (sint32)((uint32)(uint16)delta_y << 16) / divisor;
+    state->transition_step_y = velocity_y;
+    state->transition_step_x = velocity_x;
+    state->transition_base0 = state->delta_x;
+    state->transition_target0 = target0;
+    state->transition_target1 = target1;
+    state->transition0 = 0;
+    state->transition1 = 0;
+    state->transition_base1 = state->delta_y;
+    delta_x = target0 - state->delta_x;
+    delta_y = target1 - state->delta_y;
     if (delta_x != 0)
-        first_velocity = math_div_s32((sint32)((uint32)(uint16)delta_x << 16), divisor);
+        velocity0 = (sint32)((uint32)(uint16)delta_x << 16) / divisor;
     result = delta_y;
-    state->transition_step_first = (uint32)first_velocity;
+    state->transition_step0 = velocity0;
     if (delta_y != 0)
     {
-        result = (sint32)((uint32)(uint16)delta_y << 16);
-        second_velocity = math_div_s32(result, divisor);
+        result = (uint32)(uint16)delta_y << 16;
+        velocity1 = result / divisor;
     }
-    state->transition_step_second = (uint32)second_velocity;
+    state->transition_step1 = velocity1;
     return result;
 }
 
-sint32 sprite_copy_anim_rec_bytes(const UI_RECORD *source, UI_RECORD *destination)
+sint32 spr_copy_anim_rec_bytes(const UI_RECORD *src, UI_RECORD *dst)
 {
-    FUNCTION_MARKER(0x80047B7Cu, "MAIN.EXE");
-    *destination = *source;
-    return source->unknown_52[1];
+    FUNCTION_MARKER(0x80047B7C, "MAIN.EXE");
+    *dst = *src;
+    return src->unknown_52[1];
 }
 
-sint32 sprite_update_anims(void)
+sint32 spr_update_anims(void)
 {
-    UI_RECORD *records = sprite_records;
-    uint32 index;
+    UI_RECORD *recs = spr_recs;
+    uint32 idx;
 
-    FUNCTION_MARKER(0x80047BA4u, "MAIN.EXE");
-    for (index = 0u; index < 180u; ++index)
+    FUNCTION_MARKER(0x80047BA4, "MAIN.EXE");
+    for (idx = 0; idx < 180; ++idx)
     {
-        UI_RECORD *record = (records + index);
-        SPRITE_RENDER *sprite;
+        UI_RECORD *rec = recs + idx;
+        SPRITE_RENDER *spr;
         sint32 delta_x;
         sint32 delta_y;
 
-        if (record->active == 0u)
+        if (rec->active == 0)
             continue;
-        {
-            sint16 sprite_index = (sint16)record->value;
-            SPRITE_RENDER *sprite_base = record->data;
+        sint16 spr_idx = rec->val;
+        SPRITE_RENDER *spr_base = rec->data;
 
-            sprite = sprite_render_at(sprite_base, sprite_index);
-        }
-        delta_x = (sint16)record->inset_x;
-        delta_y = (sint16)record->inset_y;
+        spr = spr_render_at(spr_base, spr_idx);
+        delta_x = rec->inset_x;
+        delta_y = rec->inset_y;
         if (delta_x != 0)
         {
-            uint16 position = record->x;
-            uint32 sprite_position;
+            uint16 pos = rec->x;
+            uint32 spr_pos;
 
-            position = (uint16)(position + delta_x);
-            delta_x = (sint16)record->inset_x;
-            record->x = position;
-            sprite_position = sprite->width - (uint32)delta_x;
-            sprite->width = sprite_position;
-            delta_x = (sint16)record->inset_x;
-            sprite_position -= (uint32)delta_x;
-            sprite->width = sprite_position;
+            pos = pos + delta_x;
+            delta_x = rec->inset_x;
+            rec->x = pos;
+            spr_pos = spr->width - delta_x;
+            spr->width = spr_pos;
+            delta_x = rec->inset_x;
+            spr_pos -= delta_x;
+            spr->width = spr_pos;
         }
         if (delta_y != 0)
         {
-            uint16 position = record->y;
-            uint32 sprite_position;
+            uint16 pos = rec->y;
+            uint32 spr_pos;
 
-            position = (uint16)(position + delta_y);
-            delta_y = (sint16)record->inset_y;
-            record->y = position;
-            sprite_position = sprite->height - (uint32)delta_y;
-            sprite->height = sprite_position;
-            delta_y = (sint16)record->inset_y;
-            sprite_position -= (uint32)delta_y;
-            sprite->height = sprite_position;
+            pos = pos + delta_y;
+            delta_y = rec->inset_y;
+            rec->y = pos;
+            spr_pos = spr->height - delta_y;
+            spr->height = spr_pos;
+            delta_y = rec->inset_y;
+            spr_pos -= delta_y;
+            spr->height = spr_pos;
         }
-        if (record->command == 1u)
+        if (rec->command == 1)
         {
-            if (record->returning != 0u)
+            if (rec->returning != 0)
             {
-                sint16 value = (sint16)record->delta_x;
+                sint16 val = rec->delta_x;
 
-                if (value != 0)
-                    record->delta_x = (uint16)((uint32)value - record->step_x);
-                value = (sint16)record->delta_y;
-                if (value != 0)
-                    record->delta_y = (uint16)((uint32)value - record->step_y);
-                value = (sint16)record->delta_x;
-                if (value == 0 && (sint16)record->delta_y == 0)
+                if (val != 0)
+                    rec->delta_x = val - rec->step_x;
+                val = rec->delta_y;
+                if (val != 0)
+                    rec->delta_y = val - rec->step_y;
+                val = rec->delta_x;
+                if (val == 0 && rec->delta_y == 0)
                 {
-                    record->returning = 0u;
-                    record->command = 0u;
+                    rec->returning = 0;
+                    rec->command = 0;
                 }
             }
             else
             {
-                sint16 step = (sint16)record->step_x;
+                sint16 step = rec->step_x;
 
                 if (step >= 0)
                 {
-                    sint16 value = (sint16)record->delta_x;
-                    sint16 target = (sint16)record->target_first;
+                    sint16 val = rec->delta_x;
+                    sint16 target = rec->target0;
 
-                    if (value != target)
-                        record->delta_x = (uint16)(value + step);
+                    if (val != target)
+                        rec->delta_x = val + step;
                 }
-                step = (sint16)record->step_y;
+                step = rec->step_y;
                 if (step >= 0)
                 {
-                    sint16 value = (sint16)record->delta_y;
-                    sint16 target = (sint16)record->target_second;
+                    sint16 val = rec->delta_y;
+                    sint16 target = rec->target1;
 
-                    if (value != target)
-                        record->delta_y = (uint16)(value + step);
+                    if (val != target)
+                        rec->delta_y = val + step;
                 }
-                if ((sint16)record->delta_x == (sint16)record->target_first && (sint16)record->delta_y == (sint16)record->target_second)
-                    record->returning = 1u;
+                if (rec->delta_x == rec->target0 && rec->delta_y == rec->target1)
+                    rec->returning = 1;
             }
         }
-        if (record->transition_active == 1u)
+        if (rec->transition_active == 1)
         {
-            uint8 remaining = record->transition_ticks;
-            uint32 first_position = record->transition_x;
-            uint32 first_step = record->transition_step_x;
-            uint32 second_position = record->transition_y;
-            uint32 second_step = record->transition_step_y;
-            uint32 third_position;
-            uint32 third_step;
-            uint32 fourth_position;
-            uint32 fourth_step;
-            uint16 base_y;
-            sint16 base_x;
-            uint16 base_fourth;
-            uint16 base_first;
-            sint16 base_third;
-            uint16 base_third_low;
-
-            first_position += first_step;
-            second_position += second_step;
-            record->transition_y = second_position;
-            record->transition_x = first_position;
-            base_y = record->transition_base_y;
-            third_step = record->transition_step_first;
-            fourth_step = record->transition_step_second;
-            third_position = record->transition_first;
-            --remaining;
-            record->transition_ticks = remaining;
-            record->y = (uint16)((sint16)(second_position >> 16) + base_y);
-            fourth_position = record->transition_second;
-            third_position += third_step;
-            base_x = (sint16)(uint16)(record->transition_x >> 16);
-            fourth_position += fourth_step;
-            record->transition_second = fourth_position;
-            record->transition_first = third_position;
-            base_fourth = record->transition_base_second;
-            base_first = record->transition_base_x;
-            record->delta_y = (uint16)((sint16)(fourth_position >> 16) + base_fourth);
-            base_third = (sint16)(uint16)(record->transition_first >> 16);
-            base_third_low = record->transition_base_first;
-            record->x = (uint16)(base_x + base_first);
-            remaining = record->transition_ticks;
-            record->delta_x = (uint16)(base_third + base_third_low);
-            if (remaining == 0u)
+            rec->transition_x += rec->transition_step_x;
+            rec->transition_y += rec->transition_step_y;
+            --rec->transition_ticks;
+            rec->y = (rec->transition_y >> 16) + rec->transition_base_y;
+            rec->transition0 += rec->transition_step0;
+            rec->transition1 += rec->transition_step1;
+            rec->delta_y = (rec->transition1 >> 16) + rec->transition_base1;
+            rec->x = (rec->transition_x >> 16) + rec->transition_base_x;
+            rec->delta_x = (rec->transition0 >> 16) + rec->transition_base0;
+            if (rec->transition_ticks == 0)
             {
-                uint16 final_x = record->transition_target_x;
-                uint16 final_y = record->transition_target_y;
-                uint16 final_first = record->transition_target_first;
-                uint16 final_second = record->transition_target_second;
-
-                record->transition_active = 0u;
-                record->transition_first = 0u;
-                record->transition_second = 0u;
-                record->transition_step_first = 0u;
-                record->transition_step_second = 0u;
-                record->x = final_x;
-                record->y = final_y;
-                record->delta_x = final_first;
-                record->delta_y = final_second;
+                rec->transition_active = 0;
+                rec->transition0 = 0;
+                rec->transition1 = 0;
+                rec->transition_step0 = 0;
+                rec->transition_step1 = 0;
+                rec->x = rec->transition_target_x;
+                rec->y = rec->transition_target_y;
+                rec->delta_x = rec->transition_target0;
+                rec->delta_y = rec->transition_target1;
             }
         }
-        if (record->command != 0u)
+        if (rec->command != 0)
         {
-            delta_x = (sint16)record->delta_x;
-            delta_y = (sint16)record->delta_y;
+            delta_x = rec->delta_x;
+            delta_y = rec->delta_y;
             if (delta_x != 0)
             {
-                uint16 position = record->x;
-                uint32 sprite_position;
+                uint16 pos = rec->x;
+                uint32 spr_pos;
 
-                position = (uint16)(position - delta_x);
-                delta_x = (sint16)record->delta_x;
-                record->x = position;
-                sprite_position = sprite->width + (uint32)delta_x;
-                sprite->width = sprite_position;
-                delta_x = (sint16)record->delta_x;
-                sprite_position += (uint32)delta_x;
-                sprite->width = sprite_position;
+                pos = pos - delta_x;
+                delta_x = rec->delta_x;
+                rec->x = pos;
+                spr_pos = spr->width + delta_x;
+                spr->width = spr_pos;
+                delta_x = rec->delta_x;
+                spr_pos += delta_x;
+                spr->width = spr_pos;
             }
             if (delta_y != 0)
             {
-                uint16 position = record->y;
-                uint32 sprite_position;
+                uint16 pos = rec->y;
+                uint32 spr_pos;
 
-                position = (uint16)(position - delta_y);
-                delta_y = (sint16)record->delta_y;
-                record->y = position;
-                sprite_position = sprite->height + (uint32)delta_y;
-                sprite->height = sprite_position;
-                delta_y = (sint16)record->delta_y;
-                sprite_position += (uint32)delta_y;
-                sprite->height = sprite_position;
+                pos = pos - delta_y;
+                delta_y = rec->delta_y;
+                rec->y = pos;
+                spr_pos = spr->height + delta_y;
+                spr->height = spr_pos;
+                delta_y = rec->delta_y;
+                spr_pos += delta_y;
+                spr->height = spr_pos;
             }
         }
-        {
-            uint16 next_delta_x = record->delta_x;
-            uint16 next_delta_y = record->delta_y;
+        uint16 next_delta_x = rec->delta_x;
+        uint16 next_delta_y = rec->delta_y;
 
-            record->inset_x = next_delta_x;
-            record->inset_y = next_delta_y;
-        }
+        rec->inset_x = next_delta_x;
+        rec->inset_y = next_delta_y;
     }
     return 0;
 }
 
-sint32 sprite_submit_layered_recs(sint32 ordering_index)
+sint32 spr_submit_layered_recs(sint32 ordering_idx)
 {
-    sint32 layers = (sint16)menu_state.screen == 10 ? 13 : 1;
+    sint32 layers = menu_state.scr == 10 ? 13 : 1;
     sint32 layer;
-    sint32 index;
+    sint32 idx;
     sint32 drew = 0;
 
-    FUNCTION_MARKER(0x80047FDCu, "MAIN.EXE");
+    FUNCTION_MARKER(0x80047FDC, "MAIN.EXE");
     for (layer = 0; layer < layers; ++layer)
     {
-        for (index = 0; index < 160; ++index)
+        for (idx = 0; idx < 160; ++idx)
         {
-            UI_RECORD *record = (sprite_records + (sint16)index);
-            if (record->layer == (uint8)layer && record->type != 0u && record->flags != 0u)
+            UI_RECORD *rec = spr_recs + (sint16)idx;
+            if (rec->layer == (uint8)layer && rec->type != 0 && rec->flags != 0)
             {
-                sint32 source_index = (sint16)record->value;
-                sint32 x = (sint16)record->x;
-                sint32 y = (sint16)record->y;
-                SPRITE_RENDER *sprite = record->data;
+                sint16 src_idx = rec->val;
+                sint16 x = rec->x;
+                sint16 y = rec->y;
+                SPRITE_RENDER *spr = rec->data;
 
-                sprite_submit_anim(sprite_render_at(sprite, source_index), x, y, (sint16)ordering_index);
+                spr_submit_anim(spr_render_at(spr, src_idx), x, y, (sint16)ordering_idx);
                 drew = 1;
             }
         }
     }
-    return (sint16)((uint32)ordering_index + (uint32)drew);
+    return (sint16)(ordering_idx + drew);
 }
 
-sint32 sprite_submit_groups(sint32 ordering_index)
+sint32 spr_submit_grps(sint32 ordering_idx)
 {
-    sint32 count = (sint16)menu_asset_counts.labels;
-    sint32 source_bound = (sint16)menu_asset_counts.labels;
-    uint8 index = 0u;
-    uint8 drew = 0u;
+    sint32 count = menu_asset_counts.labels;
+    sint32 src_bound = menu_asset_counts.labels;
+    uint8 idx = 0;
+    uint8 drew = 0;
 
-    FUNCTION_MARKER(0x80048204u, "MAIN.EXE");
+    FUNCTION_MARKER(0x80048204, "MAIN.EXE");
     if (count > 0)
     {
         do
         {
-            UI_RECORD *record = (sprite_records + index + 160);
-            uint8 active = record->active;
+            UI_RECORD *rec = spr_recs + idx + 160;
+            uint8 active = rec->active;
 
-            index = (uint8)(index + 1u);
-            if (active != 0u)
+            idx++;
+            if (active != 0)
             {
-                sint32 source_index = (sint16)record->value;
+                sint16 src_idx = rec->val;
                 sint32 x;
-                SPRITE_RENDER *sprite;
+                SPRITE_RENDER *spr;
                 sint32 y;
 
-                if (source_index >= source_bound)
+                if (src_idx >= src_bound)
                     return 0;
-                x = (sint16)record->x;
-                sprite = record->data;
-                y = (sint16)record->y;
-                sprite_submit_anim(sprite_render_at(sprite, source_index), x, y, (sint16)ordering_index);
-                drew = 1u;
+                x = rec->x;
+                spr = rec->data;
+                y = rec->y;
+                spr_submit_anim(spr_render_at(spr, src_idx), x, y, (sint16)ordering_idx);
+                drew = 1;
             }
-            count = (sint16)menu_asset_counts.labels;
-            source_bound = (sint16)menu_asset_counts.labels;
-        } while ((sint32)index < count);
+            count = menu_asset_counts.labels;
+            src_bound = menu_asset_counts.labels;
+        } while (idx < count);
     }
-    if (drew != 0u)
+    if (drew != 0)
     {
-        drew = 0u;
-        ordering_index = (sint32)((uint32)ordering_index + 1u);
+        drew = 0;
+        ordering_idx++;
     }
-    if ((sint16)menu_notice.value == 1)
+    if (menu_notice.val == 1)
     {
-        sint32 next_ordering = (sint32)((uint32)ordering_index + 1u);
-        sint32 selector = (sint16)display_state.buffer;
-        uint32 *ordering = display_order_slot(selector, (sint16)next_ordering);
-        TILE *tile = &sprite_notice_tiles[selector];
+        sint32 next_ordering = ordering_idx + 1u;
+        sint32 selector = disp_state.buffer;
+        uint32 *ordering = disp_order_slot(selector, (sint16)next_ordering);
+        TILE *tile = &spr_notice_tiles[selector];
 
-        ordering_index = (sint32)((uint32)next_ordering + 1u);
-        tile->x0 = 132;
-        tile->y0 = 54;
-        tile->w = 248;
-        tile->h = 120;
-        setlen(tile, 3);
-        tile->r0 = tile->g0 = tile->b0 = 0;
-        tile->code = 0x60;
+        ordering_idx = next_ordering + 1u;
+        tile->p[0].x = 132;
+        tile->p[0].y = 54;
+        setWH(tile, 248, 120);
+        setTile(tile);
+        setRGB0(tile, 0, 0, 0);
         AddPrim(ordering, tile);
     }
     count = (sint16)menu_notice.lines;
     if (count > 0)
     {
-        index = 0u;
+        idx = 0;
         do
         {
-            uint8 current = index;
-            sint16 record_index = (sint16)((uint32)current + 170u);
-            sint16 first = (sint16)(((uint32)current << 7) + 128u);
-            sint16 second = 50;
-            sint32 mode = (sint16)((uint16)(menu_notice.type - 1u));
+            uint8 cur = idx;
+            sint16 rec_idx = cur + 170u;
+            sint16 x = (cur << 7) + 128;
+            sint16 y = 50;
+            sint16 mode = menu_notice.type - 1u;
             SPRITE_RENDER *data;
-            UI_RECORD *record;
-            sint32 source_index;
-            SPRITE_RENDER *sprite;
+            UI_RECORD *rec;
+            sint32 src_idx;
+            SPRITE_RENDER *spr;
 
             if (mode == 2)
             {
-                first = (sint16)(116 * (sint32)current + 47);
-                second = 63;
+                x = 116 * cur + 47;
+                y = 63;
             }
             else if (mode == 3)
             {
-                first = (sint16)(116 * (sint32)current + 50);
-                second = 55;
+                x = 116 * cur + 50;
+                y = 55;
             }
             else if (mode == 4)
             {
-                first = 144;
-                second = 65;
+                x = 144;
+                y = 65;
             }
-            drew = 1u;
-            index = (uint8)(index + 1u);
-            data = sprite_notice_packets;
-            render_dispatch_rec(sprite_render_at(data, current), (sint16)current, 2);
-            data = sprite_notice_packets;
-            sprite_init_anim_rec(record_index, data, 1, (sint16)current, first, second, 1);
-            record = (sprite_records + record_index);
-            source_index = (sint16)record->value;
-            sprite = record->data;
-            sprite_submit_anim(sprite_render_at(sprite, source_index), first, second, (sint16)ordering_index);
+            drew = 1;
+            idx++;
+            data = spr_notice_packets;
+            render_dispatch_rec(spr_render_at(data, cur), cur, 2);
+            data = spr_notice_packets;
+            spr_init_anim_rec(rec_idx, data, 1, cur, x, y, 1);
+            rec = spr_recs + rec_idx;
+            src_idx = rec->val;
+            spr = rec->data;
+            spr_submit_anim(spr_render_at(spr, src_idx), x, y, (sint16)ordering_idx);
             count = (sint16)menu_notice.lines;
-        } while ((sint32)index < count);
+        } while (idx < count);
     }
-    if (drew != 0u)
-        ordering_index = (sint32)((uint32)ordering_index + 1u);
-    return (sint16)ordering_index;
+    if (drew != 0)
+        ordering_idx++;
+    return (sint16)ordering_idx;
 }
 
-sint32 sprite_submit_pools(sint32 ordering_index)
+sint32 spr_submit_pools(sint32 ordering_idx)
 {
-    sint32 group;
+    sint32 grp;
 
-    FUNCTION_MARKER(0x80051C18u, "MAIN.EXE");
-    for (group = TEXT_FONT_COUNT - 1; group >= 0; --group)
+    FUNCTION_MARKER(0x80051C18, "MAIN.EXE");
+    for (grp = TEXT_FONT_COUNT - 1; grp >= 0; --grp)
     {
-        sint32 buffer = sprite_text_buffer();
-        size_t count = text_fonts[group].pending_count[buffer];
+        sint32 buffer = spr_text_buffer();
+        uint32 count = text_fonts[grp].pending_count[buffer];
         if (count > TEXT_GLYPH_CAPACITY)
             abort();
-        if (count != 0u)
+        if (count != 0)
         {
-            size_t glyph;
-            uint32 *ordering = display_order_slot(buffer, (sint16)ordering_index);
+            uint32 glyph;
+            uint32 *ordering = disp_order_slot(buffer, (sint16)ordering_idx);
             for (glyph = 0; glyph < count; ++glyph)
             {
-                const TEXT_GLYPH *source = &text_fonts[group].pending[buffer][glyph];
-                SPRT *packet = &sprite_text_packets[group][buffer][glyph];
-                packet->x0 = source->x;
-                packet->y0 = source->y;
-                packet->u0 = source->u;
-                packet->v0 = source->v;
-                packet->w = source->width;
-                packet->h = source->height;
+                const TEXT_GLYPH *src = &text_fonts[grp].pending[buffer][glyph];
+                SPRT *packet = &spr_text_packets[grp][buffer][glyph];
+                setXY0(packet, src->x, src->y);
+                setUV0(packet, src->u, src->v);
+                setWH(packet, src->width, src->height);
             }
-            AddPrim(ordering, &sprite_text_modes[group][buffer]);
-            ordering_index = (sint32)((uint32)ordering_index + 1u);
-            ordering = display_order_slot(buffer, (sint16)ordering_index);
-            for (glyph = count; glyph != 0u; --glyph)
-                AddPrim(ordering, &sprite_text_packets[group][buffer][glyph - 1u]);
-            ordering_index = (sint32)((uint32)ordering_index + 1u);
-            text_fonts[group].pending_count[buffer] = 0;
+            AddPrim(ordering, &spr_text_modes[grp][buffer]);
+            ordering_idx++;
+            ordering = disp_order_slot(buffer, (sint16)ordering_idx);
+            for (glyph = count; glyph != 0; --glyph)
+                AddPrim(ordering, &spr_text_packets[grp][buffer][glyph - 1]);
+            ordering_idx++;
+            text_fonts[grp].pending_count[buffer] = 0;
         }
     }
-    return (sint16)ordering_index;
+    return (sint16)ordering_idx;
 }
 
-sint32 sprite_text_init_packets(void)
+sint32 spr_text_init_packets(void)
 {
     static const sint16 widths[TEXT_FONT_COUNT] = {960, 910, 922};
     static const sint16 heights[TEXT_FONT_COUNT] = {256, 256, 352};
     static const sint16 clut_y[TEXT_FONT_COUNT] = {450, 445, 444};
-    sint32 group, buffer, index;
+    sint32 grp, buffer, idx;
 
-    FUNCTION_MARKER(0x80051040u, "MAIN.EXE");
-    sprite_register_packets();
-    for (group = 0; group < TEXT_FONT_COUNT; ++group)
+    FUNCTION_MARKER(0x80051040, "MAIN.EXE");
+    spr_register_packets();
+    for (grp = 0; grp < TEXT_FONT_COUNT; ++grp)
     {
-        uint16 tpage = (uint16)getTPage(0, 0, widths[group], heights[group]);
-        uint16 clut = (uint16)getClut(960, clut_y[group]);
+        uint16 tpage = getTPage(0, 0, widths[grp], heights[grp]);
+        uint16 clut = getClut(960, clut_y[grp]);
         for (buffer = 0; buffer < 2; ++buffer)
         {
-            DR_TPAGE *mode = &sprite_text_modes[group][buffer];
+            DR_TPAGE *mode = &spr_text_modes[grp][buffer];
             setlen(mode, 1);
-            mode->code[0] = 0xE1000400u | tpage;
-            for (index = 0; index < TEXT_GLYPH_CAPACITY; ++index)
+            mode->code[0] = psx_draw_mode(1, 0, tpage);
+            for (idx = 0; idx < TEXT_GLYPH_CAPACITY; ++idx)
             {
-                SPRT *packet = &sprite_text_packets[group][buffer][index];
-                packet->r0 = packet->g0 = packet->b0 = 128;
-                packet->clut = clut;
-                setlen(packet, 4);
-                packet->code = 0x64;
+                SPRT *packet = &spr_text_packets[grp][buffer][idx];
+                setRGB0(packet, 128, 128, 128);
+                packet->p[0].attr = clut;
+                setSprt(packet);
             }
         }
     }
     return 0;
 }
 
-sint32 sprite_text_buffer(void)
+sint32 spr_text_buffer(void)
 {
-    sint32 buffer = (sint16)display_state.buffer;
+    sint32 buffer = disp_state.buffer;
     if (buffer < 0 || buffer >= 2)
         abort();
     return buffer;

@@ -1,3 +1,4 @@
+#include "callbacks.h"
 #include "route.h"
 #include "render.h"
 #include "sound.h"
@@ -5,19 +6,16 @@
 #include "game.h"
 #include "effects.h"
 #include "mesh.h"
-#include "vehicle.h"
+#include "boat.h"
 #include "menu.h"
 #include "pickup.h"
-#include "scene.h"
+#include "track.h"
 #include "timer.h"
-#include "vehicle_select.h"
-#include "runtime.h"
+#include "upgrades.h"
 #include "psx_gpu.h"
 #include "cd.h"
-#include "game_main.h"
 #include "arena.h"
-#include "global.h"
-#include "records.h"
+#include "utils.h"
 #include "xport_trace.h"
 #include <stdlib.h>
 #include <string.h>
@@ -35,909 +33,446 @@ typedef struct CD_AUDIO
 static CD_AUDIO cd_audio;
 char cd_dir[128];
 
+// Course directories from MAIN.EXE 80080D80/800B3E9C/80080D8C/800B3EA4..3EBC
+static const char *const cd_course_dirs[7] = {"\\CANYON\\", "\\MIAMI\\", "\\ALASKA\\", "\\WILD\\", "\\LOST\\", "\\LAVA\\", "\\COMP\\"};
+
+// Resident TIM from reviewed MAIN.EXE
+static const uint32 cd_notice_tim_1p[] = {
+    0x00000010, 0x00000008, 0x0000002C, 0x017002C0, 0x00010010, 0x379D0000, 0x2E542ED9, 0x196B29F1, 0x35866F6D, 0x14A2630B, 0x4E694607, 0x5AA91440, 0x24E21907, 0x000000DE, 0x017803F1, 0x00230003, 0x00CCCC00, 0x77CC0000, 0x00009C77, 0x977AAAA7, 0xBBBA0009, 0x000977AA, 0x77ABDDDB, 0x88DD00F9, 0x009F7ABD, 0x7BDAAB88, 0xCCA80097, 0x0F97ADFC, 0xAA4111EB, 0x11370FF7, 0x0FF7B721, 0xBA31112F, 0x112F0FF7, 0x0FF7B871, 0xB6B3112F, 0x111E0F97, 0x0097B6A3, 0xB6A21115, 0x11150097, 0x0097B6A3, 0xB6B31113, 0x11140097, 0x009FB684, 0xA8651112, 0x1111009F, 0x000FA867, 0x7D6A2111, 0x41110009, 0x00097D6D, 0x7B6D4111, 0x51110009, 0x00097A88, 0xFA867211, 0x72110009, 0x000097B6, 0x97B8D511, 0x6ACC0000, 0x00009FAD, 0x9F7B88DB, 0xB8860000, 0x00000C7A, 0x0CF7ABD8, 0x7ABB0000, 0x000000C7, 0x000977AA, 0xCF770000, 0x0000000C, 0x00000CCC, 0x00000000,
+};
+
+// Resident TIM from reviewed MAIN.EXE
+static const uint32 cd_notice_tim_2p[] = {
+    0x00000010, 0x00000008, 0x0000002C, 0x010102F0, 0x00010010, 0x379D0000, 0x2E542ED9, 0x196B29F1, 0x35866F6D, 0x14A2630B, 0x4E694607, 0x5AA91440, 0x24E21907, 0x0000009C, 0x011302EE, 0x00120004, 0x999999CC, 0x000000CC, 0x7AABBAA7, 0x000099F7, 0xBDDDDDDD, 0x0009F77A, 0xA7777B88, 0x009977AD, 0x4222257D, 0x0FC77AD7, 0x411114FB, 0x0FC77A8A, 0xD11111FA, 0x009F7A86, 0xB511112E, 0x00997A86, 0x8E111114, 0x00097AD6, 0x6A511111, 0x0009FAB6, 0x68E21111, 0x000997B8, 0x66A51111, 0x0000C7AD, 0xD68E2111, 0x0000997A, 0xAD6B5222, 0x00000CF7, 0x7AD8DA77, 0x000000C7, 0xF7ABD888, 0x0000000C, 0xC9F77AAB, 0x00000000, 0x00CCC999, 0x00000000,
+};
+
 void cd_init_audio_toc(void)
 {
-    static const CdlLOC original_toc[10] =
-    {
-        {0x51u, 0x15u, 0x00u, 0x00u},
-        {0x00u, 0x02u, 0x00u, 0x00u},
-        {0x16u, 0x52u, 0x00u, 0x00u},
-        {0x21u, 0x52u, 0x00u, 0x00u},
-        {0x26u, 0x40u, 0x00u, 0x00u},
-        {0x31u, 0x41u, 0x00u, 0x00u},
-        {0x37u, 0x14u, 0x00u, 0x00u},
-        {0x42u, 0x34u, 0x00u, 0x00u},
-        {0x47u, 0x35u, 0x00u, 0x00u},
-        {0x50u, 0x44u, 0x00u, 0x00u},
+    static const CdlLOC original_toc[10] = {
+        {0x51, 0x15, 0x00, 0x00}, {0x00, 0x02, 0x00, 0x00}, {0x16, 0x52, 0x00, 0x00}, {0x21, 0x52, 0x00, 0x00}, {0x26, 0x40, 0x00, 0x00}, {0x31, 0x41, 0x00, 0x00}, {0x37, 0x14, 0x00, 0x00}, {0x42, 0x34, 0x00, 0x00}, {0x47, 0x35, 0x00, 0x00}, {0x50, 0x44, 0x00, 0x00},
     };
 
     CdSetToc(original_toc, 9);
     cd_audio.tracks = CdGetToc(cd_audio.toc);
 }
 
-static uint32 cd_read_file_alloc_span(uint32 path, size_t *span_size);
-
-typedef struct
+static sint32 cd_upload_image_clut(const uint8 *src, uint32 size)
 {
-    uint32 parent_lba;
-    sint32 refreshed;
-} CD_SEARCH;
+    GpuTimImage image;
 
-static CD_SEARCH cd_search;
-
-static uint32 cd_bswap_u32(uint32 value)
-{
-    return (value >> 24) | ((value >> 8) & 0x0000FF00u) | ((value << 8) & 0x00FF0000u) | (value << 24);
+    FUNCTION_MARKER(0x8002BAE8, "MAIN.EXE");
+    if (!src || size < 4 || xport_load_le32(src) != 0x10 || !gpu_decode_tim_body(src + 4u, size - 4, &image))
+        abort();
+    if (image.clut_data)
+        LoadImagePSX(&image.clut, (uint32 *)image.clut_data);
+    return LoadImagePSX(&image.pixels, (uint32 *)image.pixel_data);
 }
 
-static sint32 cd_sra_two(uint32 value)
+static const uint8 *cd_find_tima_chunk(const uint8 *src, uint32 size, sint32 idx, uint32 *tim_size)
 {
-    return (sint32)((value >> 2) | ((value & 0x80000000u) != 0u ? 0xC0000000u : 0u));
-}
+    uint32 off = 12;
+    uint32 end;
+    sint32 chunk_idx = 0;
 
-sint32 cd_decompress_backrefs(uint32 input, uint32 output)
-{
-    uint32 start = output;
-
-    FUNCTION_MARKER(0x8002B158u, "MAIN.EXE");
-    for (;;)
+    FUNCTION_MARKER(0x8002BB58, "MAIN.EXE");
+    if (tim_size)
+        *tim_size = 0;
+    if (!src || !tim_size || idx < 0 || size < sizeof(IFF_HEADER))
+        return NULL;
+    const IFF_HEADER *header = (const IFF_HEADER *)src;
+    if (header->chunk.id != CHUNK_FORM || header->type != CHUNK_JETS)
+        return NULL;
+    end = swap32(header->chunk.size_be);
+    if (end < 4 || end > size - 8)
+        return NULL;
+    end += 8;
+    while (off < end)
     {
-        uint8 flags = r_u8(input++);
-        sint32 bit;
+        uint32 chunk_size;
+        uint32 padded_size;
 
-        for (bit = 7; bit >= 0; --bit)
+        if (end - off < 8)
+            return NULL;
+        const IFF_CHUNK *chunk = (const IFF_CHUNK *)(src + off);
+        chunk_size = swap32(chunk->size_be);
+        off += 8;
+        if (chunk_size > end - off)
+            return NULL;
+        padded_size = chunk_size + (4 - (chunk_size & 3) & 3);
+        if (padded_size < chunk_size || padded_size > end - off)
+            return NULL;
+        if (chunk->id == CHUNK_TIMA)
         {
-            if ((flags & (1u << bit)) == 0u)
-                w_u8(output++, r_u8(input++));
-            else
+            if (chunk_idx == idx)
             {
-                uint16 token = (uint16)(((uint16)r_u8(input) << 8) | r_u8(input + 1u));
-                sint32 length;
-                uint32 source;
-                input += 2u;
-                if (token == 0xFFFFu)
-                    return (sint32)(output - start);
-                length = (token >> 11) + 3;
-                source = output - ((token & 0x07FFu) + 1u);
-                while (length-- > 0)
-                    w_u8(output++, r_u8(source++));
+                *tim_size = chunk_size;
+                return src + off;
             }
+            ++chunk_idx;
         }
+        off += padded_size;
     }
+    return NULL;
 }
 
-sint32 cd_load_course_assets(const RACE_CFG *cfg)
+static void cd_upload_archive_tim(const uint8 *src, uint32 size, sint32 idx)
 {
-    uint32 frame = guest_stack_push(0x48u);
-    uint32 directory = frame + 0x10u;
-    uint32 suffix = frame + 0x28u;
-    uint32 path;
-    uint32 data;
-    size_t geometry_size;
-    sint32 course;
-    sint32 mode;
-    sint32 result;
-
-    FUNCTION_MARKER(0x8002B664u, "MAIN.EXE");
-    strcpy(cd_dir, "\\BOATS\\");
-    if (!cd_load_model_archive())
-    {
-        result = 0;
-        goto finish;
-    }
-    if (cfg->mode == 8u)
-    {
-        strcpy(cd_dir, "\\BONUS\\");
-        result = cd_load_archive_assets(race_cfg.variant == 2u ? 0x80080D68u : 0x80080D74u);
-        goto finish;
-    }
-    mode = (sint32)race_cfg.variant;
-    if (mode == 1)
-        runtime_copy_guest_5(suffix, 0x800B3E84u);
-    else if (mode == 2)
-        runtime_copy_guest_7(suffix, 0x800B3E8Cu);
-    else
-        runtime_copy_guest_8(suffix, 0x800B3E94u);
-    course = (sint32)cfg->course;
-    w_u32(0x800B3D90u, 1u);
-    switch (course)
-    {
-        case 0:
-            runtime_copy_guest_9(directory, 0x80080D80u);
-            break;
-        case 1:
-            runtime_copy_guest_8(directory, 0x800B3E9Cu);
-            break;
-        case 2:
-            runtime_copy_guest_9(directory, 0x80080D8Cu);
-            break;
-        case 3:
-            runtime_copy_guest_7(directory, 0x800B3EA4u);
-            break;
-        case 4:
-            runtime_copy_guest_7(directory, 0x800B3EACu);
-            break;
-        case 5:
-            runtime_copy_guest_7(directory, 0x800B3EB4u);
-            break;
-        case 6:
-            runtime_copy_guest_7(directory, 0x800B3EBCu);
-            break;
-        default:
-            exit(1);
-    }
-    course = (sint32)cfg->course;
-    if (course == 6)
-        strcpy(cd_dir, (const char *)psx_addr(directory, 1u));
-    else
-    {
-        strcpy(cd_dir, (const char *)psx_addr(directory, 1u));
-        strcat(cd_dir, (const char *)psx_addr(suffix, 1u));
-    }
-    course = (sint32)cfg->course;
-    if (course == 6)
-    {
-        mode = (sint32)race_cfg.players;
-        runtime_format_vram_filename(directory, (sint16)race_selection.resource, mode != 1);
-        cd_load_archive_assets(directory);
-        route_gen_init(cfg);
-    }
-    else
-    {
-        cd_load_archive_assets(race_cfg.players == 1u ? 0x80080DB4u : 0x80080DC0u);
-        data = cd_read_file_alloc_span(runtime_build_cd_path(0x80080DCCu), &geometry_size);
-        if (data == 0u)
-        {
-            result = 0;
-            goto finish;
-        }
-        cd_publish_sections(psx_addr(data, geometry_size), geometry_size);
-        mode = profile_selection.slot;
-        path = mode == 0 ? 0x80080DD8u : (mode == 1 ? 0x800B3ED0u : 0x80080DE4u);
-        {
-            size_t route_size;
-            uint32 route_data = cd_read_file_alloc_span(runtime_build_cd_path(path), &route_size);
-            if (route_data == 0u || !cd_load_versioned_rec_archive((const uint8 *)psx_addr(route_data, route_size), route_size, race_cfg.variant == 2u))
-            {
-                result = 0;
-                goto finish;
-            }
-        }
-    }
-    scene_process_published_rec_flags();
-    course = (sint32)cfg->course;
-    if (course == 6)
-        result = pickup_update_racer_flags();
-    else
-        result = 6;
-finish:
-    guest_stack_pop(0x48u);
-    return result;
+    uint32 tim_size;
+    const uint8 *tim = cd_find_tima_chunk(src, size, idx, &tim_size);
+    if (!tim || tim_size < 20)
+        abort();
+    cd_upload_image_clut(tim, tim_size);
 }
 
-sint32 cd_init_drive(void)
+static sint32 cd_stop_read(void)
 {
-    FUNCTION_MARKER(0x8002BA40u, "MAIN.EXE");
+    FUNCTION_MARKER(0x8002CB38, "MAIN.EXE");
+    CdControl(9, 0, 0);
+    CdDataCallback(NULL);
+    CdReadyCallback(0);
+    return 0;
+}
+
+static sint32 cd_host_file_size(const char *path, uint32 *size)
+{
+    size_t host_size;
+    if (!size)
+        return 0;
+    *size = 0;
+    if (!xport_cd_file_size_native(path, "DATA", &host_size) || host_size > UINT32_MAX)
+        return 0;
+    *size = host_size;
     return 1;
 }
 
-uint32 cd_load_file_alloc(uint32 path)
+static sint32 cd_read_host_file(const char *path, void *dst, uint32 capacity, uint32 *size)
 {
-    FUNCTION_MARKER(0x8002BA60u, "MAIN.EXE");
-    return cd_read_file_alloc(runtime_build_cd_path(path));
+    size_t host_size;
+    if (!size)
+        return 0;
+    *size = 0;
+    if (!xport_cd_file_read_native(path, "DATA", dst, capacity, &host_size) || host_size > UINT32_MAX)
+        return 0;
+    *size = host_size;
+    return 1;
 }
 
-// Byte-span boundary for consumers of the legacy arena loader
-const uint8 *cd_load_file_bytes(const char *path, size_t *size)
+static uint8 *cd_read_file_alloc_span(const char *path, uint32 *span_size)
+{
+    uint32 size;
+    uint32 read_size;
+    uint8 *dst;
+
+    FUNCTION_MARKER(0x8002CB80, "MAIN.EXE");
+    if (span_size)
+        *span_size = 0;
+    if (!cd_host_file_size(path, &size))
+        return NULL;
+    dst = (uint8 *)arena_alloc(size);
+    if (!dst || !cd_read_host_file(path, dst, size, &read_size) || read_size != size)
+        return NULL;
+    cd_stop_read();
+    if (span_size)
+        *span_size = read_size;
+    return dst;
+}
+
+static void cd_build_path(char *dst, const char *src)
+{
+    uint32 idx = 0;
+    const char *dir = cd_dir;
+
+    while (*dir && idx < 125)
+        dst[idx++] = *dir++;
+    while (*src && idx < 125)
+        dst[idx++] = *src++;
+    dst[idx++] = ';';
+    dst[idx++] = '1';
+    dst[idx] = '\0';
+}
+
+static sint32 cd_load_archive_assets(const char *path)
 {
     char full_path[128];
-    uint32 frame;
-    uint32 addr;
-    size_t idx;
+    const uint8 *data;
+    const uint8 *request;
+    uint32 size = 0;
 
-    if (!size)
-        return NULL;
-    runtime_build_cd_path_native(full_path, path);
-    frame = guest_stack_push(sizeof(full_path));
-    for (idx = 0; idx <= strlen(full_path); ++idx)
-        w_u8(frame + (uint32)idx, (uint8)full_path[idx]);
-    addr = cd_read_file_alloc_span(frame, size);
-    guest_stack_pop(sizeof(full_path));
-
-    return addr ? (const uint8 *)psx_addr(addr, *size) : NULL;
-}
-
-uint32 cd_load_file_buf(uint32 path, uint32 buffer)
-{
-    FUNCTION_MARKER(0x8002BA9Cu, "MAIN.EXE");
-    return cd_read_file_buf(runtime_build_cd_path(path), buffer);
-}
-
-sint32 cd_upload_image_clut(uint32 request)
-{
-    uint32 cursor = request + 8u;
-    sint32 result = 0;
-
-    FUNCTION_MARKER(0x8002BAE8u, "MAIN.EXE");
-    if ((r_u32(request + 4u) & 8u) != 0u)
+    FUNCTION_MARKER(0x8002BE3C, "MAIN.EXE");
+    arena_push();
+    cd_build_path(full_path, path);
+    data = cd_read_file_alloc_span(full_path, &size);
+    cd_upload_archive_tim(data, size, 0);
+    cd_upload_archive_tim(data, size, 1);
+    cd_upload_archive_tim(data, size, 2);
+    cd_upload_archive_tim(data, size, 2 * menu_state.language + 3);
+    cd_upload_archive_tim(data, size, 2 * menu_state.language + 4);
+    if (menu_state.language == 2)
     {
-        result = LoadImagePSX((PSX_RECT *)psx_addr(request + 12u, sizeof(PSX_RECT)), (uint32 *)psx_addr(request + 20u, 4u));
-        cursor += (uint32)((sint32)r_u32(cursor) / 4) * 4u;
+        request = (const uint8 *)(race_cfg.players == 2 ? cd_notice_tim_2p : cd_notice_tim_1p);
+        cd_upload_image_clut(request, race_cfg.players == 2 ? sizeof(cd_notice_tim_2p) : sizeof(cd_notice_tim_1p));
     }
-    result = LoadImagePSX((PSX_RECT *)psx_addr(cursor + 4u, sizeof(PSX_RECT)), (uint32 *)psx_addr(cursor + 12u, 4u));
-    return result;
-}
-
-uint32 cd_find_tima_chunk(uint32 input, sint32 requested_index)
-{
-    uint32 cursor;
-    uint32 raw_size;
-    uint8 tag0;
-    uint8 tag1;
-    uint8 tag2;
-    uint8 tag3;
-    sint32 remaining;
-    sint32 index = 0;
-
-    FUNCTION_MARKER(0x8002BB58u, "MAIN.EXE");
-    tag0 = r_u8(input);
-    tag1 = r_u8(input + 1u);
-    tag2 = r_u8(input + 2u);
-    tag3 = r_u8(input + 3u);
-    raw_size = r_u32(input + 4u);
-    cursor = input + 8u;
-    remaining = (sint32)(cd_bswap_u32(raw_size) - 4u);
-    if (tag0 != 'F' || tag1 != 'O' || tag2 != 'R' || tag3 != 'M')
-        abort();
-    tag0 = r_u8(cursor);
-    tag1 = r_u8(cursor + 1u);
-    tag2 = r_u8(cursor + 2u);
-    tag3 = r_u8(cursor + 3u);
-    cursor += 4u;
-    if (tag0 != 'J' || tag1 != 'E' || tag2 != 'T' || tag3 != 'S')
-        abort();
-    while (remaining > 0)
+    if (race_cfg.mode == 5)
     {
-        sint32 size;
-        uint32 advance;
-        uint32 payload;
-
-        tag0 = r_u8(cursor);
-        tag1 = r_u8(cursor + 1u);
-        tag2 = r_u8(cursor + 2u);
-        tag3 = r_u8(cursor + 3u);
-        raw_size = r_u32(cursor + 4u);
-        payload = cursor + 8u;
-        size = (sint32)cd_bswap_u32(raw_size);
-        if (tag0 == 'T' && tag1 == 'I' && tag2 == 'M' && tag3 == 'A')
-        {
-            if (index == requested_index)
-                return payload;
-            ++index;
-        }
-        remaining = (sint32)((uint32)remaining - (((uint32)size + 11u) & ~3u));
-        advance = (uint32)size + 3u;
-        if ((sint32)advance < 0)
-            advance = (uint32)size + 6u;
-        cursor = payload + ((uint32)cd_sra_two(advance) << 2);
-    }
-    return 0u;
-}
-
-sint32 cd_load_tex(uint32 path, sint16 x, sint16 y, sint32 width, sint32 height)
-{
-    sint32 result;
-
-    FUNCTION_MARKER(0x8002BDA8u, "MAIN.EXE");
-    game_push_checkpoint();
-    cd_upload_vram_image(runtime_build_cd_path(path), x, y, width, height);
-    result = game_pop_checkpoint();
-    return result;
-}
-
-sint32 cd_load_archive_assets(uint32 path)
-{
-    uint32 frame = guest_stack_push(0xA0u);
-    uint32 data;
-    uint32 request;
-    sint32 result;
-
-    FUNCTION_MARKER(0x8002BE3Cu, "MAIN.EXE");
-    game_push_checkpoint();
-    data = cd_read_file_alloc(runtime_build_cd_path_at(frame + 0x10u, path));
-    request = cd_find_tima_chunk(data, 0);
-    cd_upload_image_clut(request);
-    request = cd_find_tima_chunk(data, 1);
-    cd_upload_image_clut(request);
-    request = cd_find_tima_chunk(data, 2);
-    cd_upload_image_clut(request);
-    request = cd_find_tima_chunk(data, 2 * menu_state.language + 3);
-    cd_upload_image_clut(request);
-    request = cd_find_tima_chunk(data, 2 * menu_state.language + 4);
-    cd_upload_image_clut(request);
-    if (menu_state.language == 2u)
-    {
-        request = race_cfg.players == 2u ? 0x80089F6Cu : 0x80089E54u;
-        cd_upload_image_clut(request);
-    }
-    if (race_cfg.mode == 5u)
-    {
-        cd_upload_image_clut(cd_find_tima_chunk(data, 13));
-        cd_upload_image_clut(cd_find_tima_chunk(data, 14));
+        cd_upload_archive_tim(data, size, 13);
+        cd_upload_archive_tim(data, size, 14);
     }
     DrawSync(0);
-    result = game_pop_checkpoint();
-    guest_stack_pop(0xA0u);
-    return result;
+    return arena_pop();
 }
 
-sint32 cd_load_versioned_rec_archive(const uint8 *src, size_t size, sint32 mirror)
+static sint32 cd_load_versioned_rec_archive(const uint8 *src, uint32 size, sint32 mirror)
 {
     uint16 version;
-    size_t light_off = 0u;
-    size_t pal_off = 0u;
+    uint32 light_off = 0;
+    uint32 pal_off = 0;
     uint32 light_words;
     uint32 pal_words;
 
-    FUNCTION_MARKER(0x8002BF90u, "MAIN.EXE");
-    if (!src || size < 8u || xport_load_le16(src) != 0xBABEu)
+    FUNCTION_MARKER(0x8002BF90, "MAIN.EXE");
+    if (!src || size < 8 || xport_load_le16(src) != 0xBABE)
         return 0;
     version = xport_load_le16(src + 2u);
     if (version < 4u || version > 7u)
         return 0;
     if (version >= 5u)
     {
-        if (size < (version == 5u ? 16u : 20u))
+        if (size < (version == 5 ? 16u : 20u))
             return 0;
-        pal_words = xport_load_le32(src + (version == 5u ? 8u : 12u));
-        light_words = xport_load_le32(src + (version == 5u ? 12u : 16u));
-        if (pal_words > size / 4u || light_words > pal_words)
+        pal_words = xport_load_le32(src + (version == 5 ? 8u : 12u));
+        light_words = xport_load_le32(src + (version == 5 ? 12u : 16u));
+        if (pal_words > size / 4 || light_words > pal_words)
             return 0;
-        light_off = (size_t)light_words * 4u;
-        pal_off = (size_t)pal_words * 4u;
-        if ((pal_off - light_off) % 56u != 0u || pal_off == light_off || (pal_off - light_off) / 56u > 256u)
+        light_off = light_words * 4;
+        pal_off = pal_words * 4;
+        if ((pal_off - light_off) % 56 != 0 || pal_off == light_off || (pal_off - light_off) / 56 > 256)
             return 0;
     }
     if (route_decode_archive(src, size, &route_resources) != ROUTE_DECODE_OK)
         return 0;
-    if (version == 4u)
+    if (version == 4)
     {
         render_select_lighting(mirror ? RENDER_LIGHT_MIRROR : RENDER_LIGHT_NORMAL);
-        render_select_palette(mirror != 0);
+        render_select_pal(mirror != 0);
     }
     else
     {
         render_load_lighting(src + light_off, pal_off - light_off);
-        render_load_palette(src + pal_off, size - pal_off);
+        render_load_pal(src + pal_off, size - pal_off);
     }
     return 1;
 }
 
-sint32 cd_publish_sections(const uint8 *src, size_t size)
+static sint32 cd_publish_sections(const uint8 *src, uint32 size)
 {
-    FUNCTION_MARKER(0x8002C1D8u, "MAIN.EXE");
-    scene_load_sections(src, size);
-    return scene_sections.count != 0u;
+    FUNCTION_MARKER(0x8002C1D8, "MAIN.EXE");
+    track_load_sections(src, size);
+    return track_sections.count != 0;
 }
 
-sint32 cd_wait_stream(void)
+static sint32 cd_load_model_archive(void)
 {
-    FUNCTION_MARKER(0x8002C208u, "MAIN.EXE");
-    while (cd_stream_is_complete() == 0)
-        cd_process_sector_cb();
+    uint8 *src = NULL;
+    const PLAYER_PROFILE *table;
+    uint32 archive_size, read_size;
+    sint32 players = race_cfg.players;
+    MESH_ARCHIVE decoded = {0};
+    MESH_BOAT_MODELS models[2][16] = {0};
+    MESH_MODEL event_models[4] = {0};
+    sint32 player;
+    sint32 rec;
+
+    FUNCTION_MARKER(0x80042454, "MAIN.EXE");
+    table = profile_cur();
+    if (!cd_host_file_size("BOATS/MODELS.IFF", &archive_size) || archive_size == 0)
+        goto fail;
+    src = malloc(archive_size);
+    if (!src || !cd_read_host_file("BOATS/MODELS.IFF", src, archive_size, &read_size) || read_size != archive_size || !mesh_decode_archive(src, archive_size, &decoded))
+        goto fail;
+    free(src);
+    src = NULL;
+    if (players < 1 || players > 2)
+        goto fail;
+    for (rec = 15; rec >= 0; --rec)
+    {
+        const RACE_PARTICIPANT *participant = &race_participants[rec];
+        uint32 kind = participant->mode;
+        sint32 model;
+        sint32 player;
+
+        if (kind < 2)
+        {
+            if (participant->boat >= 9u)
+                goto fail;
+            model = boat_base_levels[participant->boat];
+        }
+        else if (kind < 4)
+        {
+            uint8 row = participant->boat;
+
+            model = profile_get_table_byte(table, row, 0);
+        }
+        else
+            model = -1;
+        if (model <= 0)
+            continue;
+        for (player = 0; player < players; ++player)
+        {
+            if (!mesh_load_boat_models(&decoded, participant->boat, model, participant->variant, game_selection.flags, &models[player][rec]))
+                goto fail;
+        }
+    }
+    if (race_cfg.mode == 8)
+    {
+        if (decoded.count < 4)
+            goto fail;
+        for (rec = 0; rec < 4; ++rec)
+            if (!mesh_copy_model(&decoded.models[rec], &event_models[rec]))
+                goto fail;
+    }
+    mesh_clear_archive(&decoded);
+    for (rec = 0; rec < 4; ++rec)
+    {
+        mesh_clear_model(&mesh_event_models[rec]);
+        mesh_event_models[rec] = event_models[rec];
+    }
+    for (player = 0; player < 2; ++player)
+        for (rec = 0; rec < 16; ++rec)
+        {
+            mesh_clear_boat_models(&mesh_boat_models[player][rec]);
+            mesh_boat_models[player][rec] = models[player][rec];
+        }
+
     return 1;
-}
-
-sint32 cd_search_file(uint32 path, uint32 location, uint32 size)
-{
-    const char *disc_path;
-    char image_path[1024];
-    char component[128];
-    uint8 sector[2048];
-    uint8 *directory = NULL;
-    uint8 *path_table = NULL;
-    FILE *file = NULL;
-    uint32 extent = 0u;
-    uint32 data_size = 0u;
-    uint32 parent_directory_size = 0u;
-    uint32 parent_idx = 0u;
-    uint32 path_table_extent = 0u;
-    uint32 path_table_size = 0u;
-    uint32 stride = 2048u;
-    uint32 data_offset = 0u;
-    uint32 cursor = 0u;
-    uint32 index;
-    sint32 found = 0;
-
-    FUNCTION_MARKER(0x8002C450u, "MAIN.EXE");
-    cd_search.refreshed = 0;
-    disc_path = getenv("XPORT_DISC_IMAGE");
-    if (!disc_path)
-        return 0;
-    while (disc_path[cursor] && cursor + 1u < sizeof(image_path))
-    {
-        image_path[cursor] = disc_path[cursor];
-        ++cursor;
-    }
-    image_path[cursor] = '\0';
-    if (cursor >= 4u && image_path[cursor - 4u] == '.' && (image_path[cursor - 3u] == 'c' || image_path[cursor - 3u] == 'C') && (image_path[cursor - 2u] == 'u' || image_path[cursor - 2u] == 'U') && (image_path[cursor - 1u] == 'e' || image_path[cursor - 1u] == 'E'))
-    {
-        char line[1024];
-        FILE *cue = fopen(image_path, "rb");
-
-        if (!cue || !fgets(line, sizeof(line), cue))
-        {
-            if (cue)
-                fclose(cue);
-            return 0;
-        }
-        fclose(cue);
-        for (index = cursor; index > 0u; --index)
-            if (image_path[index - 1u] == '\\' || image_path[index - 1u] == '/')
-                break;
-        cursor = index;
-        for (index = 0u; line[index] && line[index] != '"'; ++index)
-            ;
-        if (line[index] != '"')
-            return 0;
-        ++index;
-        while (line[index] && line[index] != '"' && cursor + 1u < sizeof(image_path))
-            image_path[cursor++] = line[index++];
-        image_path[cursor] = '\0';
-        if (line[index] != '"')
-            return 0;
-        stride = 2352u;
-        data_offset = 24u;
-    }
-    file = fopen(image_path, "rb");
-    if (!file || fseek(file, (long)(16u * stride + data_offset), SEEK_SET) != 0 || fread(sector, 1u, sizeof(sector), file) != sizeof(sector) || sector[0] != 1u || sector[1] != 'C' || sector[2] != 'D' || sector[3] != '0' || sector[4] != '0' || sector[5] != '1')
-        goto finish;
-    extent = (uint32)sector[158] | ((uint32)sector[159] << 8) | ((uint32)sector[160] << 16) | ((uint32)sector[161] << 24);
-    data_size = (uint32)sector[166] | ((uint32)sector[167] << 8) | ((uint32)sector[168] << 16) | ((uint32)sector[169] << 24);
-    path_table_size = (uint32)sector[132] | ((uint32)sector[133] << 8) | ((uint32)sector[134] << 16) | ((uint32)sector[135] << 24);
-    path_table_extent = (uint32)sector[140] | ((uint32)sector[141] << 8) | ((uint32)sector[142] << 16) | ((uint32)sector[143] << 24);
-    path_table = (uint8 *)malloc(path_table_size ? path_table_size : 1u);
-    if (!path_table)
-        goto finish;
-    for (index = 0u; index * 2048u < path_table_size; ++index)
-    {
-        uint32 transfer = path_table_size - index * 2048u;
-
-        if (transfer > 2048u)
-            transfer = 2048u;
-        if (fseek(file, (long)((path_table_extent + index) * stride + data_offset), SEEK_SET) != 0 || fread(path_table + index * 2048u, 1u, transfer, file) != transfer)
-            goto finish;
-    }
-    while (r_u8(path) == '\\' || r_u8(path) == '/')
-        ++path;
-    while (r_u8(path) != 0u)
-    {
-        uint32 component_length = 0u;
-        uint32 directory_cursor = 0u;
-        uint32 sector_index;
-        uint32 sector_count = (data_size + 2047u) / 2048u;
-        sint32 last_component;
-
-        while (r_u8(path) != 0u && r_u8(path) != '\\' && r_u8(path) != '/')
-        {
-            uint8 character = r_u8(path++);
-
-            if (character == ';')
-            {
-                while (r_u8(path) != 0u && r_u8(path) != '\\' && r_u8(path) != '/')
-                    ++path;
-                break;
-            }
-            if (component_length + 1u >= sizeof(component))
-                goto finish;
-            component[component_length++] = (char)character;
-        }
-        component[component_length] = '\0';
-        while (r_u8(path) == '\\' || r_u8(path) == '/')
-            ++path;
-        last_component = r_u8(path) == 0u;
-        if (last_component)
-        {
-            uint32 directory_index = 1u;
-            uint32 path_table_cursor = 0u;
-
-            cd_search.parent_lba = extent;
-            parent_directory_size = data_size;
-            parent_idx = 0u;
-            while (path_table_cursor + 8u <= path_table_size)
-            {
-                uint32 name_length = path_table[path_table_cursor];
-                uint32 path_extent;
-
-                if (name_length == 0u || path_table_cursor + 8u + name_length > path_table_size)
-                    break;
-                path_extent = (uint32)path_table[path_table_cursor + 2u] | ((uint32)path_table[path_table_cursor + 3u] << 8) | ((uint32)path_table[path_table_cursor + 4u] << 16) | ((uint32)path_table[path_table_cursor + 5u] << 24);
-                if (path_extent == extent)
-                {
-                    parent_idx = directory_index;
-                    break;
-                }
-                path_table_cursor += 8u + name_length + (name_length & 1u);
-                ++directory_index;
-            }
-            if (parent_idx == 0u)
-                goto finish;
-        }
-        free(directory);
-        directory = (uint8 *)malloc(data_size ? data_size : 1u);
-        if (!directory)
-            goto finish;
-        for (sector_index = 0u; sector_index < sector_count; ++sector_index)
-        {
-            uint32 transfer = data_size - sector_index * 2048u;
-
-            if (transfer > 2048u)
-                transfer = 2048u;
-            if (fseek(file, (long)((extent + sector_index) * stride + data_offset), SEEK_SET) != 0 || fread(directory + sector_index * 2048u, 1u, transfer, file) != transfer)
-                goto finish;
-        }
-        found = 0;
-        while (directory_cursor < data_size)
-        {
-            uint32 record_length = directory[directory_cursor];
-            uint32 name_length;
-            uint32 comparable_length;
-            sint32 equal = 1;
-
-            if (record_length == 0u)
-            {
-                directory_cursor = (directory_cursor + 2048u) & ~2047u;
-                continue;
-            }
-            if (directory_cursor + record_length > data_size || record_length < 34u)
-                goto finish;
-            name_length = directory[directory_cursor + 32u];
-            comparable_length = name_length;
-            for (index = 0u; index < name_length; ++index)
-                if (directory[directory_cursor + 33u + index] == ';')
-                {
-                    comparable_length = index;
-                    break;
-                }
-            if (comparable_length != component_length)
-                equal = 0;
-            for (index = 0u; equal && index < comparable_length; ++index)
-            {
-                uint8 left = directory[directory_cursor + 33u + index];
-                uint8 right = (uint8)component[index];
-
-                if (left >= 'a' && left <= 'z')
-                    left = (uint8)(left - 'a' + 'A');
-                if (right >= 'a' && right <= 'z')
-                    right = (uint8)(right - 'a' + 'A');
-                if (left != right)
-                    equal = 0;
-            }
-            if (equal)
-            {
-                extent = (uint32)directory[directory_cursor + 2u] | ((uint32)directory[directory_cursor + 3u] << 8) | ((uint32)directory[directory_cursor + 4u] << 16) | ((uint32)directory[directory_cursor + 5u] << 24);
-                data_size = (uint32)directory[directory_cursor + 10u] | ((uint32)directory[directory_cursor + 11u] << 8) | ((uint32)directory[directory_cursor + 12u] << 16) | ((uint32)directory[directory_cursor + 13u] << 24);
-                if ((!last_component && (directory[directory_cursor + 25u] & 2u) == 0u) || (last_component && (directory[directory_cursor + 25u] & 2u) != 0u))
-                    goto finish;
-                found = 1;
-                break;
-            }
-            directory_cursor += record_length;
-        }
-        if (!found)
-            goto finish;
-        if (last_component)
-            break;
-    }
-    if (found)
-    {
-        uint32 absolute_sector = extent + 150u;
-        uint32 minute = absolute_sector / (75u * 60u);
-        uint32 second = (absolute_sector / 75u) % 60u;
-        uint32 frame = absolute_sector % 75u;
-
-        w_u32(size, data_size);
-        w_u8(location, (minute / 10u) * 16u + minute % 10u);
-        w_u8(location + 1u, (second / 10u) * 16u + second % 10u);
-        w_u8(location + 2u, (frame / 10u) * 16u + frame % 10u);
-        w_u8(location + 3u, 0u);
-    }
-finish:
-    free(path_table);
-    free(directory);
-    if (file)
-        fclose(file);
-    return found ? r_u8(location + 3u) : 0;
-}
-
-sint32 cd_start_async_read(void)
-{
-    sint32 result;
-
-    FUNCTION_MARKER(0x8002C4DCu, "MAIN.EXE");
-    w_u32(0x800B6BC8u, 1u);
-    result = (sint32)r_u32(0x800B6AA8u) + 10;
-    w_u32(0x800B6AA8u, (uint32)result);
-    return result;
-}
-
-sint32 cd_prepare_alloc_read(uint32 path)
-{
-    sint32 size;
-    uint32 index;
-
-    FUNCTION_MARKER(0x8002C5E4u, "MAIN.EXE");
-    cd_search_file(path, 0x800B6818u, 0x800B6814u);
-    size = (sint32)r_u32(0x800B6814u);
-    w_u8(0x800B3F02u, 0u);
-    w_u16(0x800B6804u, 0u);
-    w_u16(0x800B6800u, 0u);
-    w_u16(0x800B680Cu, 0u);
-    w_u16(0x800B6808u, UINT16_C(0xFFFF));
-    w_u32(0x800B67F0u, 0u);
-    w_u16(0x800B6814u, 0u);
-    w_u32(0x800B67F4u, (uint32)size);
-    w_u16(0x800B67FCu, (uint16)(((uint32)size + 2047u) >> 11));
-    if ((r_u8(0x800B3EF8u) & 1u) != 0u)
-    {
-        w_u32(0x800B67F8u, (uint32)-1);
-        for (index = 0u; index < 20u; ++index)
-            w_u8(0x800B95F8u + index, 0u);
-        w_u16(0x800B6810u, UINT16_C(0xFFFF));
-        w_u32(0x800B67ECu, 0u);
-    }
-    else
-    {
-        w_u32(0x800B67F8u, (uint32)size);
-        w_u32(0x800B67E8u, game_alloc_arena_bytes(size));
-        w_u32(0x800B67ECu, r_u32(0x800B67E8u));
-    }
-    return cd_start_async_read();
-}
-
-sint32 cd_prepare_buf_read(uint32 path, uint32 buffer)
-{
-    sint32 size;
-    uint32 index;
-
-    FUNCTION_MARKER(0x8002C698u, "MAIN.EXE");
-    cd_search_file(path, 0x800B6818u, 0x800B6814u);
-    size = (sint32)r_u32(0x800B6814u);
-    w_u32(0x800B67F8u, (uint32)-1);
-    w_u16(0x800B6804u, 0u);
-    w_u16(0x800B6800u, 0u);
-    w_u16(0x800B680Cu, 0u);
-    w_u16(0x800B6808u, (uint16)-1);
-    w_u8(0x800B3F02u, 0u);
-    w_u32(0x800B67F0u, 0u);
-    w_u16(0x800B6814u, 0u);
-    w_u32(0x800B67F4u, (uint32)size);
-    w_u16(0x800B67FCu, ((uint32)size + 2047u) >> 11);
-    if ((r_u8(0x800B3EF8u) & 1u) != 0u)
-    {
-        for (index = 0u; index < 20u; ++index)
-            w_u8(0x800B95F8u + index, 0u);
-        w_u16(0x800B6810u, (uint16)-1);
-    }
-    w_u32(0x800B67ECu, buffer);
-    w_u32(0x800B67E8u, buffer);
-    return cd_start_async_read();
-}
-
-sint32 cd_restart_stream_buf(void)
-{
-    FUNCTION_MARKER(0x8002C770u, "MAIN.EXE");
-    w_u32(0x800B6804u, 0u);
-    w_u32(0x800B6800u, 0u);
-    w_u32(0x800B680Cu, 0u);
-    w_u32(0x800B6808u, (uint32)-1);
-    w_u32(0x800B67F0u, 0u);
-    w_u32(0x800B6814u, 0u);
-    if ((r_u8(0x800B3EF8u) & 1u) != 0u)
-        w_u32(0x800B6810u, (uint32)-1);
-    w_u32(0x800B67E8u, r_u32(0x800B67ECu));
-    w_u8(0x800B3F01u, 0u);
-    return cd_start_async_read();
-}
-
-sint32 cd_stream_is_complete(void)
-{
-    FUNCTION_MARKER(0x8002C810u, "MAIN.EXE");
-    return r_u32(0x800B67FCu) == 0u || r_u32(0x800B6800u) >= r_u32(0x800B67FCu);
-}
-
-sint32 cd_copy_sector_bytes(uint32 destination, uint32 source, sint32 size)
-{
-    sint32 index;
-    sint32 result = 0;
-
-    FUNCTION_MARKER(0x8002C84Cu, "MAIN.EXE");
-    for (index = 0; index < size; ++index)
-    {
-        w_u8(destination + (uint32)index, r_u8(source + (uint32)index));
-        result = index + 1 < size;
-    }
-    return result;
-}
-
-uint32 cd_search_parent_location(void)
-{
-    return cd_search.parent_lba;
-}
-
-sint32 cd_search_refreshed(void)
-{
-    return cd_search.refreshed;
-}
-
-sint32 cd_process_sector_cb(void)
-{
-    sint16 next;
-    uint32 source;
-    sint32 result = 0;
-
-    FUNCTION_MARKER(0x8002C8C8u, "MAIN.EXE");
-    if (r_u8(0x800B3F01u) != 0u || r_u8(0x800B3F02u) != 0u)
-    {
-        menu_fn_8006776c();
-        CdDataCallback(NULL);
-        CdReadyCallback(0);
-        global_fn_8006777c();
-        if (r_u8(0x800B3F02u) != 0u)
-            w_u8(0x800B3F02u, 0u);
-        return cd_restart_stream_buf();
-    }
-
-    w_u8(0x800B3F01u, (uint8)(CdStatus() & 0x10));
-    if ((r_u8(0x800B3EF8u) & 1u) == 0u)
-        return 0;
-    next = (sint16)(r_u16(0x800B6810u) + 1u);
-    if (next == 20)
-        next = 0;
-    if (r_u8(0x800B95F8u + (uint32)next) == 0u)
-        return 0;
-
-    source = 0x800B960Cu + ((uint32)(uint16)next << 11);
-    if (r_u16(0x800B6800u) == 0u)
-    {
-        uint32 size;
-
-        menu_fn_8006776c();
-        size = r_u32(source);
-        source += 4u;
-        w_u32(0x800B67F8u, size);
-        if ((sint32)size < 0)
-        {
-            w_u16(0x800B6814u, 1u);
-            w_u32(0x800B67F8u, size & 0x7FFFFFFFu);
-        }
-        if (r_u32(0x800B67ECu) == 0u)
-        {
-            uint32 buffer = game_alloc_arena_bytes((sint32)r_u32(0x800B67F8u));
-            w_u32(0x800B67ECu, buffer);
-            w_u32(0x800B67E8u, buffer);
-        }
-        global_fn_8006777c();
-    }
-
-    if (r_u16(0x800B6814u) != 0u)
-    {
-        uint16 size = 2048u;
-        uint16 block = r_u16(0x800B6800u);
-        uint32 destination = r_u32(0x800B67E8u);
-
-        if (block == (uint16)(r_u16(0x800B67FCu) - 1u))
-            size = (uint16)(r_u16(0x800B67F4u) - (block << 11));
-        if (block == 0u)
-            size = (uint16)(size - 4u);
-        menu_fn_8006776c();
-        xport_update_u32(0x800B67F0u, XPORT_MEMORY_UPDATE_ADD, size);
-        xport_update_u32(0x800B67E8u, XPORT_MEMORY_UPDATE_ADD, size);
-        global_fn_8006777c();
-        result = cd_copy_sector_bytes(destination, source, size);
-    }
-    else
-    {
-        sint32 size = cd_decompress_backrefs(source, r_u32(0x800B67E8u));
-        xport_update_u32(0x800B67F0u, XPORT_MEMORY_UPDATE_ADD, (uint16)size);
-        xport_update_u32(0x800B67E8u, XPORT_MEMORY_UPDATE_ADD, (uint16)size);
-        result = size;
-    }
-
-    menu_fn_8006776c();
-    w_u8(0x800B95F8u + (uint32)(uint16)next, 0u);
-    w_u16(0x800B6800u, (uint16)(r_u16(0x800B6800u) + 1u));
-    global_fn_8006777c();
-    w_u16(0x800B6810u, (uint16)next);
-    return result;
-}
-
-sint32 cd_stop_read(void)
-{
-    FUNCTION_MARKER(0x8002CB38u, "MAIN.EXE");
-    CdControl(9u, 0, 0);
-    menu_fn_8006776c();
-    CdDataCallback(NULL);
-    CdReadyCallback(0);
-    global_fn_8006777c();
+fail:
+    free(src);
+    mesh_clear_archive(&decoded);
+    for (rec = 0; rec < 4; ++rec)
+        mesh_clear_model(&event_models[rec]);
+    for (player = 0; player < 2; ++player)
+        for (rec = 0; rec < 16; ++rec)
+            mesh_clear_boat_models(&models[player][rec]);
     return 0;
 }
 
-static uint32 cd_read_file_alloc_span(uint32 path, size_t *span_size)
+sint32 cd_load_course_assets(const RACE_CFG *cfg)
 {
-    size_t size;
-    size_t read_size;
-    uint32 destination;
-    sint32 refreshed_directory;
+    char filename[24];
+    const char *suffix;
+    const char *path;
+    const uint8 *data;
+    uint32 size;
+    sint32 course;
 
-    FUNCTION_MARKER(0x8002CB80u, "MAIN.EXE");
-    if (span_size)
-        *span_size = 0u;
-    cd_search_file(path, 0x800B6818u, 0x800B6814u);
-    refreshed_directory = cd_search_refreshed();
-    w_u32(0x800B6814u, 0u);
-    if (!cd_host_file_size(path, &size) || size > 0x7FFFFFFFu)
-        return 0u;
-    w_u32(0x800B67F8u, (uint32)size);
-    destination = game_alloc_arena_bytes((sint32)size);
-    if (!psx_addr(destination, size) || !cd_read_host_file(path, destination, size, &read_size, refreshed_directory ? 6u : 4u, 3u, refreshed_directory ? 3u : 1u, 3u, 0u, 0u, 0u) || read_size != size)
-        return 0u;
-    w_u32(0x800B67F0u, (uint32)size);
-    // MAIN.EXE:0x8002C5E4 and CD callbacks keep pointers separate from sector counts
-    w_u32(0x800B67F4u, (uint32)size);
-    w_u32(0x800B67E8u, destination + (uint32)size);
-    w_u16(0x800B67FCu, (uint16)((size + 2047u) / 2048u));
-    w_u16(0x800B6800u, r_u16(0x800B67FCu));
-    w_u16(0x800B6804u, r_u16(0x800B67FCu));
-    w_u32(0x800B67ECu, destination);
+    FUNCTION_MARKER(0x8002B664, "MAIN.EXE");
+    strcpy(cd_dir, "\\BOATS\\");
+    if (!cd_load_model_archive())
+        return 0;
+    if (cfg->mode == 8)
+    {
+        strcpy(cd_dir, "\\BONUS\\");
+        return cd_load_archive_assets(race_cfg.variant == 2 ? "VRAM1.IFF" : "VRAM0.IFF");
+    }
+    suffix = race_cfg.variant == 1 ? "DAY\\" : race_cfg.variant == 2 ? "NIGHT\\" : "MIRROR\\";
+    course = cfg->course;
+    if ((uint32)course >= 7)
+        exit(1);
+    strcpy(cd_dir, cd_course_dirs[course]);
+    if (course != 6)
+        strcat(cd_dir, suffix);
+    if (course == 6)
+    {
+        snprintf(filename, sizeof(filename), race_cfg.players == 1 ? "VRAM%d.IFF" : "VRAM%d_2P.IFF", (sint16)race_selection.resource);
+        cd_load_archive_assets(filename);
+        route_gen_init_fractal(cfg);
+    }
+    else
+    {
+        cd_load_archive_assets(race_cfg.players == 1 ? "VRAM.IFF" : "VRAM_2P.IFF");
+        data = cd_load_file_bytes("COURSE.GPH", &size);
+        if (!data)
+            return 0;
+        cd_publish_sections(data, size);
+        path = profile_selection.slot == 0 ? "EASY.JET" : profile_selection.slot == 1 ? "MED.JET" : "HARD.JET";
+        data = cd_load_file_bytes(path, &size);
+        if (!data || !cd_load_versioned_rec_archive(data, size, race_cfg.variant == 2))
+            return 0;
+    }
+    track_process_published_rec_flags();
+    return cfg->course == 6 ? pickup_update_racer_flags() : 6;
+}
+
+sint32 cd_init_drive(void)
+{
+    FUNCTION_MARKER(0x8002BA40, "MAIN.EXE");
+    return 1;
+}
+
+uint8 *cd_load_file_alloc(const char *path)
+{
+    char full_path[128];
+
+    FUNCTION_MARKER(0x8002BA60, "MAIN.EXE");
+    cd_build_path(full_path, path);
+    return cd_read_file_alloc_span(full_path, NULL);
+}
+
+const uint8 *cd_load_file_bytes(const char *path, uint32 *size)
+{
+    char full_path[128];
+
+    if (!size)
+        return NULL;
+    cd_build_path(full_path, path);
+    return cd_read_file_alloc_span(full_path, size);
+}
+
+static uint32 cd_read_file_buf(const char *path, void *dst, uint32 capacity)
+{
+    uint32 size;
+    uint32 read_size;
+
+    FUNCTION_MARKER(0x8002CD44, "MAIN.EXE");
+    if (!dst || !cd_host_file_size(path, &size) || size > capacity || !cd_read_host_file(path, dst, capacity, &read_size) || read_size != size)
+        return 0;
     cd_stop_read();
-    if (span_size)
-        *span_size = read_size;
-    return destination;
+    return size;
 }
 
-uint32 cd_read_file_alloc(uint32 path)
+uint32 cd_load_file_buf(const char *path, void *dst, uint32 capacity)
 {
-    return cd_read_file_alloc_span(path, NULL);
+    char full_path[128];
+
+    FUNCTION_MARKER(0x8002BA9C, "MAIN.EXE");
+    cd_build_path(full_path, path);
+    return cd_read_file_buf(full_path, dst, capacity);
 }
 
-uint32 cd_read_file_buf(uint32 path, uint32 buffer)
+static sint32 cd_upload_vram_image(const char *path, sint16 x, sint16 y, sint32 width, sint32 height)
 {
-    size_t size;
-    size_t read_size;
-    sint32 refreshed_directory;
+    uint32 size = width * height * 2u;
+    uint8 *buffer;
+    PSX_RECT rect;
 
-    FUNCTION_MARKER(0x8002CD44u, "MAIN.EXE");
-    cd_search_file(path, 0x800B6818u, 0x800B6814u);
-    refreshed_directory = cd_search_refreshed();
-    w_u32(0x800B6814u, 0u);
-    if (!cd_host_file_size(path, &size) || !psx_addr(buffer, size) || !cd_read_host_file(path, buffer, size, &read_size, refreshed_directory ? 3u : 6u, 3u, refreshed_directory ? 1u : 3u, 3u, refreshed_directory ? 0u : 3u, refreshed_directory ? 2u : 0u, 1u) || read_size != size)
-        return 0u;
-    w_u32(0x800B67F0u, (uint32)size);
-    // MAIN.EXE:0x8002C698 stores the caller buffer at GP+2A68, not GP+2A78
-    w_u32(0x800B67F4u, (uint32)size);
-    w_u32(0x800B67ECu, buffer);
-    w_u32(0x800B67E8u, buffer + (uint32)size);
-    w_u16(0x800B67FCu, (uint16)((size + 2047u) / 2048u));
-    w_u16(0x800B6800u, r_u16(0x800B67FCu));
-    w_u16(0x800B6804u, r_u16(0x800B67FCu));
-    cd_stop_read();
-    return (uint32)size;
-}
-
-sint32 cd_upload_vram_image(uint32 path, sint16 x, sint16 y, sint32 width, sint32 height)
-{
-    uint32 size = (uint32)width * (uint32)height * 2u;
-    uint32 buffer;
-    PSX_RECT rectangle;
-
-    FUNCTION_MARKER(0x8002CE6Cu, "MAIN.EXE");
-    buffer = game_alloc_arena_bytes((sint32)size);
-    cd_read_file_buf(path, buffer);
-    setRECT(&rectangle, x, y, width, height);
-    LoadImagePSX(&rectangle, (uint32 *)psx_addr(buffer, size));
+    FUNCTION_MARKER(0x8002CE6C, "MAIN.EXE");
+    buffer = (uint8 *)arena_alloc(size);
+    if (!buffer || cd_read_file_buf(path, buffer, size) != size)
+        return 0;
+    setRECT(&rect, x, y, width, height);
+    LoadImagePSX(&rect, (uint32 *)buffer);
     DrawSync(0);
     return cd_stop_read();
+}
+
+sint32 cd_load_tex(const char *path, sint16 x, sint16 y, sint32 width, sint32 height)
+{
+    char full_path[128];
+
+    FUNCTION_MARKER(0x8002BDA8, "MAIN.EXE");
+    arena_push();
+    cd_build_path(full_path, path);
+    cd_upload_vram_image(full_path, x, y, width, height);
+    return arena_pop();
 }
 
 void cd_reset_audio(void)
@@ -953,7 +488,7 @@ void cd_pause_audio(void)
 
 void cd_stop_audio(void)
 {
-    CdControl(8u, NULL, NULL);
+    CdControl(8, NULL, NULL);
     cd_audio.state = 0;
 }
 
@@ -962,20 +497,20 @@ void cd_set_audio_vol(uint16 vol)
     SpuCommonAttr attr = {0};
 
     attr.mask = SPU_COMMON_CDVOLL | SPU_COMMON_CDVOLR;
-    attr.cd.volume.left = (sint16)(uint16)(vol << 9);
+    attr.cd.volume.left = vol << 9;
     attr.cd.volume.right = attr.cd.volume.left;
     SpuSetCommonAttr(&attr);
 }
 
 void cd_handle_ready_cb(uint8 status, uint8 *response)
 {
-    FUNCTION_MARKER(0x80038950u, "MAIN.EXE");
+    FUNCTION_MARKER(0x80038950, "MAIN.EXE");
     if (status != CdlDataReady)
     {
         cd_audio.state = 0;
         return;
     }
-    if ((response[4] & 0x80u) == 0u)
+    if ((response[4] & 0x80u) == 0)
     {
         CdlLOC pos = {response[3], response[4], 0, 0};
 
@@ -992,10 +527,10 @@ sint32 cd_update_audio(sint32 trigger)
 {
     sint32 state;
     sint32 mode;
-    sint32 index;
+    sint32 idx;
     sint32 result;
 
-    FUNCTION_MARKER(0x800362ACu, "MAIN.EXE");
+    FUNCTION_MARKER(0x800362AC, "MAIN.EXE");
     state = cd_audio.state;
     mode = cd_audio.mode;
     result = 2;
@@ -1009,136 +544,40 @@ sint32 cd_update_audio(sint32 trigger)
         result = 5;
         if (state != 1)
             goto done;
-        result = CdControl(3u, NULL, NULL);
+        result = CdControl(3, NULL, NULL);
         if (result != 0)
             cd_audio.state = mode;
         goto done;
     }
-    index = race_cfg.mode == 5u ? 2 : (sint16)sound_options.tracks[sound_options.track_slot];
-    result = index < 2;
-    if (index < 2 || index >= cd_audio.tracks)
+    idx = race_cfg.mode == 5 ? 2 : (sint16)sound_options.tracks[sound_options.track_slot];
+    result = idx < 2;
+    if (idx < 2 || idx >= cd_audio.tracks)
         goto done;
     result = 0;
-    if (CdControl(3u, (uint8 *)&cd_audio.toc[index], NULL) == 0)
+    if (CdControl(3, (uint8 *)&cd_audio.toc[idx], NULL) == 0)
         goto done;
     cd_audio.state = 2;
-    cd_audio.end = CdPosToInt(&cd_audio.toc[index + 1]) - 150;
-    cd_audio.pos = CdPosToInt(&cd_audio.toc[index]);
+    cd_audio.end = CdPosToInt(&cd_audio.toc[idx + 1]) - 150;
+    cd_audio.pos = CdPosToInt(&cd_audio.toc[idx]);
     cd_set_audio_vol(sound_mix.music);
 done:
     return result;
-}
-
-sint32 cd_load_model_archive(void)
-{
-    uint8 *src = NULL;
-    const PLAYER_PROFILE *table;
-    size_t archive_size, read_size;
-    sint32 players = (sint32)race_cfg.players;
-    MESH_ARCHIVE decoded = {0};
-    MESH_BOAT_MODELS models[2][16] = {0};
-    MESH_MODEL event_models[4] = {0};
-    sint32 player;
-    sint32 record;
-
-    FUNCTION_MARKER(0x80042454u, "MAIN.EXE");
-    table = profile_current();
-    if (!xport_file_size("DATA/BOATS/MODELS.IFF", &archive_size) || archive_size == 0u)
-        goto fail;
-    src = malloc(archive_size);
-    if (!src || !xport_file_read("DATA/BOATS/MODELS.IFF", src, archive_size, &read_size) || read_size != archive_size || !mesh_decode_archive(src, archive_size, &decoded))
-        goto fail;
-    free(src);
-    src = NULL;
-    if (players < 1 || players > 2)
-        goto fail;
-    for (record = 15; record >= 0; --record)
-    {
-        const RACE_PARTICIPANT *participant = &race_participants[record];
-        uint32 kind = participant->mode;
-        sint32 model;
-        sint32 player;
-
-        if (kind < 2u)
-        {
-            if (participant->boat >= 9u)
-                goto fail;
-            model = vehicle_base_levels[participant->boat];
-        }
-        else if (kind < 4u)
-        {
-            uint8 row = participant->boat;
-
-            model = profile_get_table_byte(table, row, 0);
-        }
-        else
-            model = -1;
-        if (model <= 0)
-            continue;
-        for (player = 0; player < players; ++player)
-        {
-            if (!mesh_load_boat_models(&decoded, participant->boat, model, participant->variant, game_selection.flags, &models[player][record]))
-                goto fail;
-        }
-    }
-    if (race_cfg.mode == 8u)
-    {
-        if (decoded.count < 4u)
-            goto fail;
-        for (record = 0; record < 4; ++record)
-            if (!mesh_copy_model(&decoded.models[record], &event_models[record]))
-                goto fail;
-    }
-    mesh_clear_archive(&decoded);
-    for (record = 0; record < 4; ++record)
-    {
-        mesh_clear_model(&mesh_event_models[record]);
-        mesh_event_models[record] = event_models[record];
-    }
-    for (player = 0; player < 2; ++player)
-        for (record = 0; record < 16; ++record)
-        {
-            mesh_clear_boat_models(&mesh_boat_models[player][record]);
-            mesh_boat_models[player][record] = models[player][record];
-        }
-
-    return 1;
-fail:
-    free(src);
-    mesh_clear_archive(&decoded);
-    for (record = 0; record < 4; ++record)
-        mesh_clear_model(&event_models[record]);
-    for (player = 0; player < 2; ++player)
-        for (record = 0; record < 16; ++record)
-            mesh_clear_boat_models(&models[player][record]);
-    return 0;
 }
 
 sint32 cd_adjust_audio_volume(uint32 enabled)
 {
     SpuCommonAttr attr = {0};
 
-    FUNCTION_MARKER(0x8006343Cu, "MAIN.EXE");
-    if (enabled != 0u)
+    FUNCTION_MARKER(0x8006343C, "MAIN.EXE");
+    if (enabled != 0)
     {
         SpuGetCommonAttr(&attr);
-        attr.cd.volume.left = attr.cd.volume.left < 4097 ? 0 : (sint16)(attr.cd.volume.left - 4096);
-        attr.cd.volume.right = attr.cd.volume.right < 4097 ? 0 : (sint16)(attr.cd.volume.right - 4096);
+        attr.cd.volume.left = attr.cd.volume.left < 4097 ? 0 : (attr.cd.volume.left - 4096);
+        attr.cd.volume.right = attr.cd.volume.right < 4097 ? 0 : (attr.cd.volume.right - 4096);
     }
     attr.mask = SPU_COMMON_CDVOLL | SPU_COMMON_CDVOLR;
     SpuSetCommonAttr(&attr);
-    if (enabled != 0u && attr.cd.volume.left == 0 && attr.cd.volume.right == 0)
+    if (enabled != 0 && attr.cd.volume.left == 0 && attr.cd.volume.right == 0)
         return 2;
     return 0;
-}
-
-void cd_clear_data_cbs(void)
-{
-    FUNCTION_MARKER(0x8007328Cu, "MAIN.EXE");
-    menu_fn_8006776c();
-    CdDataCallback(0);
-    CdReadyCallback(0);
-    w_u8(r_u32(0x800A11DCu), 0u);
-    w_u8(r_u32(0x800A11E8u), 0u);
-    global_fn_8006777c();
 }

@@ -1,5 +1,5 @@
-#ifndef RR_CALLBACKS_H
-#define RR_CALLBACKS_H
+#ifndef CALLBACKS_H
+#define CALLBACKS_H
 
 #include "psx.h"
 
@@ -12,6 +12,7 @@ struct CB_NODE
     CB_NODE **prev;
     CB_FN fn;
     uint32 flags;
+
     union
     {
         uint32 idx;
@@ -34,10 +35,9 @@ void cb_dispatch_list(void);
 void cb_clear_active_list(void);
 CB_NODE *cb_alloc_node(CB_FN fn);
 void cb_unlink_active_node(CB_NODE *node);
-sint32 cb_vblank_timer(void);
+
 sint32 cb_init_vblank_timer(void);
 sint32 cb_wait_vblank(void);
 sint32 cb_sync_video_field(void);
 
-
-#endif /* RR_CALLBACKS_H */
+#endif /* CALLBACKS_H */
