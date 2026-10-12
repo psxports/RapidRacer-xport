@@ -20,19 +20,19 @@
   <tbody>
     <tr>
       <td align="right"><strong>decomp:</strong></td>
-      <td><img src="https://psxports.pages.dev/progress?repo=RapidRacer-xport&amp;label=decomp" alt="Decompilation progress" width="200" height="20"></td>
+      <td><a href="https://github.com/psxports/RapidRacer-xport/issues?q=is%3Aissue%20label%3Adecomp"><img src="https://psxports.pages.dev/progress?repo=RapidRacer-xport&amp;label=decomp" alt="Decompilation progress" width="200" height="20"></a></td>
     </tr>
     <tr>
       <td align="right"><strong>refactor:</strong></td>
-      <td><img src="https://psxports.pages.dev/progress?repo=RapidRacer-xport&amp;label=refactor" alt="Refactoring progress" width="200" height="20"></td>
+      <td><a href="https://github.com/psxports/RapidRacer-xport/issues?q=is%3Aissue%20label%3Arefactor"><img src="https://psxports.pages.dev/progress?repo=RapidRacer-xport&amp;label=refactor" alt="Refactoring progress" width="200" height="20"></a></td>
     </tr>
     <tr>
       <td align="right"><strong>enhance:</strong></td>
-      <td><img src="https://psxports.pages.dev/progress?repo=RapidRacer-xport&amp;label=enhance" alt="Enhancement progress" width="200" height="20"></td>
+      <td><a href="https://github.com/psxports/RapidRacer-xport/issues?q=is%3Aissue%20label%3Aenhance"><img src="https://psxports.pages.dev/progress?repo=RapidRacer-xport&amp;label=enhance" alt="Enhancement progress" width="200" height="20"></a></td>
     </tr>
     <tr>
       <td align="right"><strong>remaster:</strong></td>
-      <td><img src="https://psxports.pages.dev/progress?repo=RapidRacer-xport&amp;label=remaster" alt="Remaster progress" width="200" height="20"></td>
+      <td><a href="https://github.com/psxports/RapidRacer-xport/issues?q=is%3Aissue%20label%3Aremaster"><img src="https://psxports.pages.dev/progress?repo=RapidRacer-xport&amp;label=remaster" alt="Remaster progress" width="200" height="20"></a></td>
     </tr>
   </tbody>
 </table>
