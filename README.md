@@ -23,6 +23,10 @@
       <td><img src="https://psxports.pages.dev/progress?repo=RapidRacer-xport&amp;label=decomp" alt="Decompilation progress" width="200" height="20"></td>
     </tr>
     <tr>
+      <td align="right"><strong>refactor:</strong></td>
+      <td><img src="https://psxports.pages.dev/progress?repo=RapidRacer-xport&amp;label=refactor" alt="Refactoring progress" width="200" height="20"></td>
+    </tr>
+    <tr>
       <td align="right"><strong>enhance:</strong></td>
       <td><img src="https://psxports.pages.dev/progress?repo=RapidRacer-xport&amp;label=enhance" alt="Enhancement progress" width="200" height="20"></td>
     </tr>
