@@ -89,20 +89,29 @@ static HD_MESH **hd_mesh_next;
 
 static const char hd_fragment[] = "uint wordAt(ivec2 p){uvec4 c=uvec4(round(texelFetch(uTex,ivec2(p.x&1023,p.y&511),0)*vec4(31.0,31.0,31.0,1.0)));"
                                   "return c.r|(c.g<<5)|(c.b<<10)|(c.a<<15);}\n"
+                                  "uint texWord(ivec4 page,ivec4 rect,ivec2 p){"
+                                  "p=(rect.w&1)!=0?((p%rect.z)+rect.z)%rect.z:clamp(p,ivec2(0),ivec2(rect.z-1));p+=rect.xy;"
+                                  "if(page.z==2)return wordAt(page.xy+p);int shift=2-page.z;"
+                                  "uint bits=wordAt(page.xy+ivec2(p.x>>shift,p.y));"
+                                  "uint idx=page.z==0?((bits>>uint((p.x&3)*4))&15u):((bits>>uint((p.x&1)*8))&255u);"
+                                  "return wordAt(ivec2((page.w&63)*16+int(idx),page.w>>6));}\n"
+                                  "vec4 texColor(uint w,int flags){bool stp=(w&32768u)!=0u;"
+                                  "if(w==0u||((flags&2)!=0&&stp)||((flags&4)!=0&&!stp))return vec4(0.0);"
+                                  "uvec3 c=uvec3(w&31u,(w>>5)&31u,(w>>10)&31u);return vec4(vec3((c<<3)|(c>>2))/255.0,1.0);}\n"
                                   "void main(){if(uTextured==0){outColor=vColor;return;}"
                                   "ivec4 page=ivec4(uParams[0]);ivec4 rect=ivec4(uParams[1]);"
                                   "vec2 uv=(rect.w&1)!=0?fract(vUV):clamp(vUV,vec2(0.0),vec2(0.999999));"
-                                  "ivec2 p=ivec2(floor(uv*float(rect.z)))+rect.xy;uint w;"
-                                  "if(page.z==2){w=wordAt(page.xy+p);}else{int shift=2-page.z;"
-                                  "uint bits=wordAt(page.xy+ivec2(p.x>>shift,p.y));"
-                                  "uint idx=page.z==0?((bits>>uint((p.x&3)*4))&15u):((bits>>uint((p.x&1)*8))&255u);"
-                                  "w=wordAt(ivec2((page.w&63)*16+int(idx),page.w>>6));}"
-                                  "if(w==0u)discard;bool stp=(w&32768u)!=0u;"
-                                  "if(((rect.w&2)!=0&&stp)||((rect.w&4)!=0&&!stp))discard;"
+                                  "vec4 color=texColor(texWord(page,rect,ivec2(floor(uv*float(rect.z)))),rect.w);"
+                                  "if(color.a==0.0)discard;"
+                                  "if((rect.w&32)!=0){vec2 p=uv*float(rect.z)-0.5;ivec2 base=ivec2(floor(p));vec2 f=fract(p);"
+                                  "vec4 a=texColor(texWord(page,rect,base),rect.w);"
+                                  "vec4 b=texColor(texWord(page,rect,base+ivec2(1,0)),rect.w);"
+                                  "vec4 c=texColor(texWord(page,rect,base+ivec2(0,1)),rect.w);"
+                                  "vec4 d=texColor(texWord(page,rect,base+ivec2(1,1)),rect.w);"
+                                  "color=mix(mix(a,b,f.x),mix(c,d,f.x),f.y);"
+                                  "if(color.a==0.0)discard;color.rgb/=color.a;}"
                                   "float alpha=(rect.w&8)!=0?0.5:(rect.w&16)!=0?0.25:1.0;"
-                                  "uvec3 c=uvec3(w&31u,(w>>5)&31u,(w>>10)&31u);"
-                                  "vec3 rgb=vec3((c<<3)|(c>>2))/255.0;"
-                                  "outColor=vec4(rgb,alpha)*vColor;}\n";
+                                  "outColor=vec4(color.rgb,alpha)*vColor;}\n";
 
 static VID_GEOMETRY *hd_mesh(uint32 count)
 {
@@ -427,7 +436,8 @@ static void hd_polygon(const CAMERA *camera, const MATRIXF *model, const VEC3F *
     uint32 view = (uint32)(camera - camera_views);
     sint32 semi = depth != HD_DEPTH_WATER && (colors[0] & 0x02000000) != 0;
     HD_MATERIAL *transparent;
-    HD_MATERIAL *entry = hd_surface(textured, tpage, clut, semi, depth, 0, 0, 256, 0, &transparent);
+    uint32 filter = depth != HD_DEPTH_NONE ? 32 : 0;
+    HD_MATERIAL *entry = hd_surface(textured, tpage, clut, semi, depth, 0, 0, 256, filter, &transparent);
     VID_VERTEX *dst = hd_alloc(entry, view, count == 4 ? 6 : 3);
     uint32 triangle_count = count == 4 ? 6 : 3;
     for (uint32 idx = 0; idx < triangle_count; ++idx)
@@ -465,7 +475,7 @@ static void hd_polygon_asset(const CAMERA *camera, const MATRIXF *model, const S
 static void hd_sky_quad(const RACE_VIEW *view, const VEC3F points[4], const float uv[4][2], const uint32 colors[4], uint32 textured, float focal)
 {
     static const uint8 order[6] = {0, 1, 2, 2, 1, 3};
-    HD_MATERIAL *entry = hd_material(textured, textured ? getTPage(0, 0, 896, 256) : 0, textured ? getClut(896, 511) : 0, VID_BLEND_NONE, 0);
+    HD_MATERIAL *entry = hd_material_region(textured, textured ? getTPage(0, 0, 896, 256) : 0, textured ? getClut(896, 511) : 0, VID_BLEND_NONE, HD_DEPTH_NONE, 0, 0, 256, textured ? 32 : 0);
     VID_GEOMETRY *mesh = hd_mesh(6);
     VID_VERTEX *vertices;
     if (!mesh)
@@ -541,10 +551,11 @@ static void hd_horizon(const RACE_VIEW *view, float focal)
                 uint32 strip = level - strip_start;
                 uint8 top = (uint8)(-2 - 32 * (strip + 1) + (strip + 1 == cfg->strips));
                 uint8 bottom = (uint8)(-2 - 32 * strip);
-                uv[0][0] = uv[2][0] = u0 / 256.0f;
-                uv[1][0] = uv[3][0] = u1 / 256.0f;
-                uv[0][1] = uv[1][1] = top / 256.0f;
-                uv[2][1] = uv[3][1] = bottom / 256.0f;
+                // Keep the bilinear footprint inside the authored horizon strip
+                uv[0][0] = uv[2][0] = (u0 + 0.5f) / 256.0f;
+                uv[1][0] = uv[3][0] = (u1 + 0.5f) / 256.0f;
+                uv[0][1] = uv[1][1] = (top + 0.5f) / 256.0f;
+                uv[2][1] = uv[3][1] = (bottom + 0.5f) / 256.0f;
                 colors[0] = colors[1] = colors[2] = colors[3] = 0xffffff;
             }
             else if (cfg->gradient && level + 2 == count)
@@ -1889,7 +1900,7 @@ static void hd_sun_quad(const RACE_VIEW *view, uint32 idx, const float center[2]
     float half_x = 2 * width * ref_aspect / (disp_state.view_width * aspect);
     float half_y = 2 * (race_cfg.players == 2 ? width * 0.5f : width) / disp_state.view_height;
     HD_MATERIAL *transparent;
-    HD_MATERIAL *entry = hd_surface(1, tex.tpage, tex.clut, 1, HD_DEPTH_NONE, 0, 0, 256, 0, &transparent);
+    HD_MATERIAL *entry = hd_surface(1, tex.tpage, tex.clut, 1, HD_DEPTH_NONE, 0, 0, 256, 32, &transparent);
     VID_GEOMETRY *mesh = hd_mesh(6);
     VID_VERTEX *vertices = vid_mesh_data(mesh);
     for (uint32 vertex = 0; vertex < 6; ++vertex)

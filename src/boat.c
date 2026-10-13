@@ -293,6 +293,7 @@ static sint32 boat_init(BOAT *boat, sint16 seg_idx, sint16 entry, sint32 driver,
     boat->control.mode = 0;
     boat->control.recovery_tick = 0;
     boat->control.boost_tick = 0;
+    boat->control.steering_frac = 0;
     boat->control.driver = driver;
     boat->control.roll = 0;
     boat->control.pitch_target = 0;
@@ -533,7 +534,7 @@ sint32 boat_damp_vel(BOAT *boat)
     return velocity->vector.z;
 }
 
-sint32 boat_input(BOAT *boat, const RACE_VIEW *context)
+static sint32 boat_input_update(BOAT *boat, const RACE_VIEW *context, sint32 half_step)
 {
     const BOAT_SETUP *tuning = &boat->setup;
     PAD *pad = input_for_context(context);
@@ -630,8 +631,19 @@ sint32 boat_input(BOAT *boat, const RACE_VIEW *context)
                 break;
         }
     }
+    if (half_step)
+    {
+        uint32 step = steering_step + boat->control.steering_frac;
+        steering_step = step / 2;
+        boat->control.steering_frac = step & 1;
+    }
+    else
+        boat->control.steering_frac = 0;
     if (mode == 4 && target_steering == 0)
-        boat->control.steering = (sint32)(30u * boat->control.steering) >> 5;
+    {
+        // Q16 square root of the original 30/32 damping
+        boat->control.steering = half_step ? (sint32)(((sint64)63455 * boat->control.steering) >> 16) : (sint32)(30u * boat->control.steering) >> 5;
+    }
     else
     {
         sint32 val = boat->control.steering;
@@ -673,12 +685,14 @@ sint32 boat_input(BOAT *boat, const RACE_VIEW *context)
     if (target_speed < boat->control.throttle)
     {
         boat->control.pitch_target = 0;
-        result = 25 * boat->control.throttle / 26;
+        // Q16 square root of the original 25/26 damping
+        result = half_step ? (sint32)((sint64)64263 * boat->control.throttle / 65536) : 25 * boat->control.throttle / 26;
         boat->control.throttle = result;
     }
     else
     {
-        sint32 next = boat->control.throttle + 20 + 4 * tuning->engine_class;
+        sint32 step = 20 + 4 * tuning->engine_class;
+        sint32 next = boat->control.throttle + (half_step ? step / 2 : step);
         sint32 under_limit = 1;
 
         if (next > target_speed)
@@ -703,6 +717,16 @@ sint32 boat_input(BOAT *boat, const RACE_VIEW *context)
         result = minimum;
     }
     return result;
+}
+
+sint32 boat_input(BOAT *boat, const RACE_VIEW *context)
+{
+    return boat_input_update(boat, context, 0);
+}
+
+sint32 hd_boat_input(BOAT *boat, const RACE_VIEW *context)
+{
+    return boat_input_update(boat, context, 1);
 }
 
 sint32 boat_resolve_col(BOAT *boat0, BOAT *boat1, const SVECTOR *n_vector, const VECTOR *contact_point, sint32 penetration)

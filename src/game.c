@@ -259,19 +259,31 @@ static sint32 race_loop_before_frame(RACE_LOOP *state)
     // Host quit boundary for original loop at 0x800104AC
     if (xport_isquit())
         return -1;
-    if (cfg->players == 1 && game_timing.base_rate == game_timing.frame_rate)
+    game_timing.frame_rate = cfg->players == 2 && !xport_hd ? game_timing.base_rate / 2 : game_timing.base_rate;
+    if (game_timing.base_rate == game_timing.frame_rate)
     {
         game_timing.ticks = game_timing.ticks + 2u;
         if (game_timing.ticks == 65022)
             game_timing.ticks = 0;
         buffer = 1 - disp_state.scene_buffer;
         disp_state.scene_buffer = buffer;
-        if (buffer != 0)
+        if (buffer != 0 || xport_hd)
         {
             input_update_states();
-            if (state->warmup == 0 && menu_pause_run(view0) != 0)
+            if (state->warmup == 0 && (menu_pause_run(view0) != 0 || (cfg->players == 2 && menu_pause_run(view1) != 0)))
                 return 0;
-            boat_input(boat_player(view0), view0);
+            if (xport_hd)
+            {
+                hd_boat_input(boat_player(view0), view0);
+                if (cfg->players == 2)
+                    hd_boat_input(boat_player(view1), view1);
+            }
+            else
+            {
+                boat_input(boat_player(view0), view0);
+                if (cfg->players == 2)
+                    boat_input(boat_player(view1), view1);
+            }
         }
         dispatch_argument = buffer;
     }
@@ -408,7 +420,7 @@ static void race_init_runtime(const RACE_VIEW *view0, const RACE_VIEW *view1, co
     uint8 parameter = 5;
 
     FUNCTION_MARKER(0x80010DDC, "MAIN.EXE");
-    game_timing.frame_rate = race_cfg.players == 2 ? ((sint32)game_timing.base_rate / 2) : game_timing.base_rate;
+    game_timing.frame_rate = cfg->players == 2 && !xport_hd ? game_timing.base_rate / 2 : game_timing.base_rate;
     race_paused = 0;
     half_period = (sint32)game_timing.base_rate / 2;
     menu_pause_reset();
@@ -620,7 +632,7 @@ sint32 game_frame_og(void)
 
 static sint32 game_frame_hd(void)
 {
-    if (race_cfg.players == 1 && game_timing.base_rate == game_timing.frame_rate)
+    if (game_timing.base_rate == game_timing.frame_rate)
         cb_sync_video_field();
     else
         VSync(2);

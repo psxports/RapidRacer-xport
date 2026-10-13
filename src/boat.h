@@ -42,6 +42,7 @@ typedef struct
     sint32 pitch_target;
     sint32 pitch;
     sint32 steering;
+    uint32 steering_frac;
     sint32 roll_input;
     SVECTOR force_arm;
     SVECTOR pitch_axis;
@@ -196,6 +197,7 @@ BOAT *boat_player(const struct RACE_VIEW *context);
 sint32 boat_init_slots(void);
 sint32 boat_damp_vel(BOAT *boat);
 sint32 boat_input(BOAT *boat, const struct RACE_VIEW *context);
+sint32 hd_boat_input(BOAT *boat, const struct RACE_VIEW *context);
 sint32 boat_resolve_col(BOAT *boat0, BOAT *boat1, const SVECTOR *n, const VECTOR *point, sint32 penetration);
 
 // Returns the horizontal length used by control forces
