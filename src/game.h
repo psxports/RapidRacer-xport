@@ -94,6 +94,8 @@ sint32 game_update_racer_modes(const RACE_VIEW *view);
 void game_start(void);
 
 sint32 game_render_frame(void);
+sint32 game_frame_og(void);
+sint32 game_draw_og_frame(void);
 
 uint32 xport_libsnd_sequence_call(uint32 target, uint32 argc, const uint32 *args);
 void xport_main(void);

@@ -10,4 +10,5 @@ void horizon_select_showcase(uint32 buffer, uint32 view);
 void horizon_render_showcase(uint32 *ot, const CAMERA *view, uint32 mode, uint32 layout, uint32 players);
 uint32 *horizon_ot_entry(uint32 idx);
 void horizon_add_backdrop(uint32 *ot);
+sint16 horizon_showcase_radius(uint32 idx);
 #endif /* HORIZON_H */

@@ -44,6 +44,13 @@ static HORIZON_FRAME *horizon_frame;
 // Twelve radial samples from MAIN.EXE 80080EA8..80080EBF
 static const sint16 horizon_radii[HORIZON_COLS] = {4096, 3072, 2048, 1280, 900, 668, 512, 324, 206, 158, 76, 32};
 
+sint16 horizon_showcase_radius(uint32 idx)
+{
+    if (idx >= HORIZON_COLS)
+        abort();
+    return horizon_radii[idx];
+}
+
 static void horizon_init(uint32 views)
 {
     if (views == 0 || views > HORIZON_VIEWS)

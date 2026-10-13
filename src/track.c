@@ -226,7 +226,6 @@ sint32 track_render_player(const RACE_VIEW *context, sint32 buffer)
     uint32 *track_ot = render_scene_ot(frame);
     DR_MODE *ui_modes = render_ui_modes(frame);
     MATRIX rotation;
-    sint32 speed;
 
     FUNCTION_MARKER(0x80010978, "MAIN.EXE");
     if (render_capture_enabled != 0)
@@ -254,13 +253,7 @@ sint32 track_render_player(const RACE_VIEW *context, sint32 buffer)
         // Original root uses the link in entry 100, which points to entry 99
         AddPrims(chain, &object_ot[99], object_ot);
     }
-    speed = render_proj_speed[view - camera_views];
-    sint32 target_speed = (sint32)(3u * boat_player(context)->velocity.speed) / 256;
-    speed = speed - (speed - target_speed >> 5);
-    if (speed > 130)
-        speed = 130;
-    render_proj_speed[view - camera_views] = speed;
-    render_set_proj_dist(race_cfg.players == 2 ? 200u : game_timing.base_rate == game_timing.frame_rate ? 290u - speed : 290u);
+    render_set_proj_dist(render_update_proj(context));
     mesh_render_racer_model(context, buffer);
     if (race_cfg.mode == 8)
     {

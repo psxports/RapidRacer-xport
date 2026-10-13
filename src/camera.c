@@ -7,6 +7,7 @@
 #include "render.h"
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 typedef struct
 {
@@ -592,6 +593,205 @@ static sint32 camera_classify_env_dir(CAMERA *state)
     return dir;
 }
 
+static void hd_camera_edges(VEC3F *pos, const BOAT *boat, float edge[2])
+{
+    const ROUTE_SEGMENT *seg = boat->contacts.points[0].seg;
+    const ROUTE_SEGMENT *prev;
+    const uint8 *cmd;
+    const ROUTE_VERTEX *vtx;
+    const ROUTE_VERTEX *v0 = NULL;
+    const ROUTE_VERTEX *v1 = NULL;
+    sint32 phase = 1;
+    sint32 idx;
+
+    prev = seg->prev.seg->prev.seg;
+    cmd = prev->commands;
+    idx = prev->join[0];
+    vtx = &prev->vertices[idx];
+    for (idx = 0; idx < 14; ++idx, ++cmd)
+    {
+        uint8 flags = *cmd;
+        uint8 type;
+
+        if ((flags & 0x0Cu) == 0x0C)
+        {
+            if (phase == 2)
+                v1 = vtx;
+            break;
+        }
+        type = flags & 3u;
+        if (type != 0)
+        {
+            if (phase == 2)
+            {
+                v1 = vtx;
+                phase = 1;
+            }
+            if (type == 2)
+                continue;
+        }
+        else if (phase == 1)
+        {
+            phase = 2;
+            if (!v0)
+                v0 = vtx;
+        }
+        ++vtx;
+    }
+    if (v0 && v1 && v0 != v1)
+    {
+        float dx = 16.0f * (v1->pos[0] - v0->pos[0]);
+        float dz = 16.0f * (v1->pos[2] - v0->pos[2]);
+        float len = sqrtf(dx * dx + dz * dz);
+        if (len == 0)
+            return;
+        float nx = dx / len, nz = dz / len;
+        float cx = 8.0f * (v0->pos[0] + v1->pos[0]) + prev->origin[0];
+        float cz = 8.0f * (v0->pos[2] + v1->pos[2]) + prev->origin[2];
+        float distance = nx * (-pos->x - cx) + nz * (-pos->z - cz);
+        float half = len * 0.5f;
+        float correction = distance > half ? distance - half : distance < -half ? distance + half : 0;
+        edge[0] += (nx * correction - edge[0]) * (1.0f / 16);
+        edge[1] += (nz * correction - edge[1]) * (1.0f / 16);
+        pos->x += edge[0];
+        pos->z += edge[1];
+    }
+}
+
+void hd_camera_sync(const CAMERA *camera, HD_CAMERA *state)
+{
+    for (uint32 axis = 0; axis < 3; ++axis)
+        state->pos.v[axis] = (float)camera->pos[axis];
+    state->distance = (float)camera->distance;
+    for (uint32 axis = 0; axis < 2; ++axis)
+        state->edge[axis] = (float)camera->edge_offset[axis];
+    state->mode = camera->mode;
+    state->ready = 1;
+}
+
+void hd_camera_update(const CAMERA *camera, const BOAT *boat, const MATRIXF *pose, HD_CAMERA *state)
+{
+    if (!state->ready || state->mode != camera->mode)
+        hd_camera_sync(camera, state);
+    if (camera->mode == 3 || camera->mode == 7)
+    {
+        const CAMERA_SETTINGS *settings = &camera_settings[camera->mode == 3 ? 3 : 4];
+        VEC3F target = state->pos;
+        float vertical = -target.y - pose->t[1] - settings->height;
+        float offset = (boat->contacts.points[3].height + boat->contacts.points[4].height) * 0.5f;
+        vertical -= fmaxf(0, offset);
+        float factor = pose->m[1][2];
+        float delta = settings->follow_offset - state->distance;
+        state->distance += (delta + (factor > 0 ? settings->follow_offset * factor : 0)) * 0.25f;
+        if (factor <= 0)
+            vertical += factor * state->distance;
+        target.x = pose->m[0][2] * state->distance - pose->t[0];
+        target.z = pose->m[2][2] * state->distance - pose->t[2];
+        target.y += vertical * (vertical <= 0 ? 0.25f : 0.125f);
+        if (camera->mode == 7)
+        {
+            float remaining = (float)camera_attract.phase;
+            if (remaining > 0)
+                for (uint32 axis = 0; axis < 3; ++axis)
+                    state->pos.v[axis] += (target.v[axis] - state->pos.v[axis]) / remaining;
+        }
+        else
+        {
+            state->pos = target;
+            if (race_cfg.mode != 8)
+                hd_camera_edges(&state->pos, boat, state->edge);
+        }
+    }
+    else if (camera->mode == 6)
+    {
+        for (uint32 axis = 0; axis < 3; ++axis)
+            state->pos.v[axis] = (float)track_start->pos[axis];
+    }
+    else if (camera->mode == 4)
+    {
+        float scale = (float)(1u << (camera_attract.scale & 31));
+        for (uint32 axis = 0; axis < 3; ++axis)
+            state->pos.v[axis] = -(float)camera_attract.pos[axis] - camera_attract.cursor * (float)camera_attract.dir[axis] / scale;
+        state->pos.y -= camera_settings[5].height;
+    }
+}
+
+static void hd_camera_target(const VEC3F *pos, const MATRIXF *pose, const CAMERA_SETTINGS *settings, MATRIXF *rotation)
+{
+    float x = -pos->x - pose->t[0];
+    float y = -pos->y - pose->t[1] - settings->height + settings->target_height;
+    float z = -pos->z - pose->t[2];
+    float distance = fmaxf(200, sqrtf(x * x + z * z));
+    VECTORF angles = {settings->pitch * RAD12 - atan2f(y, distance), atan2f(z, x) + 1.57079632679f, 0};
+    RotMatrixf(&angles, rotation);
+}
+
+void hd_camera_matrix(const CAMERA *camera, const BOAT *boat, const MATRIXF *pose, const HD_CAMERA *state, MATRIXF *rotation, VEC3F *pos)
+{
+    float distance = (boat->contacts.points[3].height + boat->contacts.points[4].height + boat->contacts.points[0].height + boat->contacts.points[1].height) * 0.25f;
+    IdentityMatrixf(rotation);
+    for (uint32 axis = 0; axis < 3; ++axis)
+        pos->v[axis] = state && state->ready ? state->pos.v[axis] : (float)camera->pos[axis];
+    if (camera->mode == 6)
+    {
+        VECTORF angles = {track_start->angles[0] * RAD12, track_start->angles[1] * RAD12, track_start->angles[2] * RAD12};
+        RotMatrixf(&angles, rotation);
+    }
+    else if (camera->mode == 1)
+    {
+        TransposeMatrixf(pose, rotation);
+        pos->x = -pose->t[0];
+        pos->y = -pose->t[1] - 150;
+        pos->z = -pose->t[2];
+        if (distance >= 71)
+            pos->y += 70 - distance;
+        RotMatrixXf(-150 * RAD12, rotation);
+    }
+    else if (camera->mode == 2)
+    {
+        const CAMERA_SETTINGS *settings = &camera_settings[race_cfg.players == 2 && race_cfg.layout == 2 ? 2 : 1];
+        VECTORF up = {pose->m[0][1], pose->m[1][1] + 2, pose->m[2][1]};
+        VECTORF forward = {pose->m[0][2], pose->m[1][2], pose->m[2][2]};
+        VECTORF right;
+        MATRIXF basis;
+        NormalizeVectorf(&up, &up);
+        OuterProductf(&up, &forward, &right);
+        NormalizeVectorf(&right, &right);
+        OuterProductf(&forward, &right, &up);
+        IdentityMatrixf(&basis);
+        const float r[3] = {right.vx, right.vy, right.vz};
+        const float u[3] = {up.vx, up.vy, up.vz};
+        const float f[3] = {forward.vx, forward.vy, forward.vz};
+        for (uint32 axis = 0; axis < 3; ++axis)
+        {
+            basis.m[axis][0] = r[axis];
+            basis.m[axis][1] = u[axis];
+            basis.m[axis][2] = f[axis];
+            pos->v[axis] = f[axis] * settings->follow_offset - pose->t[axis] - u[axis] * settings->up_offset;
+        }
+        TransposeMatrixf(&basis, rotation);
+        RotMatrixXf(-150 * RAD12, rotation);
+        if (distance >= 71)
+            pos->y += 70 - distance;
+    }
+    else if (camera->mode == 5)
+    {
+        float phase = (float)camera->orbit_phase;
+        float angle = atan2f(pose->m[0][2], pose->m[2][2]) + 3.14159265359f + phase * RAD12;
+        float radius = ((phase >= 2049 ? 4096 - phase : phase) * 0.5f + 400) * 0.25f;
+        pos->x = -pose->t[0] - sinf(angle) * radius;
+        pos->y = -pose->t[1] - 200;
+        pos->z = -pose->t[2] - cosf(angle) * radius;
+        hd_camera_target(pos, pose, &camera_settings[6], rotation);
+    }
+    else if (camera->mode == 3 || camera->mode == 7)
+        hd_camera_target(pos, pose, &camera_settings[camera->mode == 3 ? 3 : 4], rotation);
+    else if (camera->mode == 4)
+        hd_camera_target(pos, pose, &camera_settings[6], rotation);
+    for (uint32 axis = 0; axis < 3; ++axis)
+        rotation->m[1][axis] *= race_cfg.players == 2 ? -1840.0f / 4096 : -5120.0f / 4096;
+}
+
 sint32 camera_update(CAMERA *camera, BOAT *boat)
 {
     const ROUTE_SEGMENT *contact = boat->contacts.points[0].seg;
@@ -794,7 +994,7 @@ sint32 camera_update(CAMERA *camera, BOAT *boat)
     return 0;
 }
 
-void camera_config_lighting(const BOAT *boat, const MATRIX *input)
+void camera_get_lighting(const BOAT *boat, const MATRIX *input, MATRIX *light_matrix, MATRIX *color_matrix)
 {
     const ROUTE_SEGMENT *seg = boat->contacts.points[0].seg;
     RENDER_LIGHTING *lighting;
@@ -802,7 +1002,6 @@ void camera_config_lighting(const BOAT *boat, const MATRIX *input)
     MATRIX basis = *input;
     sint32 vector;
 
-    FUNCTION_MARKER(0x8002AD88, "MAIN.EXE");
     lighting = render_lighting(seg->lighting);
     for (vector = 0; vector < 3; ++vector)
     {
@@ -845,9 +1044,18 @@ void camera_config_lighting(const BOAT *boat, const MATRIX *input)
         local.m[vector][2] = z;
     }
     MulMatrix(&local, &basis);
-    SetLightMatrix(&local);
-    SetColorMatrix(&lighting->color);
-    SetBackColor(lighting->color.t[0], lighting->color.t[1], lighting->color.t[2]);
+    *light_matrix = local;
+    *color_matrix = lighting->color;
+}
+
+void camera_config_lighting(const BOAT *boat, const MATRIX *input)
+{
+    MATRIX light, color;
+    FUNCTION_MARKER(0x8002AD88, "MAIN.EXE");
+    camera_get_lighting(boat, input, &light, &color);
+    SetLightMatrix(&light);
+    SetColorMatrix(&color);
+    SetBackColor(color.t[0], color.t[1], color.t[2]);
 }
 
 void camera_bias_matrix(const CAMERA *camera, const MATRIX *src, sint32 unbiased)

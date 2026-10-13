@@ -1,5 +1,7 @@
 #include "menu_pause.h"
 #include "hud.h"
+#include "disp.h"
+#include "hd.h"
 #include "game.h"
 #include "menu.h"
 #include "race.h"
@@ -882,6 +884,95 @@ sint32 hud_render(const RACE_VIEW *state, uint32 *ot, sint32 result)
     if (mode == 3 || mode == 4 || mode == 8 || mode == 9)
         hud_submit_active_recs(hud_state.prims, ot);
     return (sint16)result;
+}
+
+static void hd_hud_sprite(const RACE_VIEW *view, sint32 idx, const HUD_PRIM *prim)
+{
+    const SPRT *sprite = &prim->spr;
+    float ax = 0.5f, ay = 0;
+    if (idx < hud_state.hud_count)
+    {
+        if (idx < 10)
+        {
+            ax = 0;
+            ay = 1;
+        }
+        else if (idx == 10)
+            ax = race_cfg.players == 2 ? 0 : 1;
+        else if (idx == 11)
+            ax = 0;
+        else if (idx >= 16)
+        {
+            ax = 1;
+            ay = 1;
+        }
+        hd_draw_hud_sprite(view, sprite->p[0].xy.x, sprite->p[0].xy.y, sprite->w, sprite->h, sprite->p[0].uv.u, sprite->p[0].uv.v, prim->mode.code[0] & 0x1ff, sprite->p[0].attr, sprite->rgbc.rgbc, ax, ay);
+    }
+    else
+        hd_draw_sprite(view, sprite->p[0].xy.x, sprite->p[0].xy.y, sprite->w, sprite->h, sprite->p[0].uv.u, sprite->p[0].uv.v, prim->mode.code[0] & 0x1ff, sprite->p[0].attr, sprite->rgbc.rgbc);
+}
+
+static void hd_hud_text(const RACE_VIEW *view)
+{
+    for (sint32 idx = 0; idx < hud_state.desc_count; ++idx)
+    {
+        const HUD_DESC *desc = &hud_state.descs[idx];
+        float advance = 0, x, ax = 0.5f, ay = 0;
+        sint32 centered = race_cfg.players == 2 ? idx == 0 || idx >= 4 : idx == 0 || (idx >= 8 && idx <= 10) || idx >= 16;
+        if (desc->visible != 1)
+            continue;
+        for (const char *text = desc->text; *text; ++text)
+        {
+            sint32 glyph = text_find_char_idx(text, desc->font->chars);
+            if ((uint32)glyph >= desc->font->count)
+                abort();
+            advance += desc->font->metrics[glyph].w - 2;
+        }
+        if (!centered)
+            ax = desc->x < disp_state.view_width * 0.5f ? 0 : 1;
+        if (race_cfg.players != 2 && idx >= 18)
+            ay = 1;
+        x = desc->x - (desc->align == 0 ? advance * 0.5f : desc->align == 1 ? 0 : advance);
+        for (const char *text = desc->text; *text; ++text)
+        {
+            const HUD_METRIC *metric = &desc->font->metrics[text_find_char_idx(text, desc->font->chars)];
+            hd_draw_hud_sprite(view, x, desc->y, metric->w, metric->h, desc->shape->p[0].uv.u + metric->u, desc->shape->p[0].uv.v + metric->v, (uint16)(desc->mode->code[0] & 0x1ff), desc->clut, desc->shape->rgbc.rgbc, ax, ay);
+            x += metric->w - 2;
+        }
+    }
+}
+
+void hd_hud_render(const RACE_VIEW *view)
+{
+    if (race_cfg.mode == 5)
+        return;
+    hud_dispatch_layout(view);
+    if (race_paused)
+        menu_pause_update_recs(hud_state.prims);
+    else
+        hud_transition_prims(hud_state.prims);
+    for (sint32 idx = 0; idx < hud_state.hud_count + hud_state.menu_count; ++idx)
+    {
+        const HUD_PRIM *prim = &hud_state.prims[idx];
+        if (prim->state != 1)
+            continue;
+        hd_hud_sprite(view, idx, prim);
+    }
+    if (race_paused)
+        return;
+    hd_hud_text(view);
+}
+
+void hd_hud_background(const RACE_VIEW *view)
+{
+    hud_dispatch_layout(view);
+    for (sint32 idx = 0; idx < hud_state.hud_count; ++idx)
+    {
+        const HUD_PRIM *prim = &hud_state.prims[idx];
+        if (prim->state)
+            hd_hud_sprite(view, idx, prim);
+    }
+    hd_hud_text(view);
 }
 
 HUD_SPRITE *hud_sprs(HUD_LAYOUT layout)

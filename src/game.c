@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include "render.h"
 #include "game.h"
+#include "hd.h"
 #include "xport_trace.h"
 
 typedef struct
@@ -48,6 +49,7 @@ const RACE_VIEW race_views[2] = {{0}, {1}};
 RACE_CFG race_cfg = {1, {0, 1}, 3, 1, 1, 0};
 uint32 race_paused;
 uint32 race_start_phase;
+static sint32 game_hd_frame;
 
 GAME_SELECTION game_selection;
 
@@ -305,8 +307,17 @@ static sint32 race_loop_before_frame(RACE_LOOP *state)
 #if 0
     perf_mark_frame();
 #endif
+    if (xport_hd && !game_hd_frame)
+        hd_sync_proj();
+    game_hd_frame = xport_hd != 0;
+    if (game_hd_frame)
+        game_hd_frame = hd_begin_frame();
+    gpu_set_raster(!game_hd_frame);
     camera_update(camera_for_view(view0), boat_player(view0));
-    track_render_player(view0, buffer);
+    if (game_hd_frame)
+        hd_render_player(view0);
+    else
+        track_render_player(view0, buffer);
 #if 0
     perf_mark_frame();
 #endif
@@ -317,7 +328,10 @@ static sint32 race_loop_before_frame(RACE_LOOP *state)
     if (cfg->players == 2)
     {
         camera_update(camera_for_view(view1), boat_player(view1));
-        track_render_player(view1, buffer);
+        if (game_hd_frame)
+            hd_render_player(view1);
+        else
+            track_render_player(view1, buffer);
         if (race_cfg.mode != 5)
             boat_update_audio(view1);
     }
@@ -336,11 +350,16 @@ static void race_loop_after_frame(RACE_LOOP *state)
 
 static sint32 race_finish_loop(RACE_LOOP *state)
 {
+    sint32 hd = xport_hd != 0;
+    sint32 result;
+    game_hd_frame = 0;
     disp_state.scene_buffer = 1 - disp_state.scene_buffer;
-    if (race_paused == 0 && race_cfg.players == 1)
+    if (!hd && race_paused == 0 && race_cfg.players == 1)
         disp_sync_swap_buf();
     pickup_write_racer_indices(race_selection.ranks);
-    return effects_run_expanding_circle_trans();
+    result = hd ? hd_effects_trans() : effects_run_expanding_circle_trans();
+    hd_reset();
+    return result;
 }
 
 static sint32 race_loop_resume(const RACE_VIEW *view0, const RACE_VIEW *view1, const RACE_CFG *cfg, sint32 warmup)
@@ -520,6 +539,8 @@ void game_start(void)
     cb_init_vblank_timer();
     cb_init_pool();
     game_init_defaults();
+    xport_set_cleanup(hd_free);
+    hd_init();
     sound_init_audio();
 #if 0
     perf_init(0);
@@ -527,12 +548,11 @@ void game_start(void)
     game_main_loop_continue(0);
 }
 
-sint32 game_render_frame(void)
+sint32 game_draw_og_frame(void)
 {
     sint32 players = race_cfg.players;
     sint32 idx;
 
-    FUNCTION_MARKER(0x800107A4, "MAIN.EXE");
 #if 0
     perf_frame_end();
     sint16 buffer = disp_state.scene_buffer;
@@ -541,13 +561,12 @@ sint32 game_render_frame(void)
     perf_render_graph(overlay_entry, buffer);
     perf_render_cur(overlay_entry, buffer);
 #endif
+    ResetGraph(1);
     if (players == 1 && game_timing.base_rate == game_timing.frame_rate)
     {
         const RACE_VIEW *state = &race_views[0];
         uint32 buffer_idx;
 
-        cb_sync_video_field();
-        ResetGraph(1);
         buffer_idx = disp_state.scene_buffer;
         DrawOTag(render_scene_ot(render_frame(camera_for_view(state), buffer_idx)) + 14);
         if (render_capture_enabled != 0)
@@ -562,8 +581,6 @@ sint32 game_render_frame(void)
     {
         uint32 buffer_idx;
 
-        VSync(2);
-        ResetGraph(1);
         buffer_idx = disp_state.scene_buffer;
         PutDrawEnv(&disp_scene_frame(&camera_views[0], buffer_idx)->draw);
         buffer_idx = disp_state.scene_buffer;
@@ -583,9 +600,36 @@ sint32 game_render_frame(void)
             }
         }
     }
+    return 0;
+}
+
+sint32 game_frame_og(void)
+{
+    FUNCTION_MARKER(0x800107A4, "MAIN.EXE");
+    gpu_frame_begin();
+    if (race_cfg.players == 1 && game_timing.base_rate == game_timing.frame_rate)
+        cb_sync_video_field();
+    else
+        VSync(2);
+    game_draw_og_frame();
+    gpu_frame_end();
     // Host display adapter after original 0x80010960 frame submission
     gpu_present();
     return 0;
+}
+
+static sint32 game_frame_hd(void)
+{
+    if (race_cfg.players == 1 && game_timing.base_rate == game_timing.frame_rate)
+        cb_sync_video_field();
+    else
+        VSync(2);
+    return hd_end_frame();
+}
+
+sint32 game_render_frame(void)
+{
+    return game_hd_frame ? game_frame_hd() : game_frame_og();
 }
 
 uint32 xport_libsnd_sequence_call(uint32 target, uint32 argc, const uint32 *args)

@@ -30,6 +30,13 @@ typedef struct
 extern RIVER_LIST river_course, river_markers;
 extern sint32 river_selection;
 
+sint32 river_showcase_outside(void);
+void hd_river_border_point(sint32 idx, VEC3F *pos, uint32 *type);
+void river_border_point(sint32 idx, SVECTOR *pos, uint32 *type);
+void river_hsv_to_rgb(uint8 output[3], sint32 hue, sint32 sat, sint32 val);
+uint32 river_water_color(const ROUTE_VERTEX *src, uint32 pal, sint32 *height, sint32 bonus);
+
+void hd_river_update(void);
 void river_select_frame(sint32 buffer, sint32 view);
 void river_render_showcase(const struct RACE_VIEW *state, uint32 *overlay_ot, sint32 buffer_idx);
 sint32 river_nearby_event_check(const struct BOAT *boat);

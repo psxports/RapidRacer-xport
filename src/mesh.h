@@ -69,6 +69,19 @@ typedef struct
 
 extern MESH_RENDER mesh_render_state;
 
+typedef struct
+{
+    struct BOAT *boats[32];
+    uint16 buckets[32];
+    struct BOAT *carried;
+    sint32 count;
+} MESH_RACERS;
+
+void mesh_prepare_racers(const struct RACE_VIEW *view, MESH_RACERS *dst, sint32 (*visible)(const struct RACE_VIEW *, const struct BOAT *));
+void hd_mesh_prepare_racers(const struct RACE_VIEW *view, MESH_RACERS *dst, sint32 (*visible)(const struct RACE_VIEW *, const struct BOAT *), float (*depth)(const struct RACE_VIEW *, const struct BOAT *));
+sint32 mesh_prop_offset(const struct BOAT *boat);
+sint32 mesh_prepare_props(struct BOAT *boat, MATRIX dst[2]);
+
 void mesh_clear_boat_models(MESH_BOAT_MODELS *models);
 sint32 mesh_load_boat_models(const MESH_ARCHIVE *archive, uint8 boat, sint32 level, uint8 variant, uint32 flags, MESH_BOAT_MODELS *dst);
 

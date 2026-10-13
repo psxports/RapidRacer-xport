@@ -93,6 +93,7 @@ extern UI_RECORD spr_recs[180];
 extern uint16 spr_buffers_active;
 
 sint32 spr_flush_pending(sint32 ordering_idx);
+void hd_spr_menu(void);
 sint32 spr_reset_labels(void);
 sint32 spr_animate_labels(void);
 

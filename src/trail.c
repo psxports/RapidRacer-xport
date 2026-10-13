@@ -45,6 +45,21 @@ sint32 trail_init_quad_templates5(void)
     return 0;
 }
 
+void trail_marker_material(uint32 idx, RENDER_MATERIAL *dst)
+{
+    const TRAIL_QUAD_TEXTURE *tex;
+    if (idx >= 5)
+        abort();
+    tex = &trail_marker_tex[idx];
+    *dst = (RENDER_MATERIAL){0};
+    dst->tpage = tex->tpage;
+    dst->clut = tex->clut;
+    dst->uv[0] = (RENDER_TEXCOORD){tex->u0, tex->v0};
+    dst->uv[1] = (RENDER_TEXCOORD){tex->u1, tex->v1};
+    dst->uv[2] = (RENDER_TEXCOORD){tex->u2, tex->v2};
+    dst->uv[3] = (RENDER_TEXCOORD){tex->u3, tex->v3};
+}
+
 sint32 trail_render_marker(BOAT *boat, uint32 *ot)
 {
     sint32 mode = boat->control.driver;
@@ -723,20 +738,29 @@ sint32 trail_init_tex_templates8(void)
     return 0;
 }
 
-sint32 trail_render_flare(BOAT *boat, uint32 *ot, uint32 depth_limit)
+static void trail_flare_source(uint32 model, VEC3 *origin, RENDER_MATERIAL *material)
 {
-    uint32 model;
-    SVECTOR origin;
-    uint32 offset;
-    POLY_FT4 *poly;
-    const TRAIL_QUAD_TEXTURE *tex;
-    sint32 age;
+    const TRAIL_QUAD_TEXTURE *tex = &trail_flare_tex[game_timing.ticks >> 2 & 7u];
+    if (model >= sizeof(trail_flare_origins) / sizeof(trail_flare_origins[0]))
+        abort();
+    const SVECTOR *point = &trail_flare_origins[model];
+    *origin = (VEC3){{point->vx, point->vy, point->vz}};
+    *material = (RENDER_MATERIAL){0};
+    material->tpage = tex->tpage;
+    material->clut = tex->clut;
+    material->uv[0] = (RENDER_TEXCOORD){tex->u0, tex->v0};
+    material->uv[1] = (RENDER_TEXCOORD){tex->u1, tex->v1};
+    material->uv[2] = (RENDER_TEXCOORD){tex->u2, tex->v2};
+    material->uv[3] = (RENDER_TEXCOORD){tex->u3, tex->v3};
+}
+
+void trail_prepare_flare(const BOAT *boat, SVECTOR points[2][4], RENDER_MATERIAL *material)
+{
+    sint32 age = boat->control.boost_tick;
     sint32 height;
     sint32 width;
-    sint32 side;
-
-    FUNCTION_MARKER(0x80032478, "MAIN.EXE");
-    age = boat->control.boost_tick;
+    SVECTOR origin;
+    uint32 model = boat->setup.model_idx;
     if (age < 20)
         height = (uint32)age << 2;
     else if (age < 24)
@@ -745,13 +769,53 @@ sint32 trail_render_flare(BOAT *boat, uint32 *ot, uint32 depth_limit)
         height = 60;
     height = height + (random_next() & 3u);
     width = age >= 74 ? (sint32)(90u - age) / 2 : 8;
-    side = 0;
-    tex = &trail_flare_tex[game_timing.ticks >> 2 & 7u];
+    VEC3 point;
+    trail_flare_source(model, &point, material);
+    origin = (SVECTOR){point.x, point.y, point.z, 0};
+    for (uint32 side = 0; side < 2; ++side)
+    {
+        points[side][0] = points[side][1] = points[side][2] = points[side][3] = origin;
+        points[side][1].vx = origin.vx + width;
+        points[side][2].vz = origin.vz - height;
+        points[side][3].vx = points[side][1].vx;
+        points[side][3].vz = points[side][2].vz;
+        origin.vx = -origin.vx;
+        width = -width;
+    }
+}
+
+void hd_trail_prepare_flare(const BOAT *boat, VEC3F points[2][4], RENDER_MATERIAL *material)
+{
+    float age = (float)boat->control.boost_tick;
+    float height = age < 20 ? age * 4 : age < 24 ? 80 - (age - 20) * 4 : 60;
+    height += random_next() & 3u;
+    float width = age >= 74 ? (90 - age) * 0.5f : 8;
+    VEC3 point;
+    trail_flare_source(boat->setup.model_idx, &point, material);
+    VEC3F origin = {{(float)point.x, (float)point.y, (float)point.z}};
+    for (uint32 side = 0; side < 2; ++side)
+    {
+        points[side][0] = points[side][1] = points[side][2] = points[side][3] = origin;
+        points[side][1].x += width;
+        points[side][2].z -= height;
+        points[side][3].x = points[side][1].x;
+        points[side][3].z = points[side][2].z;
+        origin.x = -origin.x;
+        width = -width;
+    }
+}
+
+sint32 trail_render_flare(BOAT *boat, uint32 *ot, uint32 depth_limit)
+{
+    SVECTOR quads[2][4];
+    RENDER_MATERIAL tex;
+    uint32 offset;
+    POLY_FT4 *poly;
+    sint32 side = 0;
+
+    FUNCTION_MARKER(0x80032478, "MAIN.EXE");
+    trail_prepare_flare(boat, quads, &tex);
     offset = render_packet_offset();
-    model = boat->setup.model_idx;
-    if (model >= sizeof(trail_flare_origins) / sizeof(trail_flare_origins[0]))
-        abort();
-    origin = trail_flare_origins[model];
     do
     {
         SVECTOR base;
@@ -764,22 +828,16 @@ sint32 trail_render_flare(BOAT *boat, uint32 *ot, uint32 depth_limit)
         sint32 avg;
 
         poly = render_packet_at(offset, sizeof(*poly));
-        base = origin;
+        base = quads[side][0];
         base_depth = gte_project_full_depth(&base, &base_scr, &flags);
-
-        points[0] = base;
-        points[0].vx = base.vx + width;
-        points[1] = base;
-        points[1].vz = base.vz - height;
-        points[2] = points[1];
-        points[2].vx = points[0].vx;
+        memcpy(points, &quads[side][1], sizeof(points));
         poly->p[0].xy.xy = base_scr;
 
         gte_project3_full_depth(points, scr, depth, &flags);
 
-        setUV4(poly, tex->u0, tex->v0, tex->u1, tex->v1, tex->u2, tex->v2, tex->u3, tex->v3);
-        poly->p[0].attr = tex->clut;
-        poly->p[1].attr = tex->tpage;
+        setUV4(poly, tex.uv[0].u, tex.uv[0].v, tex.uv[1].u, tex.uv[1].v, tex.uv[2].u, tex.uv[2].v, tex.uv[3].u, tex.uv[3].v);
+        poly->p[0].attr = tex.clut;
+        poly->p[1].attr = tex.tpage;
 
         poly->rgbc.code = 0x2E;
         setRGB0(poly, 128, 128, 128);
@@ -799,8 +857,6 @@ sint32 trail_render_flare(BOAT *boat, uint32 *ot, uint32 depth_limit)
             offset += sizeof(*poly);
         }
         side++;
-        origin.vx = -origin.vx;
-        width = -width;
     } while (side < 2);
     render_packet_publish(offset);
     return 0;

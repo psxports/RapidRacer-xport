@@ -244,14 +244,12 @@ static sint32 pickup_update_slot_countdown(BOAT_MENU *menu, sint16 slot)
     return result;
 }
 
-sint32 pickup_update_slots(const RACE_VIEW *state, uint32 *ot, const BOAT *boat)
+sint32 pickup_update(const RACE_VIEW *state, const BOAT *boat)
 {
     uint32 mode = race_cfg.mode;
     BOAT_MENU *menu = boat_player_menu(state);
     sint16 command;
 
-    FUNCTION_MARKER(0x8003D72C, "MAIN.EXE");
-    render_order.ot = ot;
     command = mode == 8 ? river_nearby_event_check(boat) : pickup_scan(boat);
     mode = race_cfg.mode;
     if (mode == 5)
@@ -260,6 +258,13 @@ sint32 pickup_update_slots(const RACE_VIEW *state, uint32 *ot, const BOAT *boat)
     pickup_update_slot_countdown(menu, 2);
     pickup_update_slot_countdown(menu, 3);
     return pickup_update_slot_countdown(menu, 1);
+}
+
+sint32 pickup_update_slots(const RACE_VIEW *state, uint32 *ot, const BOAT *boat)
+{
+    FUNCTION_MARKER(0x8003D72C, "MAIN.EXE");
+    render_order.ot = ot;
+    return pickup_update(state, boat);
 }
 
 sint32 pickup_write_racer_indices(uint8 *output)

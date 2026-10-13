@@ -11,6 +11,10 @@
 #include "render.h"
 #include "camera.h"
 #include "psx_gpu.h"
+#include "hd.h"
+#include "boat.h"
+#include "mesh.h"
+#include "utils.h"
 #include <stdlib.h>
 
 typedef enum
@@ -30,6 +34,14 @@ static uint32 confirm;
 static uint32 selected_action;
 static uint32 pause_ot;
 static uint16 pause_item;
+static sint32 pause_capture;
+
+static void menu_pause_release_capture(void)
+{
+    if (pause_capture)
+        fb_remove_vert_offset();
+    pause_capture = 0;
+}
 
 void menu_pause_reset(void)
 {
@@ -240,7 +252,7 @@ static sint32 menu_pause_update_prims(sint16 sel)
     return idx < count;
 }
 
-static sint32 menu_pause_render(sint32 sel, const HUD *hud, PAD *input)
+static sint32 menu_pause_prepare(sint32 sel, const HUD *hud, PAD *input)
 {
     uint8 flags[20] = {0};
     HUD_PRIM *menu_prims;
@@ -253,7 +265,6 @@ static sint32 menu_pause_render(sint32 sel, const HUD *hud, PAD *input)
     sint32 selection;
     sint32 result;
 
-    FUNCTION_MARKER(0x80021920, "MAIN.EXE");
     hud_publish(hud);
     menu_pause_update_recs(hud_state.prims);
 
@@ -406,16 +417,47 @@ static sint32 menu_pause_render(sint32 sel, const HUD *hud, PAD *input)
                 }
                 cur->spr.p[0].attr = GetClut(clut_x, clut_y);
             }
-            if (cur->state == 1)
-            {
-                DrawPrim(&cur->mode);
-                DrawPrim(&cur->spr);
-            }
             idx++;
             result = idx < hud_state.menu_count;
         } while (result != 0);
     }
     return result;
+}
+
+static sint32 menu_pause_render(sint32 sel, const HUD *hud, PAD *input)
+{
+    sint32 result;
+    FUNCTION_MARKER(0x80021920, "MAIN.EXE");
+    result = menu_pause_prepare(sel, hud, input);
+    for (sint32 idx = 0; idx < hud_state.menu_count; ++idx)
+    {
+        HUD_PRIM *prim = &hud_state.prims[hud_state.hud_count + idx];
+        if (prim->state == 1)
+        {
+            DrawPrim(&prim->mode);
+            DrawPrim(&prim->spr);
+        }
+    }
+    return result;
+}
+
+void hd_menu_pause_render(const RACE_VIEW *view, sint32 sel, const HUD *hud, PAD *input)
+{
+    if (race_cfg.players == 1)
+        menu_pause_prepare(sel, hud, input);
+    else
+    {
+        hud_publish(hud);
+        menu_pause_update_recs(hud_state.prims);
+        menu_pause_update_prims(sel);
+    }
+    for (sint32 idx = 0; idx < hud_state.menu_count; ++idx)
+    {
+        const HUD_PRIM *prim = &hud_state.prims[hud_state.hud_count + idx];
+        const SPRT *sprite = &prim->spr;
+        if (prim->state == 1)
+            hd_draw_sprite(view, sprite->p[0].xy.x, sprite->p[0].xy.y, sprite->w, sprite->h, sprite->p[0].uv.u, sprite->p[0].uv.v, prim->mode.code[0] & 0x1ff, sprite->p[0].attr, sprite->rgbc.rgbc);
+    }
 }
 
 sint32 menu_pause_submit(uint32 *ot)
@@ -473,7 +515,7 @@ static sint32 menu_pause_confirm(const RACE_VIEW *context, MENU_PAUSE_ACTION act
         confirm = MENU_CONFIRM_CANCEL;
         game_selection.selection = action == MENU_PAUSE_RESTART ? -5 : -1;
         race_paused = 1;
-        fb_remove_vert_offset();
+        menu_pause_release_capture();
         return 1;
     }
     return 0;
@@ -518,8 +560,13 @@ sint32 menu_pause_run(const RACE_VIEW *context)
     race_paused = 1;
     confirm = MENU_CONFIRM_CLOSED;
     disp_state.scene_buffer = 1 - buffer_idx;
-    fb_submit_strips();
-    fb_capture_strips();
+    pause_capture = 0;
+    if (!xport_hd)
+    {
+        fb_submit_strips();
+        fb_capture_strips();
+        pause_capture = 1;
+    }
     if (race_cfg.mode == 8)
         mode_eight = 1;
     cd_pause_audio();
@@ -685,12 +732,30 @@ sint32 menu_pause_run(const RACE_VIEW *context)
             if (race_cfg.players == 2)
                 voice_restore_reverb(sound_for_context(&race_views[1]));
             race_paused = 0;
-            fb_remove_vert_offset();
+            menu_pause_release_capture();
             return 0;
         }
 
         DrawSync(0);
         VSync(0);
+        if (xport_hd)
+        {
+            RENDER_SAMPLE state = render_save_sample();
+            HUD *hud = render_frame_hud(render_frame(camera_for_view(context), disp_state.scene_buffer));
+            hd_render_pause(context, menu, hud, menu_input);
+            render_restore_sample(&state);
+            continue;
+        }
+        gpu_set_raster(1);
+        if (!pause_capture)
+        {
+            RENDER_SAMPLE state = render_save_sample();
+            disp_sync_swap_buf();
+            render_restore_sample(&state);
+            fb_submit_strips();
+            fb_capture_strips();
+            pause_capture = 1;
+        }
         if (redraw != 0)
             fb_restore_strips();
         if (race_cfg.players == 1)

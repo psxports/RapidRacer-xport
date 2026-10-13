@@ -11,13 +11,37 @@
 #include "polygon.h"
 #include "psx_gpu.h"
 #include "render.h"
+#include "mesh.h"
 #include "input.h"
 #include "utils.h"
 #include <stdlib.h>
 #include <stdio.h>
+#include <math.h>
 
 uint32 render_capture_enabled;
 sint32 render_proj_speed[2];
+
+RENDER_SAMPLE render_save_sample(void)
+{
+    RENDER_SAMPLE sample = {0};
+    if (boat_racer_count < 0 || boat_racer_count > 32)
+        abort();
+    sample.seed = random_seed;
+    sample.rand_bit = mesh_render_state.rand_bit;
+    sample.rand_pair = mesh_render_state.rand_pair;
+    for (sint32 idx = 0; idx < boat_racer_count; ++idx)
+        sample.phases[idx] = boat_racers[idx]->trail.phase;
+    return sample;
+}
+
+void render_restore_sample(const RENDER_SAMPLE *sample)
+{
+    random_seed = sample->seed;
+    mesh_render_state.rand_bit = sample->rand_bit;
+    mesh_render_state.rand_pair = sample->rand_pair;
+    for (sint32 idx = 0; idx < boat_racer_count; ++idx)
+        boat_racers[idx]->trail.phase = sample->phases[idx];
+}
 
 // Mutable lighting sets from MAIN.EXE 80089580/800895B8/800914CC
 static RENDER_LIGHTING default_lighting[3] = {{{{{-4782, 1353, 2345}, 0}, {{3749, 4161, 1964}, 0}, {{0, 0, 0}, 0}}, {{{1704, 3060, 0}, {3060, 2376, 0}, {2616, 1248, 0}}, {124, 90, 127}}}, {{{{-4782, 1353, 2345}, 0}, {{3749, 4161, 1964}, 0}, {{0, 0, 0}, 0}}, {{{852, 1530, 0}, {1530, 1188, 0}, {1308, 624, 0}}, {62, 45, 64}}}, {{{{1313, 1398, 3615}, 0}, {{3749, 4161, 1964}, 0}, {{0, 0, 0}, 0}}, {{{1704, 3060, 0}, {3060, 2376, 0}, {2616, 1248, 0}}, {124, 90, 127}}}};
@@ -173,6 +197,8 @@ static sint32 proj_offset[2];
 static BOAT *indicator_target;
 static sint32 indicator_distance;
 static uint32 indicator_ticks;
+static sint32 indicator_ready;
+static sint32 indicator_dir[4];
 
 // Indicator packet owners from MAIN.EXE 800B7410/800B73F0
 static LINE_F3 indicator_polylines[2][3];
@@ -472,31 +498,17 @@ sint32 render_init_ui_prims(void)
     indicator_target = NULL;
     indicator_distance = 0;
     indicator_ticks = 0;
+    indicator_ready = 0;
     return 0;
 }
 
-uint32 render_target_indicator(const RACE_VIEW *owner, uint32 *ot, sint32 alternate)
+static uint32 render_update_indicator(const RACE_VIEW *owner)
 {
-    const SVECTOR *vertices = indicator_vertices;
-    MATRIX matrix = indicator_matrix;
-    sint32 scr0[3];
-    sint32 scr1[3];
-    sint32 scr2[3];
-    sint32 depth[3];
-    sint32 flags;
-    LINE_F3 *prim;
-    LINE_F2 *final_prim;
     BOAT *candidate = NULL;
     const BOAT_MENU *menu;
-    sint32 angle = 0;
-    sint32 steering = 0;
     sint32 idx;
 
-    FUNCTION_MARKER(0x80015B4C, "MAIN.EXE");
-    if (alternate < 0 || alternate >= 2 || !ot)
-        abort();
-    prim = indicator_polylines[alternate];
-    final_prim = &indicator_lines[alternate];
+    indicator_ready = 0;
     if (race_cfg.mode == 5)
         return 2;
     if (race_cfg.players == 2)
@@ -553,11 +565,24 @@ uint32 render_target_indicator(const RACE_VIEW *owner, uint32 *ot, sint32 altern
     indicator_distance = candidate->route.distance;
     if ((sint32)indicator_ticks < 120)
         return 1;
-    if (candidate != 0)
+    const BOAT *camera = boat_player(owner);
+    indicator_dir[0] = candidate->pos.x - camera->pos.x;
+    indicator_dir[1] = candidate->pos.z - camera->pos.z;
+    indicator_dir[2] = camera->pose.m[0][2];
+    indicator_dir[3] = camera->pose.m[2][2];
+    indicator_ready = 1;
+    return 0;
+}
+
+uint32 render_read_indicator(MATRIX *transform, const SVECTOR **points)
+{
+    if (!indicator_ready)
+        return 1;
+    MATRIX matrix = indicator_matrix;
+    sint32 angle = 0, steering = 0;
     {
-        const BOAT *camera = boat_player(owner);
-        sint32 target_angle = ratan2(candidate->pos.x - camera->pos.x, candidate->pos.z - camera->pos.z);
-        sint32 camera_angle = ratan2(camera->pose.m[0][2], camera->pose.m[2][2]);
+        sint32 target_angle = ratan2(indicator_dir[0], indicator_dir[1]);
+        sint32 camera_angle = ratan2(indicator_dir[2], indicator_dir[3]);
         uint32 adjusted;
 
         angle = target_angle - ((camera_angle & 0xFFF) - 0x800) & 0xFFF;
@@ -589,6 +614,64 @@ uint32 render_target_indicator(const RACE_VIEW *owner, uint32 *ot, sint32 altern
     matrix.m[1][1] = 1000;
     RotMatrixZ(angle, &matrix);
     matrix.t[0] = steering;
+    *transform = matrix;
+    *points = indicator_vertices;
+    return 0;
+}
+
+uint32 render_prepare_indicator(const RACE_VIEW *owner, MATRIX *transform, const SVECTOR **points)
+{
+    uint32 result = render_update_indicator(owner);
+    return result ? result : render_read_indicator(transform, points);
+}
+
+uint32 hd_render_read_indicator(MATRIXF *transform, const SVECTOR **points)
+{
+    if (!indicator_ready)
+        return 1;
+    float angle = (atan2f((float)indicator_dir[0], (float)indicator_dir[1]) - atan2f((float)indicator_dir[2], (float)indicator_dir[3])) / RAD12 + 2048;
+    angle -= 4096.0f * floorf(angle / 4096.0f);
+    if (angle >= 513 && angle < 2048)
+        angle = 512;
+    else if (angle >= 2049 && angle < 3584)
+        angle = 3584;
+    float steering = angle >= 1 && angle < 513 ? fmaxf(-40, -angle / 16) : fminf(40, (4096 - angle) / 16);
+    IdentityMatrixf(transform);
+    transform->m[0][0] = transform->m[1][1] = 1000.0f / 4096;
+    RotMatrixZf(angle * RAD12, transform);
+    transform->t[0] = steering;
+    transform->t[1] = 90;
+    *points = indicator_vertices;
+    return 0;
+}
+
+uint32 hd_render_prepare_indicator(const RACE_VIEW *owner, MATRIXF *transform, const SVECTOR **points)
+{
+    uint32 result = render_update_indicator(owner);
+    return result ? result : hd_render_read_indicator(transform, points);
+}
+
+uint32 render_target_indicator(const RACE_VIEW *owner, uint32 *ot, sint32 alternate)
+{
+    const SVECTOR *vertices;
+    MATRIX matrix;
+    sint32 scr0[3];
+    sint32 scr1[3];
+    sint32 scr2[3];
+    sint32 depth[3];
+    sint32 flags;
+    LINE_F3 *prim;
+    LINE_F2 *final_prim;
+    uint32 result;
+
+    FUNCTION_MARKER(0x80015B4C, "MAIN.EXE");
+    if (alternate < 0 || alternate >= 2 || !ot)
+        abort();
+    prim = indicator_polylines[alternate];
+    final_prim = &indicator_lines[alternate];
+    result = race_paused ? render_read_indicator(&matrix, &vertices) : render_prepare_indicator(owner, &matrix, &vertices);
+    if (result)
+        return result;
     SetRotMatrix(&matrix);
     SetTransMatrix(&matrix);
     gte_project3_full_depth(&vertices[0], scr0, depth, &flags);
@@ -649,6 +732,24 @@ sint32 render_scale_proj_transform(uint32 shift)
     proj = sra(proj_dist, shift);
     gte_write_h(proj);
     return proj;
+}
+
+uint32 render_current_proj(const RACE_VIEW *view)
+{
+    return race_cfg.players == 2 ? 200u : game_timing.base_rate == game_timing.frame_rate ? 290u - render_proj_speed[view->idx] : 290u;
+}
+
+uint32 render_update_proj(const RACE_VIEW *view)
+{
+    if (race_paused)
+        return render_current_proj(view);
+    sint32 speed = render_proj_speed[view->idx];
+    sint32 target = (sint32)(3u * boat_player(view)->velocity.speed) / 256;
+    speed -= (speed - target) >> 5;
+    if (speed > 130)
+        speed = 130;
+    render_proj_speed[view->idx] = speed;
+    return render_current_proj(view);
 }
 
 void render_set_proj_dist(uint32 proj)
@@ -806,7 +907,7 @@ static void render_billboard_rect(RENDER_MATERIAL *material, sint32 x, sint32 y,
     material->uv[2].v = material->uv[3].v = v + 31u;
 }
 
-static const RENDER_MATERIAL *render_billboard_tex(sint32 type, uint32 animation, uint16 *clut)
+const RENDER_MATERIAL *render_billboard_tex(sint32 type, uint32 animation, uint16 *clut)
 {
     const RENDER_MATERIAL *material;
     if (type <= 0 || type >= 16 || animation >= 16)

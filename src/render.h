@@ -90,6 +90,10 @@ extern uint8 render_curve[16][512];
 sint32 render_build_curve_scaled_lut(void);
 sint32 render_init_materials(sint32 grp);
 sint32 render_init_ui_prims(void);
+uint32 hd_render_read_indicator(MATRIXF *transform, const SVECTOR **points);
+uint32 hd_render_prepare_indicator(const struct RACE_VIEW *owner, MATRIXF *transform, const SVECTOR **points);
+uint32 render_read_indicator(MATRIX *transform, const SVECTOR **points);
+uint32 render_prepare_indicator(const struct RACE_VIEW *owner, MATRIX *transform, const SVECTOR **points);
 uint32 render_target_indicator(const struct RACE_VIEW *owner, uint32 *ot, sint32 alternate);
 
 typedef struct
@@ -105,6 +109,8 @@ extern RENDER_ORDER render_order;
 
 void render_set_ot(uint32 *ot, uint32 depth_limit);
 sint32 render_scale_proj_transform(uint32 shift);
+uint32 render_current_proj(const struct RACE_VIEW *view);
+uint32 render_update_proj(const struct RACE_VIEW *view);
 void render_set_proj_dist(uint32 proj);
 void render_set_geom_offset(sint32 x, sint32 y);
 void render_init_packet_pools(void);
@@ -116,6 +122,7 @@ struct ROUTE_SEGMENT;
 void render_generate_entries(const sint32 transform[3], const struct ROUTE_SEGMENT *seg, sint32 remaining);
 
 sint32 render_init_billboards(void);
+const RENDER_MATERIAL *render_billboard_tex(sint32 type, uint32 animation, uint16 *clut);
 void render_billboard(uint32 *ot, const RENDER_BILLBOARD *entries, sint32 count, sint32 lower);
 
 typedef struct
@@ -130,4 +137,14 @@ HORIZON_PRIMS render_horizon_prims(RENDER_FRAME *frame);
 sint32 render_dispatch_prim_grps(const OBJECT_GROUP *object, uint32 table, sint32 adjusted, uint32 *ot);
 
 void render_init_hud_frame(RENDER_FRAME *frame, HUD_LAYOUT layout, sint32 buf);
+
+typedef struct
+{
+    uint32 seed;
+    sint32 rand_bit, rand_pair;
+    sint32 phases[32];
+} RENDER_SAMPLE;
+
+RENDER_SAMPLE render_save_sample(void);
+void render_restore_sample(const RENDER_SAMPLE *sample);
 #endif /* RENDER_H */

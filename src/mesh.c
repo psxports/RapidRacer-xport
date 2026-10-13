@@ -344,19 +344,60 @@ static void mesh_wireframe_model(uint32 *ot, uint32 depth_limit, const MESH_MODE
     }
 }
 
-void mesh_render_racer_model(const RACE_VIEW *view, sint32 player)
+sint32 mesh_prop_offset(const BOAT *boat)
 {
-    BOAT *candidates[32];
-    uint32 *orderings[32];
-    uint16 buckets[32];
+    if (boat->setup.model_idx >= sizeof(mesh_prop_offsets) / sizeof(mesh_prop_offsets[0]))
+        abort();
+    return mesh_prop_offsets[boat->setup.model_idx];
+}
+
+sint32 mesh_prepare_props(BOAT *boat, MATRIX dst[2])
+{
+    const BOAT_SETUP *setup = &boat->setup;
+    MATRIX accessory = boat->matrix;
+    sint32 count = setup->propellers;
+    SVECTOR point = boat->trail.propeller;
+    if (count != 1 && count != 2)
+        return 0;
+    mesh_rotate_mat_y(boat->control.steering / 2, &accessory);
+    if (count == 2 && setup->model_idx >= sizeof(mesh_prop_offsets) / sizeof(mesh_prop_offsets[0]))
+        abort();
+    for (sint32 idx = 0; idx < count; ++idx)
+    {
+        VECTOR pos;
+        if (count == 2)
+        {
+            boat->trail.propeller.vx = idx ? -mesh_prop_offsets[setup->model_idx] : mesh_prop_offsets[setup->model_idx];
+            point = boat->trail.propeller;
+        }
+        mesh_transform_point(&boat->matrix, &point, &pos);
+        dst[idx] = accessory;
+        dst[idx].t[0] = pos.vx;
+        dst[idx].t[1] = pos.vy;
+        dst[idx].t[2] = pos.vz;
+    }
+    if (count == 2)
+        boat->trail.propeller.vx = 0;
+    return count;
+}
+
+static sint32 mesh_racer_visible(const RACE_VIEW *view, const BOAT *boat)
+{
+    return mesh_vis_vert_project(boat);
+}
+
+void mesh_prepare_racers(const RACE_VIEW *view, MESH_RACERS *dst, sint32 (*is_visible)(const RACE_VIEW *, const BOAT *))
+{
+    BOAT **candidates = dst->boats;
+    uint16 *buckets = dst->buckets;
     sint16 sort_depths[32];
     sint32 count = 0;
     sint32 visible_limit;
     sint32 idx;
     BOAT *carried_boat = NULL;
-
-    FUNCTION_MARKER(0x8003347C, "MAIN.EXE");
-    if (mesh_render_state.enabled == 0)
+    dst->count = 0;
+    dst->carried = NULL;
+    if (!mesh_render_state.enabled)
         return;
     if (boat_player(view)->contacts.points[0].height <= 0)
     {
@@ -394,7 +435,7 @@ void mesh_render_racer_model(const RACE_VIEW *view, sint32 player)
         {
             visible = route_seg_is_in_window(view, racer->race.progress);
             if (visible != 0)
-                visible = mesh_vis_vert_project(racer);
+                visible = is_visible(view, racer);
         }
         if (visible == 0)
         {
@@ -476,8 +517,163 @@ void mesh_render_racer_model(const RACE_VIEW *view, sint32 player)
         }
         else if (race_cfg.players == 1)
             racer->trail.phase = 0;
-        orderings[idx] = mesh_prepare_racer_ot_packet(view, buckets[idx], player);
     }
+    dst->count = count;
+    dst->carried = carried_boat;
+}
+
+void hd_mesh_prepare_racers(const RACE_VIEW *view, MESH_RACERS *dst, sint32 (*is_visible)(const RACE_VIEW *, const BOAT *), float (*get_depth)(const RACE_VIEW *, const BOAT *))
+{
+    BOAT **candidates = dst->boats;
+    uint16 *buckets = dst->buckets;
+    float sort_depths[32];
+    sint32 count = 0;
+    sint32 visible_limit;
+    sint32 idx;
+    BOAT *carried_boat = NULL;
+    dst->count = 0;
+    dst->carried = NULL;
+    if (!mesh_render_state.enabled)
+        return;
+    if (boat_player(view)->contacts.points[0].height <= 0)
+    {
+        mesh_render_state.rand_bit = 0;
+        mesh_render_state.rand_pair = 0;
+    }
+    else
+    {
+        mesh_render_state.rand_bit = random_next() & 1;
+        mesh_render_state.rand_pair = random_next() & 3;
+    }
+    for (idx = 0; idx < boat_racer_count; ++idx)
+    {
+        BOAT *racer = boat_racers[idx];
+        sint32 visible = 1;
+        float depth;
+
+        carried_boat = racer;
+        if (racer == boat_player(view) && (sint32)camera_for_view(view)->mode < 2)
+            visible = 0;
+        if (visible != 0 && racer->control.driver == 0 && race_cfg.players == 1)
+        {
+            BOAT *cur = boat_player(view);
+            uint32 racer_route = racer->race.progress;
+            uint32 cur_route = cur->race.progress;
+            sint32 route_delta = racer_route - cur_route;
+
+            route_delta = abs(route_delta);
+            if (route_delta >= 101)
+                visible = 0;
+        }
+        if (visible != 0 && race_cfg.mode != 8)
+        {
+            visible = route_seg_is_in_window(view, racer->race.progress);
+            if (visible != 0)
+                visible = is_visible(view, racer);
+        }
+        if (visible == 0)
+        {
+            if (race_cfg.players == 1)
+                racer->trail.phase = 0;
+            continue;
+        }
+        depth = get_depth(view, racer);
+        if (depth >= -800.0f && depth < 8000.0f)
+        {
+            candidates[count] = racer;
+            buckets[count] = 0;
+            sort_depths[count] = depth;
+            ++count;
+        }
+    }
+    for (idx = 1; idx < count;)
+    {
+        sint32 prev = idx - 1;
+
+        if (sort_depths[idx] < sort_depths[prev])
+        {
+            BOAT *candidate = candidates[idx];
+            uint16 bucket = buckets[idx];
+            float sort_depth = sort_depths[idx];
+
+            carried_boat = candidate;
+            candidates[idx] = candidates[prev];
+            sort_depths[idx] = sort_depths[prev];
+            buckets[idx] = buckets[prev];
+            candidates[prev] = candidate;
+            sort_depths[prev] = sort_depth;
+            buckets[prev] = bucket;
+            if (idx >= 2)
+            {
+                idx = prev;
+                continue;
+            }
+        }
+        ++idx;
+    }
+    if (camera_for_view(view)->mode == 2)
+    {
+        if (count > 0)
+        {
+            BOAT *cur = boat_player(view);
+
+            for (idx = 0; idx < count; ++idx)
+            {
+                if (candidates[idx] == cur)
+                {
+                    BOAT *candidate0 = candidates[0];
+                    uint16 bucket0 = buckets[0];
+                    float sort_depth0 = sort_depths[0];
+
+                    candidates[idx] = candidate0;
+                    buckets[idx] = bucket0;
+                    sort_depths[idx] = sort_depth0;
+                    buckets[0] = 0;
+                    candidates[0] = boat_player(view);
+                    break;
+                }
+            }
+        }
+    }
+    visible_limit = 3;
+    if ((sint32)camera_for_view(view)->mode < 2)
+        visible_limit = 2;
+    if (race_cfg.players == 2)
+        visible_limit = 8;
+    for (idx = 0; idx < count; ++idx)
+    {
+        BOAT *racer = candidates[idx];
+
+        if (idx < visible_limit)
+        {
+            if (racer->trail.phase == 0)
+                racer->trail.phase = 1;
+        }
+        else if (race_cfg.players == 1)
+            racer->trail.phase = 0;
+    }
+    dst->count = count;
+    dst->carried = carried_boat;
+}
+
+void mesh_render_racer_model(const RACE_VIEW *view, sint32 player)
+{
+    MESH_RACERS racers;
+    BOAT **candidates = racers.boats;
+    uint16 *buckets = racers.buckets;
+    uint32 *orderings[32];
+    sint32 count;
+    sint32 idx;
+    BOAT *carried_boat;
+
+    FUNCTION_MARKER(0x8003347C, "MAIN.EXE");
+    mesh_prepare_racers(view, &racers, mesh_racer_visible);
+    count = racers.count;
+    carried_boat = racers.carried;
+    if (!mesh_render_state.enabled)
+        return;
+    for (idx = 0; idx < count; ++idx)
+        orderings[idx] = mesh_prepare_racer_ot_packet(view, buckets[idx], player);
     for (idx = count - 1; idx >= 0; --idx)
     {
         BOAT *racer = candidates[idx];
@@ -537,64 +733,21 @@ void mesh_render_racer_model(const RACE_VIEW *view, sint32 player)
         render_scale_proj_transform(0);
         if (racer != boat_player(view) || camera_for_view(view)->mode != 2)
         {
-            MATRIX src;
-            MATRIX accessory;
-            const BOAT_SETUP *setup;
-            sint32 mode;
-            sint32 saved_bias;
-
-            src = racer->matrix;
-            SetRotMatrix(&src);
-            SetTransMatrix(&src);
-            accessory = src;
-            mesh_rotate_mat_y(racer->control.steering / 2, &accessory);
-            setup = &racer->setup;
-            mode = setup->propellers;
-            saved_bias = render_order.bias;
-            if (mode == 1 || mode == 2)
+            MATRIX props[2];
+            sint32 saved_bias = render_order.bias;
+            sint32 pos_count = mesh_prepare_props(racer, props);
+            for (sint32 pos_idx = 0; pos_idx < pos_count; ++pos_idx)
             {
-                SVECTOR point;
-                VECTOR prop_pos[2];
-                sint32 pos_count = mode;
-                sint32 pos_idx;
-
-                if (mode == 1)
-                {
-                    point = racer->trail.propeller;
-                    mesh_transform_point(&src, &point, &prop_pos[0]);
-                }
-                else
-                {
-                    uint16 displacement;
-
-                    if (setup->model_idx >= sizeof(mesh_prop_offsets) / sizeof(mesh_prop_offsets[0]))
-                        abort();
-                    racer->trail.propeller.vx = mesh_prop_offsets[setup->model_idx];
-                    point = racer->trail.propeller;
-                    mesh_transform_point(&src, &point, &prop_pos[0]);
-                    setup = &racer->setup;
-                    displacement = mesh_prop_offsets[setup->model_idx];
-                    racer->trail.propeller.vx = -displacement;
-                    point = racer->trail.propeller;
-                    mesh_transform_point(&src, &point, &prop_pos[1]);
-                    racer->trail.propeller.vx = 0;
-                }
-                for (pos_idx = 0; pos_idx < pos_count; ++pos_idx)
-                {
-                    const VECTOR *pos = prop_pos + pos_idx;
-                    accessory.t[0] = pos->vx;
-                    accessory.t[1] = pos->vy;
-                    accessory.t[2] = pos->vz;
-                    camera_config_lighting(racer, &accessory);
-                    camera_bias_matrix(camera_for_view(view), &accessory, 0);
-                    view_idx = camera_for_view(view) - camera_views;
-                    model = racer->model_slot;
-                    desc = &mesh_boat_models[view_idx][model].prop[pos_idx];
-                    render_order.bias = saved_bias;
-                    mesh_draw_model(orderings[idx], 100, desc);
-                    if (racer->control.mode == 1)
-                        trail_render_flare(racer, orderings[idx], 100);
-                }
+                MATRIX accessory = props[pos_idx];
+                camera_config_lighting(racer, &accessory);
+                camera_bias_matrix(camera_for_view(view), &accessory, 0);
+                view_idx = camera_for_view(view) - camera_views;
+                model = racer->model_slot;
+                desc = &mesh_boat_models[view_idx][model].prop[pos_idx];
+                render_order.bias = saved_bias;
+                mesh_draw_model(orderings[idx], 100, desc);
+                if (racer->control.mode == 1)
+                    trail_render_flare(racer, orderings[idx], 100);
             }
         }
     }

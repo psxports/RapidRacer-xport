@@ -6,9 +6,11 @@
 #include "utils.h"
 #include "menu.h"
 #include "render.h"
+#include "hd.h"
 #include "xport_trace.h"
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 // Clipped sprite state from MAIN.EXE 800B6A48/800B40B0
 typedef struct
@@ -1206,6 +1208,148 @@ sint32 spr_submit_pools(sint32 ordering_idx)
         }
     }
     return (sint16)ordering_idx;
+}
+
+static void hd_spr_rect(float x, float y, float width, float height, float u, float v, uint16 tpage, uint16 clut, uint32 color, sint32 textured, sint32 semi)
+{
+    float pos[4][2], uv[4][2];
+    for (uint32 idx = 0; idx < 4; ++idx)
+    {
+        pos[idx][0] = x + (idx & 2 ? width : 0);
+        pos[idx][1] = y + (idx & 1 ? height : 0);
+        uv[idx][0] = u + (idx & 2 ? width : 0);
+        uv[idx][1] = v + (idx & 1 ? height : 0);
+    }
+    hd_draw_ui_quad(pos, uv, tpage, clut, color, 256, textured, semi);
+}
+
+static void hd_spr_anim(SPRITE_RENDER *state, float x, float y)
+{
+    if (state->kind == 1)
+    {
+        const SPRT *spr = &state->simple;
+        hd_spr_rect(x, y, spr->w, spr->h, spr->p[0].uv.u, spr->p[0].uv.v, state->draw_mode.code[0] & 0x1ff, spr->p[0].attr, spr->rgbc.rgbc, 1, (spr->rgbc.code & 2) != 0);
+    }
+    else if (state->kind == 0)
+    {
+        float pos[4][2], uv[4][2];
+        if (state->orientation != state->last_orientation)
+            spr_config_uv_orientation(state);
+        for (uint32 idx = 0; idx < 4; ++idx)
+        {
+            pos[idx][0] = x + (idx & 2 ? state->width : 0);
+            pos[idx][1] = y + (idx & 1 ? state->height : 0);
+            uv[idx][0] = state->quad.p[idx].uv.u;
+            uv[idx][1] = state->quad.p[idx].uv.v;
+        }
+        hd_draw_ui_quad(pos, uv, state->quad.p[1].attr, state->quad.p[0].attr, state->quad.rgbc.rgbc, 256, 1, (state->quad.rgbc.code & 2) != 0);
+    }
+}
+
+static void hd_spr_grps(void)
+{
+    for (sint32 idx = menu_asset_counts.labels - 1; idx >= 0; --idx)
+    {
+        UI_RECORD *rec = &spr_recs[idx + 160];
+        if (rec->active)
+        {
+            if (rec->val >= menu_asset_counts.labels)
+                return;
+            hd_spr_anim(spr_render_at(rec->data, rec->val), rec->x, rec->y);
+        }
+    }
+    if (menu_notice.val == 1)
+        hd_spr_rect(132, 54, 248, 120, 0, 0, 0, 0, 0, 0, 0);
+    for (sint32 idx = 0; idx < (sint16)menu_notice.lines; ++idx)
+    {
+        sint16 x = (idx << 7) + 128, y = 50;
+        switch (menu_notice.type - 1)
+        {
+            case 2:
+                x = 116 * idx + 47;
+                y = 63;
+                break;
+            case 3:
+                x = 116 * idx + 50;
+                y = 55;
+                break;
+            case 4:
+                x = 144;
+                y = 65;
+                break;
+        }
+        render_dispatch_rec(spr_render_at(spr_notice_packets, idx), idx, 2);
+        spr_init_anim_rec(idx + 170, spr_notice_packets, 1, idx, x, y, 1);
+    }
+    for (sint32 idx = (sint16)menu_notice.lines - 1; idx >= 0; --idx)
+    {
+        UI_RECORD *rec = &spr_recs[idx + 170];
+        hd_spr_anim(spr_render_at(rec->data, rec->val), rec->x, rec->y);
+    }
+}
+
+static void hd_spr_layers(void)
+{
+    sint32 layers = menu_state.scr == 10 ? 13 : 1;
+    for (sint32 layer = layers - 1; layer >= 0; --layer)
+        for (sint32 idx = 159; idx >= 0; --idx)
+        {
+            const UI_RECORD *rec = &spr_recs[idx];
+            if (rec->layer == layer && rec->type && rec->flags)
+                hd_spr_anim(spr_render_at(rec->data, rec->val), rec->x, rec->y);
+        }
+}
+
+static void hd_spr_lines(void)
+{
+    const LINE_F2 *lines = disp_line_buffer(disp_state.buffer);
+    if (disp_state.line_count > 200)
+        abort();
+    for (sint32 idx = (sint32)disp_state.line_count - 1; idx >= 0; --idx)
+    {
+        const LINE_F2 *line = &lines[idx];
+        float dx = line->p[1].x - line->p[0].x, dy = line->p[1].y - line->p[0].y;
+        float length = sqrtf(dx * dx + dy * dy);
+        float nx = length ? -dy * 0.5f / length : 0.5f;
+        float ny = length ? dx * 0.5f / length : 0.5f;
+        float pos[4][2];
+        for (uint32 corner = 0; corner < 4; ++corner)
+        {
+            pos[corner][0] = line->p[corner >> 1].x + (corner & 1 ? nx : -nx);
+            pos[corner][1] = line->p[corner >> 1].y + (corner & 1 ? ny : -ny);
+        }
+        hd_draw_ui_quad(pos, NULL, 0, 0, line->rgbc.rgbc, 256, 0, 0);
+    }
+    disp_state.line_count = 0;
+}
+
+static void hd_spr_pools(void)
+{
+    sint32 buffer = disp_state.buffer;
+    if (buffer < 0 || buffer >= 2)
+        abort();
+    for (sint32 grp = TEXT_FONT_COUNT - 1; grp >= 0; --grp)
+    {
+        TEXT_FONT *font = &text_fonts[grp];
+        uint32 count = font->pending_count[buffer];
+        if (count > TEXT_GLYPH_CAPACITY)
+            abort();
+        for (uint32 idx = 0; idx < count; ++idx)
+        {
+            const TEXT_GLYPH *glyph = &font->pending[buffer][idx];
+            const SPRT *spr = &spr_text_packets[grp][buffer][idx];
+            hd_spr_rect(glyph->x, glyph->y, glyph->width, glyph->height, glyph->u, glyph->v, spr_text_modes[grp][buffer].code[0] & 0x1ff, spr->p[0].attr, spr->rgbc.rgbc, 1, (spr->rgbc.code & 2) != 0);
+        }
+        font->pending_count[buffer] = 0;
+    }
+}
+
+void hd_spr_menu(void)
+{
+    hd_spr_grps();
+    hd_spr_layers();
+    hd_spr_lines();
+    hd_spr_pools();
 }
 
 sint32 spr_text_init_packets(void)

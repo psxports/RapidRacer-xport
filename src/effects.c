@@ -13,6 +13,7 @@
 #include "disp.h"
 #include "track.h"
 #include "render.h"
+#include "hd.h"
 #include "xport_trace.h"
 
 #include "utils.h"
@@ -273,13 +274,33 @@ static uint32 spr_packets_build2(uint32 *ot_entry)
     return *ot_entry;
 }
 
+// Immutable vertices, extents and UV words from MAIN.EXE 800B3FF0/800B4000/80093574
+static const SVECTOR effects_quad_vertices[2] = {{1254, -5067, 16992, 0}, {1504, -5065, 16986, 0}};
+static const SVECTOR effects_quad_extents[2] = {{512, 1024, 0, 0}, {512, 512, 0, 0}};
+static const uint32 effects_quad_uv[4] = {(uint32)getClut(576, 194) << 16 | 0x6000, (uint32)getTPage(0, 1, 576, 0) << 16 | 0x601F, 0xFFFF7F00, 0xFFFF7F1F};
+
+void effects_depth_quad(uint32 idx, SVECTOR *origin, SVECTOR *extent, RENDER_MATERIAL *material, sint32 *brightness)
+{
+    if (idx >= 2)
+        abort();
+    *origin = effects_quad_vertices[idx];
+    if (!race_cfg.variant)
+        origin->vx = -origin->vx;
+    *extent = effects_quad_extents[game_timing.base_rate != game_timing.frame_rate];
+    *brightness = render_curve[15][16u * game_timing.ticks & 0x1ffu];
+    *material = (RENDER_MATERIAL){0};
+    material->tpage = effects_quad_uv[1] >> 16;
+    material->clut = effects_quad_uv[0] >> 16;
+    for (uint32 corner = 0; corner < 4; ++corner)
+    {
+        material->uv[corner].u = effects_quad_uv[corner];
+        material->uv[corner].v = effects_quad_uv[corner] >> 8;
+    }
+}
+
 static sint32 effects_render_depth_quads(uint32 *ot)
 {
-    // Immutable vertices, extents and UV words from MAIN.EXE 800B3FF0/800B4000/80093574
-    static const SVECTOR vertices[2] = {{1254, -5067, 16992, 0}, {1504, -5065, 16986, 0}};
-    static const SVECTOR extents[2] = {{512, 1024, 0, 0}, {512, 512, 0, 0}};
-    static const uint32 uv[4] = {(uint32)getClut(576, 194) << 16 | 0x6000, (uint32)getTPage(0, 1, 576, 0) << 16 | 0x601F, 0xFFFF7F00, 0xFFFF7F1F};
-    const SVECTOR *extent = &extents[game_timing.base_rate != game_timing.frame_rate];
+    const SVECTOR *extent = &effects_quad_extents[game_timing.base_rate != game_timing.frame_rate];
     uint32 packet = render_packet_offset();
     sint32 brightness = render_curve[15][16u * game_timing.ticks & 0x1FFu];
     uint32 color = brightness + 128u | brightness + 128u << 8 | brightness + 128u << 16 | 0x2E000000u;
@@ -290,7 +311,7 @@ static sint32 effects_render_depth_quads(uint32 *ot)
     gte_SetDQB(0);
     for (idx = 0; idx < 2; ++idx)
     {
-        SVECTOR vertex = vertices[idx];
+        SVECTOR vertex = effects_quad_vertices[idx];
         VECTOR scaled;
         uint32 scr, depth;
         sint32 scale;
@@ -319,14 +340,14 @@ static sint32 effects_render_depth_quads(uint32 *ot)
         quad->p[2].xy.y = y + scaled.vy;
         quad->p[3].xy.x = quad->p[1].xy.x;
         quad->p[3].xy.y = quad->p[2].xy.y;
-        quad->p[0].uv.uv = uv[0];
-        quad->p[0].attr = uv[0] >> 16;
-        quad->p[1].uv.uv = uv[1];
-        quad->p[1].attr = uv[1] >> 16;
-        quad->p[2].uv.uv = uv[2];
-        quad->p[2].attr = uv[2] >> 16;
-        quad->p[3].uv.uv = uv[3];
-        quad->p[3].attr = uv[3] >> 16;
+        quad->p[0].uv.uv = effects_quad_uv[0];
+        quad->p[0].attr = effects_quad_uv[0] >> 16;
+        quad->p[1].uv.uv = effects_quad_uv[1];
+        quad->p[1].attr = effects_quad_uv[1] >> 16;
+        quad->p[2].uv.uv = effects_quad_uv[2];
+        quad->p[2].attr = effects_quad_uv[2] >> 16;
+        quad->p[3].uv.uv = effects_quad_uv[3];
+        quad->p[3].attr = effects_quad_uv[3] >> 16;
         uint32 *bucket = ot + (depth >> 7);
         quad->tag = *bucket;
         setlen(quad, getlen(quad) | 9);
@@ -337,7 +358,7 @@ static sint32 effects_render_depth_quads(uint32 *ot)
     render_packet_publish(packet);
     // Original return negates the mirrored unsigned halfword before restoring it
     if (race_cfg.variant == 0)
-        return -(uint16) - (uint16)vertices[0].vx;
+        return -(uint16) - (uint16)effects_quad_vertices[0].vx;
     return race_cfg.variant;
 }
 
@@ -364,17 +385,9 @@ uint32 effects_init_transform_object(const RACE_VIEW *context)
 
 typedef struct
 {
-    sint16 pos[3];
-    sint16 vel[3];
-    sint16 kind;
-    sint16 size;
-} EFFECT_PARTICLE;
-
-typedef struct
-{
     SVECTOR origin[2];
     SVECTOR dir[2];
-    EFFECT_PARTICLE particles[40];
+    EFFECT_PARTICLE particles[EFFECT_PARTICLE_COUNT];
     sint32 floor;
     sint32 speed;
     sint32 period;
@@ -383,6 +396,25 @@ typedef struct
 } EFFECT_EMITTER;
 
 static EFFECT_EMITTER effects_emitter;
+
+const EFFECT_PARTICLE *effects_particle(uint32 idx, RENDER_MATERIAL *material)
+{
+    const EFFECT_PARTICLE *particle;
+    if (idx >= EFFECT_PARTICLE_COUNT)
+        abort();
+    particle = &effects_emitter.particles[idx];
+    if (!particle->kind)
+        return NULL;
+    *material = (RENDER_MATERIAL){0};
+    material->tpage = effects_emitter.uv[1] >> 16;
+    material->clut = effects_emitter.uv[particle->kind == 2 ? 2 : particle->kind == 3 ? 3 : 0] >> 16;
+    for (uint32 corner = 0; corner < 4; ++corner)
+    {
+        material->uv[corner].u = effects_emitter.uv[corner];
+        material->uv[corner].v = effects_emitter.uv[corner] >> 8;
+    }
+    return particle;
+}
 
 static void effects_render_particles(uint32 *ot)
 {
@@ -403,7 +435,7 @@ static void effects_render_particles(uint32 *ot)
     identity.m[2][2] = ONE;
     SetRotMatrix(&identity);
     SetTransMatrix(&identity);
-    for (idx = 0; idx < 40; ++idx)
+    for (idx = 0; idx < EFFECT_PARTICLE_COUNT; ++idx)
     {
         const EFFECT_PARTICLE *particle = &effects_emitter.particles[idx];
         sint16 kind = particle->kind;
@@ -500,10 +532,10 @@ static sint32 effects_update_particles(CB_NODE *node)
     emitter->timer--;
     if (emitter->timer < 0)
     {
-        for (idx = 0; idx < 40 && emitter->particles[idx].kind != 0; ++idx)
+        for (idx = 0; idx < EFFECT_PARTICLE_COUNT && emitter->particles[idx].kind != 0; ++idx)
         {
         }
-        if (idx == 40)
+        if (idx == EFFECT_PARTICLE_COUNT)
             emitter->timer = 0;
         else
         {
@@ -541,7 +573,7 @@ static sint32 effects_update_particles(CB_NODE *node)
             emitter->timer = emitter->period;
         }
     }
-    for (idx = 0; idx < 40; ++idx)
+    for (idx = 0; idx < EFFECT_PARTICLE_COUNT; ++idx)
     {
         EFFECT_PARTICLE *particle = &emitter->particles[idx];
 
@@ -582,7 +614,7 @@ static sint32 effects_init_particles(void)
     emitter->speed = 50;
     emitter->timer = 0;
     emitter->floor = 1304;
-    for (idx = 0; idx < 40; ++idx)
+    for (idx = 0; idx < EFFECT_PARTICLE_COUNT; ++idx)
         emitter->particles[idx].kind = 0;
     emitter->uv[0] = (uint32)getClut(960, 149) << 16 | 0x20C0;
     emitter->uv[1] = (uint32)getTPage(0, 1, 896, 0) << 16 | 0x20DF;
@@ -763,6 +795,20 @@ static sint32 effects_init_cache(void)
 static const sint16 effects_proj_widths[7] = {32, 8, 12, 16, 32, 20, 40};
 static const uint32 effects_proj_scales[7] = {0, 400, 600, 800, 1000, 1200, 1400};
 
+void effects_sun_material(uint32 idx, RENDER_MATERIAL *material, float *width, float *scale)
+{
+    if (idx >= 7)
+        abort();
+    const EFFECT_TEXTURE *tex = &effects_cache_tex[idx];
+    *material = (RENDER_MATERIAL){0};
+    material->tpage = tex->tpage;
+    material->clut = tex->clut;
+    for (uint32 corner = 0; corner < 4; ++corner)
+        material->uv[corner] = (RENDER_TEXCOORD){tex->uv[corner].u, tex->uv[corner].v};
+    *width = effects_proj_widths[idx];
+    *scale = (float)effects_proj_scales[idx] / 4096;
+}
+
 sint32 effects_render_quad_proj_fade(const RACE_VIEW *state, sint32 buffer_idx)
 {
     SVECTOR src;
@@ -883,6 +929,42 @@ sint32 effects_render_quad_proj_fade(const RACE_VIEW *state, sint32 buffer_idx)
     return result;
 }
 
+const MESH_MODEL *hd_effects_countdown(const RACE_VIEW *view, MATRIXF *matrix)
+{
+    const EFFECTS_TRANSFORM *state = effects_transform(view->idx);
+    if (state->phase == -1)
+        return NULL;
+    if ((uint32)state->phase >= 4 || !effects_models_ready)
+        abort();
+    MATRIXF pose, tilt;
+    IdentityMatrixf(&pose);
+    IdentityMatrixf(&tilt);
+    float half = (float)(game_timing.frame_rate / 2);
+    if (state->counter > half)
+        RotMatrixXf((state->counter - half) * 1024.0f / half * RAD12, &pose);
+    tilt.m[1][1] = race_cfg.players == 2 ? -1840.0f / 4096 : -5120.0f / 4096;
+    *matrix = (MATRIXF){0};
+    MulMatrix0f(&tilt, &pose, matrix);
+    float progress = state->counter / (float)game_timing.frame_rate;
+    matrix->t[2] = state->phase ? 1000.0f - 800.0f * progress : 200.0f + 800.0f * progress;
+    // Retain the initial depth before the first countdown callback
+    if (state->phase == 3 && !state->counter)
+        matrix->t[2] = 500;
+    return &effects_models[state->phase];
+}
+
+const MESH_MODEL *effects_countdown(const RACE_VIEW *view, MATRIX *matrix)
+{
+    const EFFECTS_TRANSFORM *transform = effects_transform(view->idx);
+    if (transform->phase == -1)
+        return NULL;
+    if ((uint32)transform->phase >= 4 || !effects_models_ready)
+        abort();
+    MulMatrix0((MATRIX *)&transform->view, (MATRIX *)&transform->pose, matrix);
+    memcpy(matrix->t, transform->pose.t, sizeof(matrix->t));
+    return &effects_models[transform->phase];
+}
+
 void effects_render(const RACE_VIEW *player, sint32 player_idx)
 {
     EFFECTS_TRANSFORM *transform;
@@ -970,6 +1052,65 @@ static uint32 effects_emit_filled_circle(uint32 *ot_entry, sint16 center_x, sint
     AddPrim(ot_entry, mode);
     render_packet_publish(offset + sizeof(*mode));
     return *ot_entry;
+}
+
+static void effects_draw_circle_frame(uint32 step)
+{
+    sint32 buffer = disp_state.scene_buffer;
+    const PSX_RECT *rect = &disp_scene_frame(&camera_views[0], buffer)->viewport;
+    gpu_set_raster(1);
+    render_select_prim_pool(buffer);
+    for (uint32 idx = 0; idx < race_cfg.players; ++idx)
+        track_render_player(&race_views[idx], buffer);
+    game_draw_og_frame();
+    for (uint32 circle = step & 1 ? 1 : 2; circle <= step; circle += 2)
+    {
+        uint32 *ot = effects_trans_ot_slot(buffer);
+        uint32 offset;
+        DR_AREA *area;
+        DR_OFFSET *origin;
+        DrawSync(0);
+        render_select_prim_pool(buffer);
+        *ot = 0x00FFFFFF;
+        effects_emit_filled_circle(ot, rect->w / 2, rect->h / 2, circle < 50 ? circle * 10 : 500);
+        offset = render_packet_offset();
+        area = render_packet_at(offset, sizeof(*area) + sizeof(*origin));
+        origin = (DR_OFFSET *)((uint8 *)area + sizeof(*area));
+        SetDrawArea(area, (PSX_RECT *)rect);
+        SetDrawOffset(origin, (sint16[2]){rect->x, rect->y});
+        AddPrim(ot, area);
+        AddPrim(ot, origin);
+        render_packet_publish(offset + sizeof(*area) + sizeof(*origin));
+        DrawOTag(ot);
+    }
+    gpu_present();
+}
+
+sint32 hd_effects_trans(void)
+{
+    uint32 paused = race_paused;
+    RENDER_SAMPLE sample = render_save_sample();
+    race_paused = 1;
+    for (uint32 step = 1; step < 60 && !xport_isquit(); ++step)
+    {
+        DrawSync(0);
+        VSync(0);
+        disp_state.scene_buffer = 1 - disp_state.scene_buffer;
+        spu_decrease_master_volume(0x200);
+        if (xport_hd)
+        {
+            if (hd_begin_scene())
+            {
+                hd_draw_circle(step);
+                hd_end_frame();
+            }
+        }
+        else
+            effects_draw_circle_frame(step);
+        render_restore_sample(&sample);
+    }
+    race_paused = paused;
+    return 0;
 }
 
 sint32 effects_run_expanding_circle_trans(void)

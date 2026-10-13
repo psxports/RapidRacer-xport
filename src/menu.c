@@ -26,6 +26,7 @@
 #include "utils.h"
 #include "object.h"
 #include "render.h"
+#include "hd.h"
 #include "track.h"
 #include "text.h"
 #include "xport_trace.h"
@@ -1237,6 +1238,25 @@ static sint32 menu_select_upload_images(void)
     return 0;
 }
 
+static void hd_menu_frame(void)
+{
+    if (!hd_begin_ui())
+    {
+        for (uint32 idx = 0; idx < TEXT_FONT_COUNT; ++idx)
+            text_fonts[idx].pending_count[disp_state.buffer] = 0;
+        disp_state.line_count = 0;
+        return;
+    }
+    if (menu_asset_counts.labels == 0)
+    {
+        float pos[4][2] = {{0, 0}, {0, disp_state.height}, {disp_state.width, 0}, {disp_state.width, disp_state.height}};
+        float uv[4][2] = {{0, 0}, {0, disp_state.height}, {disp_state.width, 0}, {disp_state.width, disp_state.height}};
+        hd_draw_ui_quad(pos, uv, getTPage(2, 0, disp_state.width, 0), 0, 0x808080, 512, 1, 0);
+    }
+    hd_spr_menu();
+    hd_end_frame();
+}
+
 static sint32 menu_render_frame(void)
 {
     uint32 *ot;
@@ -1252,6 +1272,12 @@ static sint32 menu_render_frame(void)
     spr_update_anims();
     if (menu_state.scr == 10)
         menu_select_populate_recs(0, 0, 0, 0);
+    if (xport_hd)
+    {
+        hd_menu_frame();
+        return 0;
+    }
+    gpu_set_raster(1);
     ot = disp_begin_menu_frame();
     ordering_idx = spr_submit_grps(0);
     ordering_idx = spr_submit_layered_recs((sint16)ordering_idx);

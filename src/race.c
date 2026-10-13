@@ -18,6 +18,7 @@
 #include "text.h"
 #include "profile.h"
 #include "race.h"
+#include "hd.h"
 #include "banner.h"
 #include "tournament.h"
 #include "utils.h"
@@ -925,14 +926,12 @@ static sint32 race_render_progress(const RACE_VIEW *state, uint32 *ot)
     return (sint16)hud_render(state, ot, result);
 }
 
-sint32 race_render_results(const RACE_VIEW *state, uint32 *ot)
+static sint32 race_finish_results(void)
 {
     sint32 result;
     sint32 complete = 0;
     uint32 mode;
 
-    FUNCTION_MARKER(0x80020FD0, "MAIN.EXE");
-    race_render_progress(state, ot);
     mode = race_cfg.players;
     result = 2;
     if (mode == 1)
@@ -971,6 +970,20 @@ sint32 race_render_results(const RACE_VIEW *state, uint32 *ot)
         }
     }
     return result;
+}
+
+sint32 race_render_results(const RACE_VIEW *state, uint32 *ot)
+{
+    FUNCTION_MARKER(0x80020FD0, "MAIN.EXE");
+    race_render_progress(state, ot);
+    return race_finish_results();
+}
+
+void hd_race_results(const RACE_VIEW *view)
+{
+    race_update_player(view, 0);
+    hd_hud_render(view);
+    race_finish_results();
 }
 
 void race_handle_2p(void)

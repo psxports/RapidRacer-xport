@@ -28,6 +28,7 @@ void pickup_restore(void);
 struct BOAT;
 uint32 pickup_scan(const struct BOAT *boat);
 
+sint32 pickup_update(const struct RACE_VIEW *state, const struct BOAT *boat);
 sint32 pickup_update_slots(const struct RACE_VIEW *state, uint32 *ot, const struct BOAT *boat);
 sint32 pickup_write_racer_indices(uint8 *output);
 sint32 pickup_update_racer_flags(void);

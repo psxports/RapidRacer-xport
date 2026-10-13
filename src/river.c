@@ -69,6 +69,34 @@ static uint32 river_vertex_color(uint32 pal, sint32 factor)
     return result;
 }
 
+uint32 river_water_color(const ROUTE_VERTEX *src, uint32 pal, sint32 *height, sint32 bonus)
+{
+    sint32 phase = game_timing.ticks;
+    sint32 low = src->curve & 15;
+    sint32 high = src->curve >> 4;
+    sint32 shading = 2 * (low + high);
+    sint32 vertical = -render_curve[low][(sint8)src->phase[0] * 2 + phase & 511] - render_curve[high][(sint8)src->phase[1] * 2 + phase & 511];
+    uint32 type = src->flags >> 5;
+    uint32 color;
+    if ((uint16)(phase - src->impact_tick) < 256)
+    {
+        sint32 adjust = 4 * render_curve[10][(uint16)(phase - src->impact_tick)] - 80;
+        shading -= adjust;
+        vertical -= adjust >> 3;
+    }
+    *height = vertical;
+    if (src->deform[0] || src->deform[1])
+        color = 0x3C3F3F3F;
+    else
+    {
+        shading = -shading - vertical + src->shade;
+        if (shading < 3)
+            shading = 3;
+        color = river_vertex_color(pal, shading << 5);
+    }
+    return bonus && type ? river_billboard_colors[type] : color;
+}
+
 // Encode registered packets through the shared PsyQ boundary
 static uint32 river_packet_link(void *packet)
 {
@@ -123,13 +151,8 @@ static const ROUTE_SEGMENT *river_render_pass(const ROUTE_SEGMENT *mesh, sint32 
             sint32 depth;
             sint32 x;
             sint32 y;
-            sint32 deform0;
-            sint32 deform1;
             sint32 vertical_deform;
-            sint32 shading;
             uint16 deform;
-            uint8 low_deform;
-            uint8 high_deform;
             uint8 outcode;
             uint8 tex;
             uint8 type;
@@ -138,19 +161,7 @@ static const ROUTE_SEGMENT *river_render_pass(const ROUTE_SEGMENT *mesh, sint32 
             point.vy = oy + 16 * src->pos[1];
             point.vz = oz + 16 * src->pos[2];
             point.pad = 0;
-            low_deform = src->curve & 15u;
-            high_deform = src->curve >> 4;
-            deform0 = render_curve[low_deform][(sint8)src->phase[0] * 2 + phase & 0x1FF];
-            deform1 = render_curve[high_deform][(sint8)src->phase[1] * 2 + phase & 0x1FF];
-            vertical_deform = -(deform0 + deform1);
-            shading = 2 * (low_deform + high_deform);
-            if ((uint16)(phase - src->impact_tick) < 256u)
-            {
-                sint32 adjust = 4 * render_curve[10][(uint16)(phase - src->impact_tick)] - 80;
-
-                shading -= adjust;
-                vertical_deform -= adjust >> 3;
-            }
+            proj[cur_buffer][vertex].color = river_water_color(src, pal, &vertical_deform, render_billboards.count < 64);
             deform = (uint8)src->deform[0] | (uint8)src->deform[1] << 8;
             proj[cur_buffer][vertex].alternate_scr = 0;
             if (deform != 0)
@@ -162,16 +173,11 @@ static const ROUTE_SEGMENT *river_render_pass(const ROUTE_SEGMENT *mesh, sint32 
                 point.vx = base.vx + (vertical_deform * ((sint8)deform * 128) >> 12);
                 point.vy = base.vy - vertical_deform;
                 point.vz = base.vz + (vertical_deform * ((sint8)(deform >> 8) * 128) >> 12);
-                proj[cur_buffer][vertex].color = 0x3C3F3F3F;
                 outcode = 0;
             }
             else
             {
                 point.vy = point.vy - vertical_deform;
-                shading = -shading - vertical_deform + src->shade;
-                if (shading < 3)
-                    shading = 3;
-                proj[cur_buffer][vertex].color = river_vertex_color(pal, shading << 5);
                 outcode = 0x10;
             }
             depth = gte_project_full_depth(&point, (sint32 *)&scr.xy, &flags);
@@ -181,7 +187,6 @@ static const ROUTE_SEGMENT *river_render_pass(const ROUTE_SEGMENT *mesh, sint32 
             if (type != 0 && render_billboards.count < 64)
             {
                 render_add_billboard(point.vx, point.vy, point.vz, type);
-                proj[cur_buffer][vertex].color = river_billboard_colors[type];
             }
             x = scr.x;
             y = scr.y;
@@ -949,18 +954,51 @@ static RIVER_FRAME river_frames[2][2];
 static uint32 *river_ot[2];
 static uint32 river_outside;
 
-void river_select_frame(sint32 buffer, sint32 view)
+sint32 river_showcase_outside(void)
+{
+    return river_outside != 0;
+}
+
+void river_border_point(sint32 idx, SVECTOR *pos, uint32 *type)
+{
+    if (idx < 0 || idx >= RIVER_BORDER_COUNT || !pos || !type)
+        abort();
+    const RENDER_BILLBOARD *src = &river_border[idx];
+    *pos = (SVECTOR){src->x, src->y, src->z, 0};
+    *type = src->type;
+}
+
+void hd_river_border_point(sint32 idx, VEC3F *pos, uint32 *type)
+{
+    if (idx < 0 || idx >= RIVER_BORDER_COUNT || !pos || !type)
+        abort();
+    const RENDER_BILLBOARD *src = &river_border[idx];
+    *pos = (VEC3F){{(float)src->x, (float)src->y, (float)src->z}};
+    *type = src->type;
+}
+
+static void river_update_outside(void)
 {
     const BOAT *boat = boat_players[0];
+    river_outside = (uint32)boat->pos.x != (uint32)(sint16)boat->pos.x;
+    if ((uint32)boat->pos.y != (uint32)(sint16)boat->pos.y || boat->pos.z < -30000 || boat->pos.z > 34000)
+        river_outside = 1;
+}
+
+void hd_river_update(void)
+{
+    river_update_outside();
+}
+
+void river_select_frame(sint32 buffer, sint32 view)
+{
     RIVER_FRAME *frame;
 
     FUNCTION_MARKER(0x800389F4, "MAIN.EXE");
     if ((uint32)buffer >= 2 || (uint32)view >= 2)
         abort();
     frame = &river_frames[view][buffer];
-    river_outside = (uint32)boat->pos.x != (uint32)(sint16)boat->pos.x;
-    if ((uint32)boat->pos.y != (uint32)(sint16)boat->pos.y || boat->pos.z < -30000 || boat->pos.z > 34000)
-        river_outside = 1;
+    river_update_outside();
     horizon_select_showcase(buffer, view);
     river_ot[0] = frame->ot[0];
     river_ot[1] = frame->ot[1];
@@ -1092,7 +1130,7 @@ static sint32 river_place_model(const CAMERA *camera, const BOAT *boat, const ME
     return 1;
 }
 
-static void river_hsv_to_rgb(uint8 output[3], sint32 hue, sint32 sat, sint32 val)
+void river_hsv_to_rgb(uint8 output[3], sint32 hue, sint32 sat, sint32 val)
 {
     sint32 sector;
     sint32 fraction;

@@ -25,6 +25,15 @@ typedef struct
 
 typedef struct
 {
+    VEC3F pos;
+    float distance;
+    float edge[2];
+    uint32 mode;
+    uint32 ready;
+} HD_CAMERA;
+
+typedef struct
+{
     sint32 pos[3];
     sint32 dir[3];
     const struct ROUTE_SEGMENT *route;
@@ -44,8 +53,12 @@ CAMERA *camera_for_view(const struct RACE_VIEW *context);
 sint32 camera_init(CAMERA *camera);
 
 sint32 camera_update(CAMERA *camera, struct BOAT *boat);
+void hd_camera_sync(const CAMERA *camera, HD_CAMERA *state);
+void hd_camera_update(const CAMERA *camera, const struct BOAT *boat, const MATRIXF *pose, HD_CAMERA *state);
+void hd_camera_matrix(const CAMERA *camera, const struct BOAT *boat, const MATRIXF *pose, const HD_CAMERA *state, MATRIXF *rotation, VEC3F *pos);
 
 void camera_config_lighting(const struct BOAT *boat, const MATRIX *input);
+void camera_get_lighting(const struct BOAT *boat, const MATRIX *input, MATRIX *light, MATRIX *color);
 void camera_bias_matrix(const CAMERA *camera, const MATRIX *src, sint32 unbiased);
 
 #endif /* CAMERA_H */

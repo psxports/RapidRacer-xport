@@ -95,6 +95,7 @@ sint32 disp_sync_swap_buf(void)
     sint32 pass;
 
     FUNCTION_MARKER(0x8001116C, "MAIN.EXE");
+    gpu_set_raster(1);
     DrawSync(0);
     for (pass = 0; pass < 2; ++pass)
     {
@@ -108,7 +109,7 @@ sint32 disp_sync_swap_buf(void)
             buffer = disp_state.scene_buffer;
             track_render_player(&race_views[1], buffer);
         }
-        game_render_frame();
+        game_frame_og();
         disp_state.scene_buffer = 1 - disp_state.scene_buffer;
     }
     return 0;
