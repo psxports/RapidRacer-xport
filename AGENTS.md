@@ -4,6 +4,8 @@ Resolve `[XPORT_ROOT]` from `xport-project.json` and read `[XPORT_ROOT]/AGENTS.m
 
 ## Project facts
 
+- Whole-frame raster skipping is enabled in ordinary shared xport builds and disabled for `LOCKSTEP_DEBUG` coverage; late blocking VSync skips primitive/clear raster and presentation while preserving GPU state, uploads/copies/readback. Final Debug/PC Release/Web Release, two-player load captures, missing STR selectors and timing checks: `status/audits/frame-skip/report.json`; prepared site bundle is not published
+
 - Web Release uses XPORT_NATIVE_GPU_CD and disables function markers; shared Web runtime includes PsyQ font support. STR assets are excluded; cold WASM startup and all 12 movie selectors return without video and proceed to rendered menus. Build, package/input/loader checks and simulation limits: `status/audits/web-build/report.json`
 
 - Two-player native input uses both connected shared PsyQ ports; game input calls PadStartCom after PadInitDirect. Both split layouts use camera Y scale -1840; P1 starts at the odd lane and P2 at the even lane. Input tests, original MIPS corrections, both-layout runtime captures and final Release accepted by user on 2026-10-12: `status/audits/split-screen/report.json`
