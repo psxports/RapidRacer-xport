@@ -302,7 +302,7 @@ static void hd_clip_point(VID_VERTEX *vertex, uint32 view, const float point[3],
     // Preserve the OG camera's pixel aspect before extending the horizontal view
     float reference_aspect = race_cfg.players == 2 ? race_cfg.layout == 2 ? 2.0f / 3.0f : 8.0f / 3.0f : 4.0f / 3.0f;
     float horizontal = focal * disp_state.view_height / disp_state.view_width * reference_aspect;
-    ProjectVertexf(&src, horizontal / aspect, focal, 16, 16000, vertex->pos);
+    ProjectVertexf(&src, horizontal / aspect, focal, 16, HD_FAR_Z, vertex->pos);
 }
 
 static void hd_boat_pose(const BOAT *boat, MATRIXF *pose)
@@ -586,7 +586,7 @@ static void hd_billboard_side(const RACE_VIEW *view, const VEC3F *center, uint32
     if (race_cfg.players == 2)
         height *= 0.5f;
     hd_project_point(&projected, camera, NULL, center->v, focal);
-    if (projected.pos[3] < 16 || projected.pos[3] >= 16000)
+    if (projected.pos[3] < 16 || projected.pos[3] >= HD_FAR_Z)
         return;
     entry = hd_material(1, tex->tpage, clut, VID_BLEND_NONE, race_cfg.mode == 8 ? HD_DEPTH_SOLID : HD_DEPTH_WORLD);
     vertices = hd_alloc(entry, view->idx, 6);
@@ -663,12 +663,12 @@ static void hd_river(const RACE_VIEW *view, float focal)
     const CAMERA *camera = camera_for_view(view);
     const ROUTE_SEGMENT *seg = camera->route;
     uint32 distant = camera->visible[1] > 2 ? camera->visible[1] - 2 : 0;
-    uint32 limit = camera->visible[0] + distant;
+    uint32 limit = (camera->visible[0] + distant) * HD_DRAW_SCALE;
     uint32 billboards = 0;
     render_publish_pal();
     if (limit > route_resources.count)
         limit = route_resources.count;
-    // Match the overlapping surface and distant passes of river_render
+    // Extend the original overlapping surface and distant passes
     if (camera->dir != 1)
         for (uint32 i = 0; i < limit; ++i)
             seg = seg->prev.seg;
@@ -679,7 +679,7 @@ static void hd_river(const RACE_VIEW *view, float focal)
         uint32 cur_idx = seg->join[0], prev_idx = seg->join[1];
         const uint32 *pal = render_pal(seg->pal);
         uint32 color_idx = 2;
-        for (uint32 idx = 0; idx < seg->vertex_count && billboards < 64; ++idx)
+        for (uint32 idx = 0; idx < seg->vertex_count && billboards < 64 * HD_DRAW_SCALE; ++idx)
         {
             uint32 type = seg->vertices[idx].flags >> 5;
             VEC3F center;
@@ -846,7 +846,7 @@ static void hd_track(const RACE_VIEW *view, float focal)
 {
     const CAMERA *camera = camera_for_view(view);
     uint8 visited[256] = {0};
-    uint32 count = camera->visible[0] + camera->visible[1] + camera->visible[2];
+    uint32 count = (camera->visible[0] + camera->visible[1] + camera->visible[2]) * HD_DRAW_SCALE;
     if (!count)
         count = 1;
     if (count > route_resources.count)
@@ -1277,30 +1277,26 @@ static void hd_boats(const RACE_VIEW *view, float focal)
     for (sint32 racer_idx = racers->count - 1; racer_idx >= 0; --racer_idx)
     {
         BOAT *boat = racers->boats[racer_idx];
-        const MESH_MODEL *model;
         const MESH_BOAT_MODELS *models = &mesh_boat_models[view->idx][boat->model_slot];
-        model = boat->trail.phase == 2 ? &models->main : &models->lod;
         MATRIXF matrix;
         hd_boat_matrix(boat, &matrix);
-        hd_model(camera, boat, &matrix, model, focal, boat->trail.phase == 2);
+        hd_model(camera, boat, &matrix, &models->main, focal, 1);
         if (boat->trail.phase == 2)
         {
             hd_trail(view, boat, focal);
             hd_spray(view, boat, focal);
-            if (boat != boat_player(view) || camera->mode != 2)
+        }
+        if (boat != boat_player(view) || camera->mode != 2)
+        {
+            MATRIXF props[2];
+            sint32 count = hd_props(boat, &matrix, props);
+            for (sint32 idx = 0; idx < count; ++idx)
             {
-                MATRIXF props[2];
-                sint32 count = hd_props(boat, &matrix, props);
-                for (sint32 idx = 0; idx < count; ++idx)
-                {
-                    hd_model(camera, boat, &props[idx], &models->prop[idx], focal, 0);
-                    if (boat->control.mode == 1)
-                        hd_flare(view, boat, &props[idx], focal);
-                }
+                hd_model(camera, boat, &props[idx], &models->prop[idx], focal, 0);
+                if (boat->control.mode == 1)
+                    hd_flare(view, boat, &props[idx], focal);
             }
         }
-        else if (boat->setup.propellers > 0)
-            hd_model(camera, boat, &matrix, &models->prop_lod, focal, 0);
     }
 }
 
@@ -1524,7 +1520,7 @@ static void hd_player_markers(const RACE_VIEW *view, float focal)
         if (boat == boat_player(view) || (boat->control.driver != 2 && boat->control.driver != 3))
             continue;
         hd_project_point(&center, camera_for_view(view), NULL, point, focal);
-        if (center.pos[3] < 16 || center.pos[3] >= 16000)
+        if (center.pos[3] < 16 || center.pos[3] >= HD_FAR_Z)
             continue;
         trail_marker_material(boat->control.driver == 2 ? 0 : 1, &tex);
         entry = hd_material(1, tex.tpage, tex.clut, VID_BLEND_NONE, HD_DEPTH_NONE);

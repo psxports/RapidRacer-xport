@@ -4,6 +4,12 @@
 #include "game.h"
 #include "hud.h"
 
+enum
+{
+    HD_DRAW_SCALE = 2,
+    HD_FAR_Z = 16000 * HD_DRAW_SCALE
+};
+
 void hd_init(void);
 void hd_sync_proj(void);
 void hd_reset(void);

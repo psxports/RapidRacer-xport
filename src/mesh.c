@@ -5,6 +5,7 @@
 #include "boat.h"
 #include <string.h>
 #include "mesh.h"
+#include "hd.h"
 #include "disp.h"
 #include "camera.h"
 #include "trail.h"
@@ -522,6 +523,26 @@ void mesh_prepare_racers(const RACE_VIEW *view, MESH_RACERS *dst, sint32 (*is_vi
     dst->carried = carried_boat;
 }
 
+static sint32 hd_route_seg_is_in_window(const RACE_VIEW *view, sint32 offset)
+{
+    const CAMERA *camera = camera_for_view(view);
+    const ROUTE_SEGMENT *seg = camera->route;
+    sint32 count = route_resources.count;
+    sint32 cur = seg->next.idx - 1;
+    if (cur < 0)
+        cur = seg->prev.idx + 1;
+    sint32 width = (camera->visible[0] + camera->visible[1]) * HD_DRAW_SCALE;
+    if (width >= count)
+        return 1;
+    sint32 target = offset % count;
+    if (target < 0)
+        target += count;
+    sint32 distance = camera->dir == 1 ? target - cur : cur - target;
+    if (distance < 0)
+        distance += count;
+    return distance <= width;
+}
+
 void hd_mesh_prepare_racers(const RACE_VIEW *view, MESH_RACERS *dst, sint32 (*is_visible)(const RACE_VIEW *, const BOAT *), float (*get_depth)(const RACE_VIEW *, const BOAT *))
 {
     BOAT **candidates = dst->boats;
@@ -562,12 +583,12 @@ void hd_mesh_prepare_racers(const RACE_VIEW *view, MESH_RACERS *dst, sint32 (*is
             sint32 route_delta = racer_route - cur_route;
 
             route_delta = abs(route_delta);
-            if (route_delta >= 101)
+            if (route_delta >= 101 * HD_DRAW_SCALE)
                 visible = 0;
         }
         if (visible != 0 && race_cfg.mode != 8)
         {
-            visible = route_seg_is_in_window(view, racer->race.progress);
+            visible = hd_route_seg_is_in_window(view, racer->race.progress);
             if (visible != 0)
                 visible = is_visible(view, racer);
         }
@@ -578,7 +599,7 @@ void hd_mesh_prepare_racers(const RACE_VIEW *view, MESH_RACERS *dst, sint32 (*is
             continue;
         }
         depth = get_depth(view, racer);
-        if (depth >= -800.0f && depth < 8000.0f)
+        if (depth >= -800.0f && depth < 8000.0f * HD_DRAW_SCALE)
         {
             candidates[count] = racer;
             buckets[count] = 0;
