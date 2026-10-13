@@ -630,7 +630,10 @@ uint32 hd_render_read_indicator(MATRIXF *transform, const SVECTOR **points)
     if (!indicator_ready)
         return 1;
     float angle = (atan2f((float)indicator_dir[0], (float)indicator_dir[1]) - atan2f((float)indicator_dir[2], (float)indicator_dir[3])) / RAD12 + 2048;
-    angle -= 4096.0f * floorf(angle / 4096.0f);
+    if (angle < 0)
+        angle += 4096;
+    else if (angle >= 4096)
+        angle -= 4096;
     if (angle >= 513 && angle < 2048)
         angle = 512;
     else if (angle >= 2049 && angle < 3584)

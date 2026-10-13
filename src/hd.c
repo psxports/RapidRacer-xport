@@ -374,7 +374,11 @@ static sint32 hd_props(const BOAT *boat, const MATRIXF *matrix, MATRIXF dst[2])
 
 static float hd_wrap(float value)
 {
-    return value - 65536.0f * floorf((value + 32768.0f) / 65536.0f);
+    while (value < -32768.0f)
+        value += 65536.0f;
+    while (value >= 32768.0f)
+        value -= 65536.0f;
+    return value;
 }
 
 static void hd_project_point(VID_VERTEX *vertex, const CAMERA *camera, const MATRIXF *model, const float source[3], float focal)
@@ -787,7 +791,7 @@ static sint32 hd_track_group_visible(const CAMERA *camera, const TRACK_PRIM_GROU
     for (uint32 axis = 0; axis < 3; ++axis)
     {
         float center = (min[axis] + max[axis]) * 0.5f + hd_camera_pos[camera - camera_views].v[axis];
-        center -= 65536 * floorf((center + 32768) / 65536);
+        center = hd_wrap(center);
         // A periodic seam makes this box unsuitable for conservative rejection
         if (fabsf(center) + (max[axis] - min[axis]) * 0.5f >= 32768)
             return 1;
@@ -1668,7 +1672,7 @@ static void hd_showcase_ground(const RACE_VIEW *view, float focal)
     IdentityMatrixf(&center);
     HD_MATERIAL *grid = hd_material_region(1, getTPage(0, 0, 768, 256), getClut(768, 511), VID_BLEND_NONE, HD_DEPTH_WATER, 0, 0, 64, 1);
     float scroll = (fabsf(hd_camera_pos[view->idx].x) + fabsf(hd_camera_pos[view->idx].z)) * 0.25f;
-    scroll -= 64 * floorf(scroll / 64);
+    scroll -= 64 * (uint32)(scroll / 64);
     uint32 base = race_cfg.variant == 2 ? 0x701060 : 0x4B4018;
     uint32 far = race_cfg.variant == 2 ? 0x200028 : 0xE0D0A0;
     for (uint32 axis = 0; axis < 3; ++axis)
