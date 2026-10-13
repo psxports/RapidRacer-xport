@@ -16,24 +16,10 @@
 
 ## Project Status
 
-<table>
-  <tbody>
-    <tr>
-      <td align="right"><strong>decomp:</strong></td>
-      <td valign="middle"><a href="https://github.com/psxports/RapidRacer-xport/issues?q=is%3Aissue%20label%3Adecomp"><img src="https://psxports.pages.dev/progress?repo=RapidRacer-xport&amp;label=decomp" alt="Decompilation progress"></a></td>
-    </tr>
-    <tr>
-      <td align="right"><strong>refactor:</strong></td>
-      <td valign="middle"><a href="https://github.com/psxports/RapidRacer-xport/issues?q=is%3Aissue%20label%3Arefactor"><img src="https://psxports.pages.dev/progress?repo=RapidRacer-xport&amp;label=refactor" alt="Refactoring progress"></a></td>
-    </tr>
-    <tr>
-      <td align="right"><strong>enhance:</strong></td>
-      <td valign="middle"><a href="https://github.com/psxports/RapidRacer-xport/issues?q=is%3Aissue%20label%3Aenhance"><img src="https://psxports.pages.dev/progress?repo=RapidRacer-xport&amp;label=enhance" alt="Enhancement progress"></a></td>
-    </tr>
-    <tr>
-      <td align="right"><strong>remaster:</strong></td>
-      <td valign="middle"><a href="https://github.com/psxports/RapidRacer-xport/issues?q=is%3Aissue%20label%3Aremaster"><img src="https://psxports.pages.dev/progress?repo=RapidRacer-xport&amp;label=remaster" alt="Remaster progress"></a></td>
-    </tr>
-  </tbody>
-</table>
+| Stage | Progress |
+| ---: | :---: |
+| **decomp:** | [![Decompilation progress](https://psxports.pages.dev/progress?repo=RapidRacer-xport&label=decomp)](https://github.com/psxports/RapidRacer-xport/issues?q=is%3Aissue%20label%3Adecomp) |
+| **refactor:** | [![Refactoring progress](https://psxports.pages.dev/progress?repo=RapidRacer-xport&label=refactor)](https://github.com/psxports/RapidRacer-xport/issues?q=is%3Aissue%20label%3Arefactor) |
+| **enhance:** | [![Enhancement progress](https://psxports.pages.dev/progress?repo=RapidRacer-xport&label=enhance)](https://github.com/psxports/RapidRacer-xport/issues?q=is%3Aissue%20label%3Aenhance) |
+| **remaster:** | [![Remaster progress](https://psxports.pages.dev/progress?repo=RapidRacer-xport&label=remaster)](https://github.com/psxports/RapidRacer-xport/issues?q=is%3Aissue%20label%3Aremaster) |
 
