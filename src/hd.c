@@ -1662,7 +1662,7 @@ static void hd_countdown(const RACE_VIEW *view, float focal)
                 if ((x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0) >= 0)
                     continue;
             }
-            entry = hd_material(textured != 0, face->tpage, face->clut, VID_BLEND_NONE, 0);
+            entry = hd_material(textured != 0, face->tpage, face->clut, VID_BLEND_NONE, HD_DEPTH_SOLID);
             mesh = hd_mesh(count);
             if (!mesh)
                 abort();
