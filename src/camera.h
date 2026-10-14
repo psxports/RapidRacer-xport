@@ -9,6 +9,11 @@ struct ROUTE_SEGMENT;
 
 struct BOAT;
 
+enum
+{
+    CAMERA_DEFAULT_HEIGHT = 200
+};
+
 typedef struct
 {
     const struct ROUTE_SEGMENT *route;

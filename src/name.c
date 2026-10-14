@@ -104,12 +104,27 @@ static void name_fill_ring(sint32 start)
     }
 }
 
+void name_update_cheats(void)
+{
+    uint32 players = game_selection.mode == 6 ? (uint8)game_selection.players : game_selection.menu_variant ? 2u : 1u;
+    uint16 flags = game_selection.flags & ~12u;
+    if (players > 5)
+        players = 5;
+    for (uint32 idx = 0; idx < players; ++idx)
+        if (name_matches((sint16)idx, " qak"))
+            flags |= 4u;
+    if (players == 1 && name_matches(0, "bxtr"))
+        flags |= 0x28u;
+    game_selection.flags = flags;
+}
+
 void name_apply_player_name_cheats(void)
 {
     static const char mode_codes[3][6][5] = {{"d  1", "d  2", "d  3", "d  4", "d  5", "d  6"}, {"n  1", "n  2", "n  3", "n  4", "n  5", "n  6"}, {"m  1", "m  2", "m  3", "m  4", "m  5", "m  6"}};
     sint32 result = (sint16)game_selection.mode;
 
     FUNCTION_MARKER(0x8005056C, "MAIN.EXE");
+    name_update_cheats();
     if (result != 0)
         return;
     result = 1;
@@ -178,16 +193,9 @@ void name_apply_player_name_cheats(void)
             for (count = 0; count < 10; ++count)
                 profile_cur()->availability[count] = 1;
         }
-        {
-            uint16 flags = game_selection.flags;
-            if ((flags & 4u) != 0)
-                game_selection.flags = flags - 4u;
-        }
         if (name_matches(0, " qak") != 0)
         {
-            uint16 flags = game_selection.flags;
             menu_state.sound = 3;
-            game_selection.flags = flags + 4u;
         }
         {
             uint16 flags = game_selection.flags;
@@ -206,15 +214,9 @@ void name_apply_player_name_cheats(void)
             text_set_hud_visible(0, 1);
             menu_state.phase = 25;
         }
-        {
-            uint16 flags = game_selection.flags;
-            if ((flags & 8u) != 0)
-                game_selection.flags = flags - 8u;
-        }
         if (name_matches(0, "bxtr") != 0)
         {
             menu_state.sound = 3;
-            game_selection.flags |= 0x28;
         }
         if (name_matches(0, name_code_hurr) != 0)
         {
@@ -302,6 +304,7 @@ static void name_commit_chars(void)
 
         name_player_text(selection)[idx] = (char)val;
     }
+    name_update_cheats();
     save_flush();
 }
 

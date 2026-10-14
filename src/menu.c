@@ -1051,6 +1051,7 @@ static sint32 menu_load_course_tex(sint16 requested)
     sint16 height = 256;
 
     FUNCTION_MARKER(0x8004575C, "MAIN.EXE");
+    name_update_cheats();
     menu_set_resource_prefix();
     menu_play_sound();
     switch (requested)
@@ -2195,6 +2196,7 @@ static sint32 menu_dispatch_state(void)
             break;
         case 5:
             menu_boat_select.phase = MENU_BOAT_IDLE;
+            menu_load_course_tex(1);
             menu_select_update_boat();
             break;
         case 6:
@@ -2564,7 +2566,6 @@ static sint32 menu_update_desc_select(void)
     sint32 count = cfg->count;
     MENU_DESC *desc = cfg->descs;
     sint32 idx = 0;
-    uint32 output_offset = 0;
 
     FUNCTION_MARKER(0x8004DE9C, "MAIN.EXE");
     if (count <= 0)
@@ -2575,9 +2576,9 @@ static sint32 menu_update_desc_select(void)
 
         if (type == 1)
         {
-            UI_RECORD *output_base = spr_recs;
             uint16 val = desc->rec;
-            UI_RECORD *output = output_base + output_offset;
+            // Options retains original sprite slots after removing Memory Card
+            UI_RECORD *output = spr_recs + (state == 2 ? val : idx);
 
             output->val = val;
             output->type = desc->visible;
@@ -2616,7 +2617,6 @@ static sint32 menu_update_desc_select(void)
                 }
             }
         }
-        output_offset += 1;
         ++idx;
         ++desc;
         count = cfg->count;

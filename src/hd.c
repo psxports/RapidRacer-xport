@@ -11,12 +11,16 @@
 #include "route.h"
 #include "hud.h"
 #include "race.h"
+#include "replay.h"
 #include "pickup.h"
 #include "effects.h"
 #include "trail.h"
 #include "menu_pause.h"
 #include "river.h"
 #include "horizon.h"
+#ifdef _DEBUG
+    #include "editor_vis.h"
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,12 +28,15 @@
 
 typedef struct HD_MATERIAL HD_MATERIAL;
 
+static const float hd_countdown_depth = 0.01f;
+
 enum
 {
     HD_DEPTH_NONE,
     HD_DEPTH_SOLID,
     HD_DEPTH_WORLD,
-    HD_DEPTH_WATER
+    HD_DEPTH_WATER,
+    HD_DEPTH_LINE
 };
 
 struct HD_MATERIAL
@@ -451,11 +458,12 @@ static float hd_scale_x(uint32 view, float value)
     return value * hd_ref_aspect() / aspect;
 }
 
-static void hd_clip_point(VID_VERTEX *vertex, uint32 view, const float point[3], float focal)
+static void hd_clip_point(VID_VERTEX *vertex, uint32 view, const float point[3], float focal, float depth_start, float depth_end)
 {
     VECTORF src = {point[0], point[1], point[2]};
     float horizontal = hd_scale_x(view, focal * disp_state.view_height / disp_state.view_width);
     ProjectVertexf(&src, horizontal, focal, 16, HD_FAR_Z, vertex->pos);
+    vertex->pos[2] = vertex->pos[2] * (depth_end - depth_start) + vertex->pos[3] * (depth_start + depth_end - 1);
 }
 
 static float hd_wrap(float value)
@@ -872,7 +880,7 @@ static void hd_project_point(VID_VERTEX *vertex, const CAMERA *camera, const MAT
     point[0] = dst.vx;
     point[1] = dst.vy;
     point[2] = dst.vz;
-    hd_clip_point(vertex, (uint32)(camera - camera_views), point, focal);
+    hd_clip_point(vertex, (uint32)(camera - camera_views), point, focal, hd_countdown_depth, 1);
 }
 
 static void hd_project(VID_VERTEX *vertex, const CAMERA *camera, const MATRIXF *model, const SVECTOR *src, float focal)
@@ -953,7 +961,7 @@ static void hd_sky_quad(const RACE_VIEW *view, const VEC3F points[4], const floa
         VECTORF src = {points[corner].x, points[corner].y, points[corner].z}, dst;
         ApplyMatrixf(&hd_camera_rot[view->idx], &src, &dst);
         const float point[3] = {dst.vx, dst.vy, dst.vz};
-        hd_clip_point(&vertices[idx], view->idx, point, focal);
+        hd_clip_point(&vertices[idx], view->idx, point, focal, hd_countdown_depth, 1);
         vertices[idx].uv[0] = uv[corner][0];
         vertices[idx].uv[1] = uv[corner][1];
         vertices[idx].color[0] = (colors[corner] & 255) / 255.0f;
@@ -1231,20 +1239,30 @@ static void hd_river_uv(const ROUTE_SEGMENT *const rows[4], const uint32 indices
     }
 }
 
+const ROUTE_SEGMENT *hd_camera_route(const RACE_VIEW *view)
+{
+#ifdef _DEBUG
+    const ROUTE_SEGMENT *seg = editor_vis_route(view);
+    if (seg)
+        return seg;
+#endif
+    const ROUTE_SEGMENT *route = camera_for_view(view)->route;
+    return route ? route : boat_player(view)->contacts.points[0].seg;
+}
+
 static void hd_river(const RACE_VIEW *view, float focal)
 {
     const CAMERA *camera = camera_for_view(view);
-    const ROUTE_SEGMENT *seg = camera->route;
-    uint32 distant = camera->visible[1] > 2 ? camera->visible[1] - 2 : 0;
-    uint32 limit = (camera->visible[0] + distant) * HD_DRAW_SCALE;
+    const ROUTE_SEGMENT *seg = hd_camera_route(view);
+    uint32 next, prev;
+    track_vis_range(seg, &next, &prev);
+    uint32 limit = 1 + next + prev;
     uint32 billboards = 0;
     render_publish_pal();
     if (limit > route_resources.count)
         limit = route_resources.count;
-    // Extend the original overlapping surface and distant passes
-    if (camera->dir != 1)
-        for (uint32 i = 0; i < limit; ++i)
-            seg = seg->prev.seg;
+    for (uint32 i = 0; i < prev; ++i)
+        seg = seg->prev.seg;
     for (uint32 strip = 0; strip < limit; ++strip, seg = seg->next.seg)
     {
         hd_water[view->idx].strip = strip;
@@ -1414,15 +1432,14 @@ static void hd_track(const RACE_VIEW *view, float focal)
 {
     const CAMERA *camera = camera_for_view(view);
     uint8 visited[256] = {0};
-    uint32 count = (camera->visible[0] + camera->visible[1] + camera->visible[2]) * HD_DRAW_SCALE;
-    if (!count)
-        count = 1;
-    if (count > route_resources.count)
-        count = route_resources.count;
+    const ROUTE_SEGMENT *cur = hd_camera_route(view);
+    uint32 next, prev;
+    track_vis_range(cur, &next, &prev);
     // Sideways and widescreen views require candidates on both sides of the route
     for (uint32 side = 0; side < 2; ++side)
     {
-        const ROUTE_SEGMENT *seg = side ? camera->route->prev.seg : camera->route;
+        const ROUTE_SEGMENT *seg = side ? cur->prev.seg : cur;
+        uint32 count = side ? prev : next + 1;
         for (uint32 idx = 0; idx < count; ++idx)
         {
             if (seg->section && !visited[seg->section])
@@ -1898,6 +1915,96 @@ static void hd_prepare_boats(const RACE_VIEW *view, sint32 update)
     }
 }
 
+static void hd_wire_line(const RACE_VIEW *view, VID_VERTEX a, VID_VERTEX b, uint32 color)
+{
+    static const uint8 order[6] = {0, 1, 2, 2, 1, 3};
+    if (a.pos[3] < 16 && b.pos[3] < 16)
+        return;
+    if (a.pos[3] < 16 || b.pos[3] < 16)
+    {
+        float t = (16 - a.pos[3]) / (b.pos[3] - a.pos[3]);
+        VID_VERTEX edge = a;
+        for (uint32 axis = 0; axis < 4; ++axis)
+            edge.pos[axis] += (b.pos[axis] - a.pos[axis]) * t;
+        if (a.pos[3] < 16)
+            a = edge;
+        else
+            b = edge;
+    }
+    const VID_RECT *rect = &hd_views[view->idx];
+    float dx = (b.pos[0] / b.pos[3] - a.pos[0] / a.pos[3]) * rect->w;
+    float dy = (b.pos[1] / b.pos[3] - a.pos[1] / a.pos[3]) * rect->h;
+    float length = sqrtf(dx * dx + dy * dy);
+    if (length < 0.001f)
+        return;
+    float nx = -dy / length / rect->w, ny = dx / length / rect->h;
+    HD_MATERIAL *entry = hd_material(0, 0, 0, VID_BLEND_NONE, HD_DEPTH_LINE);
+    VID_VERTEX *vertices = hd_alloc(entry, view->idx, 6);
+    for (uint32 idx = 0; idx < 6; ++idx)
+    {
+        uint32 corner = order[idx];
+        VID_VERTEX *vertex = &vertices[idx];
+        *vertex = corner & 2 ? b : a;
+        float side = corner & 1 ? 1.0f : -1.0f;
+        vertex->pos[0] += side * nx * vertex->pos[3];
+        vertex->pos[1] += side * ny * vertex->pos[3];
+        for (uint32 channel = 0; channel < 3; ++channel)
+            vertex->color[channel] = (color >> (channel * 8) & 255) / 255.0f;
+        vertex->color[3] = 1;
+    }
+}
+
+static void hd_ghost(const RACE_VIEW *view, float focal)
+{
+    if (!mesh_render_state.enabled || race_cfg.mode != 4 || !replay_state.playing || !replay_state.playback_count || !replay_state.contact.seg)
+        return;
+    if (!track_vis_contains(hd_camera_route(view), track_vis_idx(replay_state.contact.seg)))
+        return;
+    uint32 idx = replay_state.cursor ? replay_state.cursor - 1 : 0;
+    if (idx >= replay_state.playback_count)
+        return;
+    const REPLAY_RECORD *current = &replay_state.playback[idx];
+    const REPLAY_RECORD *previous = &replay_state.playback[idx ? idx - 1 : 0];
+    QUATF a, b, rotation;
+    for (uint32 axis = 0; axis < 4; ++axis)
+    {
+        a.v[axis] = previous->quat[axis] / 32768.0f;
+        b.v[axis] = current->quat[axis] / 32768.0f;
+    }
+    SlerpQuatf(&a, &b, hd_frame_fract, &rotation);
+    MATRIXF matrix;
+    QuatMatrixf(&rotation, &matrix);
+    for (uint32 axis = 0; axis < 3; ++axis)
+        matrix.t[axis] = previous->pos.v[axis] + (current->pos.v[axis] - previous->pos.v[axis]) * hd_frame_fract;
+    const CAMERA *camera = camera_for_view(view);
+    const MESH_MODEL *model = &mesh_boat_models[view->idx][boat_player(view)->model_slot].main;
+    for (uint32 kind = 0; kind < 8; ++kind)
+        for (uint32 idx = 0; idx < model->sets[kind].count; ++idx)
+        {
+            const MESH_FACE *face = &model->sets[kind].faces[idx];
+            uint32 count = kind & 1 ? 4 : 3;
+            static const uint8 order[4] = {0, 1, 3, 2};
+            VID_VERTEX projected[4] = {0};
+            for (uint32 corner = 0; corner < count; ++corner)
+                hd_project(&projected[corner], camera, &matrix, &face->v[corner], focal);
+            float cross = 0;
+            if (projected[0].pos[3] > 0 && projected[1].pos[3] > 0 && projected[2].pos[3] > 0)
+            {
+                float x0 = projected[0].pos[0] / projected[0].pos[3], y0 = projected[0].pos[1] / projected[0].pos[3];
+                float x1 = projected[1].pos[0] / projected[1].pos[3], y1 = projected[1].pos[1] / projected[1].pos[3];
+                float x2 = projected[2].pos[0] / projected[2].pos[3], y2 = projected[2].pos[1] / projected[2].pos[3];
+                cross = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+            }
+            uint32 color = cross < 0 ? 0xE8D0D0 : 0xA89090;
+            for (uint32 edge = 0; edge < count; ++edge)
+            {
+                uint32 a = count == 4 ? order[edge] : edge;
+                uint32 b = count == 4 ? order[(edge + 1) % count] : (edge + 1) % count;
+                hd_wire_line(view, projected[a], projected[b], color);
+            }
+        }
+}
+
 static void hd_boats(const RACE_VIEW *view, float focal)
 {
     const CAMERA *camera = camera_for_view(view);
@@ -1912,7 +2019,7 @@ static void hd_boats(const RACE_VIEW *view, float focal)
         if (boat == boat_player(view) && camera->mode < 2)
             continue;
         float depth = hd_racer_depth(view, boat);
-        if (depth < -800 || depth >= 8000 * HD_DRAW_SCALE || !hd_racer_visible(view, boat))
+        if (depth < -800 || depth >= 8000 * HD_DRAW_SCALE || !hd_racer_visible(view, boat) || (race_cfg.mode != 8 && !track_vis_contains(hd_camera_route(view), boat->race.progress)))
             continue;
         sint32 dst = count++;
         while (dst && depths[dst - 1] > depth)
@@ -2014,6 +2121,10 @@ static void hd_submit_water(uint32 view)
 {
     const HD_WATER *water = &hd_water[view];
     sint32 reverse = camera_views[view].dir == 1;
+#ifdef _DEBUG
+    if (editor_vis_route(&race_views[view]))
+        reverse = !editor_vis_reversed();
+#endif
     uint32 cursor = reverse ? water->count : 0;
     for (HD_MATERIAL *entry = hd_materials; entry; entry = entry->next)
         if (entry->depth == HD_DEPTH_WATER && entry->count[view])
@@ -2373,7 +2484,7 @@ static void hd_countdown(const RACE_VIEW *view, float focal)
                 point[0] = dst.vx;
                 point[1] = dst.vy;
                 point[2] = dst.vz;
-                hd_clip_point(&projected[corner], view->idx, point, focal);
+                hd_clip_point(&projected[corner], view->idx, point, focal, 0, hd_countdown_depth);
                 projected[corner].uv[0] = ((src->pad & 255) + 0.5f) / 256.0f;
                 projected[corner].uv[1] = (((uint16)src->pad >> 8) + 0.5f) / 256.0f;
                 for (uint32 channel = 0; channel < 3; ++channel)
@@ -2668,7 +2779,7 @@ static sint32 hd_sun_project(const RACE_VIEW *view, float focal, float center[2]
         return 0;
     const float pos[3] = {point.vx, point.vy, point.vz};
     VID_VERTEX projected;
-    hd_clip_point(&projected, view->idx, pos, focal);
+    hd_clip_point(&projected, view->idx, pos, focal, hd_countdown_depth, 1);
     center[0] = projected.pos[0] / projected.pos[3];
     center[1] = projected.pos[1] / projected.pos[3];
     *depth = point.vz;
@@ -2827,6 +2938,9 @@ static void hd_scene(const RACE_VIEW *view, float focal, sint32 update)
     if (!hd_ready())
         abort();
     focal = hd_sample_camera(view, focal);
+#ifdef _DEBUG
+    editor_vis_camera(view, &hd_camera_rot[view->idx], &hd_camera_pos[view->idx]);
+#endif
     hd_focals[view->idx] = focal;
     hd_horizon(view, focal);
     hd_sun(view, focal, update, 0);
@@ -2858,6 +2972,7 @@ static void hd_scene(const RACE_VIEW *view, float focal, sint32 update)
         hd_track(view, focal);
     }
     hd_boats(view, focal);
+    hd_ghost(view, focal);
     hd_course_effects(view, focal);
     hd_submit_world(view->idx);
     vid_fog(NULL);
@@ -3026,6 +3141,9 @@ void hd_free(void)
     HD_MATERIAL *entry;
     HD_MESH *mesh;
     hd_reset();
+#ifdef _DEBUG
+    editor_vis_free();
+#endif
     free(hd_river_samples[0]);
     free(hd_river_samples[1]);
     hd_river_samples[0] = hd_river_samples[1] = NULL;

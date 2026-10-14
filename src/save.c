@@ -3,6 +3,7 @@
 #include "sound.h"
 #include "tournament.h"
 #include "upgrades.h"
+#include "name.h"
 #include "xport.h"
 
 enum
@@ -45,6 +46,7 @@ void save_load(void)
     upgrades_refresh_grid_limits();
     sound_mix.music = sound_options.music;
     sound_mix.effects = sound_options.effects;
+    name_update_cheats();
     save_loaded = 1;
 }
 

@@ -15,11 +15,59 @@
 #include "game.h"
 #include "render.h"
 #include "track.h"
+#include "track_vis.h"
 #include "ai.h"
 #include "input.h"
 #include "disp.h"
 #include "polygon.h"
 #include <stdlib.h>
+
+static TRACK_VIS track_vis_data[6] = {
+    {sizeof(track_vis_canyon) / sizeof(track_vis_canyon[0]), track_vis_canyon}, {sizeof(track_vis_miami) / sizeof(track_vis_miami[0]), track_vis_miami}, {sizeof(track_vis_alaska) / sizeof(track_vis_alaska[0]), track_vis_alaska}, {sizeof(track_vis_wild) / sizeof(track_vis_wild[0]), track_vis_wild}, {sizeof(track_vis_lost) / sizeof(track_vis_lost[0]), track_vis_lost}, {sizeof(track_vis_lava) / sizeof(track_vis_lava[0]), track_vis_lava},
+};
+
+TRACK_VIS *track_visibility(uint32 course)
+{
+    return course < 6 ? &track_vis_data[course] : NULL;
+}
+
+uint32 track_vis_idx(const ROUTE_SEGMENT *seg)
+{
+    return (seg->prev.idx + 1u) % route_resources.count;
+}
+
+void track_vis_range(const ROUTE_SEGMENT *seg, uint32 *next, uint32 *prev)
+{
+    TRACK_VIS *vis = track_visibility(race_cfg.course);
+    uint32 idx = track_vis_idx(seg);
+    if (vis && vis->count == route_resources.count)
+    {
+        *next = vis->values[idx] & 255;
+        *prev = vis->values[idx] >> 8;
+    }
+    else
+    {
+        uint32 count = 2 * (camera_views[0].visible[0] + camera_views[0].visible[1] + camera_views[0].visible[2]);
+        *next = count ? count - 1 : 0;
+        *prev = count;
+    }
+    if (*prev >= route_resources.count)
+        *prev = route_resources.count - 1;
+    if (*next >= route_resources.count - *prev)
+        *next = route_resources.count - *prev - 1;
+}
+
+sint32 track_vis_contains(const ROUTE_SEGMENT *seg, sint32 idx)
+{
+    sint32 count = route_resources.count;
+    sint32 cur = track_vis_idx(seg);
+    uint32 next, prev;
+    track_vis_range(seg, &next, &prev);
+    idx %= count;
+    if (idx < 0)
+        idx += count;
+    return (uint32)((idx - cur + count) % count) <= next || (uint32)((cur - idx + count) % count) <= prev;
+}
 
 // Immutable light angles in degrees from MAIN.EXE 800935E0..80093617
 const TRACK_LIGHT_ANGLES track_light_angles[7] = {{-20, 275}, {-15, -120}, {-15, -120}, {-15, -120}, {-15, -120}, {-25, 225}, {-15, -120}};

@@ -12,6 +12,7 @@ enum
 };
 
 void hd_init(void);
+const struct ROUTE_SEGMENT *hd_camera_route(const RACE_VIEW *view);
 void hd_sync_proj(void);
 void hd_seed(void);
 sint32 hd_ready(void);

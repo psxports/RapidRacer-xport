@@ -525,22 +525,7 @@ void mesh_prepare_racers(const RACE_VIEW *view, MESH_RACERS *dst, sint32 (*is_vi
 
 static sint32 hd_route_seg_is_in_window(const RACE_VIEW *view, sint32 offset)
 {
-    const CAMERA *camera = camera_for_view(view);
-    const ROUTE_SEGMENT *seg = camera->route;
-    sint32 count = route_resources.count;
-    sint32 cur = seg->next.idx - 1;
-    if (cur < 0)
-        cur = seg->prev.idx + 1;
-    sint32 width = (camera->visible[0] + camera->visible[1]) * HD_DRAW_SCALE;
-    if (width >= count)
-        return 1;
-    sint32 target = offset % count;
-    if (target < 0)
-        target += count;
-    sint32 distance = camera->dir == 1 ? target - cur : cur - target;
-    if (distance < 0)
-        distance += count;
-    return distance <= width;
+    return track_vis_contains(hd_camera_route(view), offset);
 }
 
 void hd_mesh_prepare_racers(const RACE_VIEW *view, MESH_RACERS *dst, sint32 update, sint32 (*is_visible)(const RACE_VIEW *, const BOAT *), float (*get_depth)(const RACE_VIEW *, const BOAT *))
@@ -549,7 +534,6 @@ void hd_mesh_prepare_racers(const RACE_VIEW *view, MESH_RACERS *dst, sint32 upda
     uint16 *buckets = dst->buckets;
     float sort_depths[32];
     sint32 count = 0;
-    sint32 visible_limit;
     sint32 idx;
     BOAT *carried_boat = NULL;
     dst->count = 0;
@@ -575,6 +559,8 @@ void hd_mesh_prepare_racers(const RACE_VIEW *view, MESH_RACERS *dst, sint32 upda
         sint32 visible = 1;
         float depth;
 
+        if (update && racer->trail.phase == 0)
+            racer->trail.phase = 1;
         carried_boat = racer;
         if (racer == boat_player(view) && (sint32)camera_for_view(view)->mode < 2)
             visible = 0;
@@ -596,11 +582,7 @@ void hd_mesh_prepare_racers(const RACE_VIEW *view, MESH_RACERS *dst, sint32 upda
                 visible = is_visible(view, racer);
         }
         if (visible == 0)
-        {
-            if (update && race_cfg.players == 1)
-                racer->trail.phase = 0;
             continue;
-        }
         depth = get_depth(view, racer);
         if (depth >= -800.0f && depth < 8000.0f * HD_DRAW_SCALE)
         {
@@ -658,23 +640,6 @@ void hd_mesh_prepare_racers(const RACE_VIEW *view, MESH_RACERS *dst, sint32 upda
                 }
             }
         }
-    }
-    visible_limit = 3;
-    if ((sint32)camera_for_view(view)->mode < 2)
-        visible_limit = 2;
-    if (race_cfg.players == 2)
-        visible_limit = 8;
-    for (idx = 0; update && idx < count; ++idx)
-    {
-        BOAT *racer = candidates[idx];
-
-        if (idx < visible_limit)
-        {
-            if (racer->trail.phase == 0)
-                racer->trail.phase = 1;
-        }
-        else if (race_cfg.players == 1)
-            racer->trail.phase = 0;
     }
     dst->count = count;
     dst->carried = carried_boat;

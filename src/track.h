@@ -4,6 +4,18 @@
 #include "psx.h"
 
 struct RACE_VIEW;
+struct ROUTE_SEGMENT;
+
+typedef struct
+{
+    uint32 count;
+    uint16 *values;
+} TRACK_VIS;
+
+TRACK_VIS *track_visibility(uint32 course);
+uint32 track_vis_idx(const struct ROUTE_SEGMENT *seg);
+void track_vis_range(const struct ROUTE_SEGMENT *seg, uint32 *next, uint32 *prev);
+sint32 track_vis_contains(const struct ROUTE_SEGMENT *seg, sint32 idx);
 
 typedef struct
 {

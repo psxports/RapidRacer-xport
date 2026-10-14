@@ -33,7 +33,7 @@ CAMERA *camera_for_view(const RACE_VIEW *context)
 
 // Original camera presets from reviewed MAIN.EXE
 static CAMERA_SETTINGS camera_settings[7] = {
-    {200, 400, 350, 2, 0, 0}, {200, 400, 350, 2, 128, 64}, {200, 400, 350, 2, 128, 32}, {200, 400, 350, 3, 0, 256}, {200, 400, 350, 1, 0, 256}, {200, 400, 350, 3, 0, 256}, {0, 0, 0, 0, 0, 0},
+    {200, 400, 350, 2, 0, 0}, {200, 400, 350, 2, 128, 64}, {200, 400, 350, 2, 128, 32}, {CAMERA_DEFAULT_HEIGHT, 400, 350, 3, 0, 256}, {200, 400, 350, 1, 0, 256}, {200, 400, 350, 3, 0, 256}, {0, 0, 0, 0, 0, 0},
 };
 
 static sint32 camera_mul_lo(sint32 left, sint32 right)

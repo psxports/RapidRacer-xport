@@ -8,6 +8,9 @@
 #include "disp.h"
 #include "effects.h"
 #include "hd.h"
+#ifdef _DEBUG
+    #include "editor_vis.h"
+#endif
 #include "hud.h"
 #include "input.h"
 #include "menu.h"
@@ -257,6 +260,9 @@ void game_sync_frame(void)
 
 static void race_begin_loop(RACE_LOOP *state, const RACE_VIEW *view0, const RACE_VIEW *view1, const RACE_CFG *cfg, sint32 warmup)
 {
+#ifdef _DEBUG
+    editor_vis_begin();
+#endif
     state->view0 = view0;
     state->view1 = view1;
     state->cfg = cfg;
@@ -294,6 +300,9 @@ static sint32 race_loop_before_frame(RACE_LOOP *state, sint32 hd)
         if (buffer != 0 || hd)
         {
             input_update_states();
+#ifdef _DEBUG
+            editor_vis_pad(&input_pads[0]);
+#endif
             if (state->warmup == 0 && (menu_pause_run(view0) != 0 || (cfg->players == 2 && menu_pause_run(view1) != 0)))
                 return 0;
             if (hd)
@@ -319,6 +328,9 @@ static sint32 race_loop_before_frame(RACE_LOOP *state, sint32 hd)
         buffer = 1 - disp_state.scene_buffer;
         disp_state.scene_buffer = buffer;
         input_update_states();
+#ifdef _DEBUG
+        editor_vis_pad(&input_pads[0]);
+#endif
         if (state->warmup == 0 && (menu_pause_run(view0) != 0 || menu_pause_run(view1) != 0))
             return 0;
         boat_input(boat_player(view0), view0);
@@ -421,6 +433,9 @@ static sint32 race_loop_resume(const RACE_VIEW *view0, const RACE_VIEW *view1, c
             step = -1;
             break;
         }
+#ifdef _DEBUG
+        editor_vis_update();
+#endif
         sint32 hd = xport_hd != 0;
         if (hd != state.hd)
         {
@@ -463,6 +478,9 @@ static sint32 race_loop_resume(const RACE_VIEW *view0, const RACE_VIEW *view1, c
         game_render_frame();
         xport_render_wait();
     }
+#ifdef _DEBUG
+    editor_vis_end();
+#endif
     return step < 0 ? 0 : race_finish_loop(&state);
 }
 
@@ -718,6 +736,9 @@ static sint32 game_frame_hd(void)
         return 0;
     for (uint32 idx = 0; idx < race_cfg.players; ++idx)
         hd_render_player(&race_views[idx]);
+#ifdef _DEBUG
+    editor_vis_draw();
+#endif
     return hd_end_frame();
 }
 
