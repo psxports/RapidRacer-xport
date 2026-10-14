@@ -27,7 +27,6 @@ typedef struct
     sint16 target_char;
     uint16 wheel_angle;
     uint16 wheel_step;
-    uint16 prev_angle;
 } NAME_EDITOR;
 
 extern NAME_EDITOR name_editor;
@@ -75,7 +74,9 @@ sint32 name_copy_player_name_bytes(uint16 idx, char *output);
 
 sint32 name_reset_wheel(void);
 
-sint32 name_update_wheel(PAD *input, uint32 unused2, uint32 unused3, uint32 unused4);
+void hd_name_wheel(float fract);
+
+sint32 name_update_wheel(PAD *input);
 
 sint32 name_update_reels(PAD *input);
 uint8 name_check_reels(void);

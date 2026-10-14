@@ -388,6 +388,7 @@ typedef struct
     SVECTOR origin[2];
     SVECTOR dir[2];
     EFFECT_PARTICLE particles[EFFECT_PARTICLE_COUNT];
+    EFFECT_PARTICLE prev_particles[EFFECT_PARTICLE_COUNT];
     sint32 floor;
     sint32 speed;
     sint32 period;
@@ -397,23 +398,22 @@ typedef struct
 
 static EFFECT_EMITTER effects_emitter;
 
-const EFFECT_PARTICLE *effects_particle(uint32 idx, RENDER_MATERIAL *material)
+void effects_particles(const EFFECT_PARTICLE **previous, const EFFECT_PARTICLE **current, RENDER_MATERIAL mats[3])
 {
-    const EFFECT_PARTICLE *particle;
-    if (idx >= EFFECT_PARTICLE_COUNT)
-        abort();
-    particle = &effects_emitter.particles[idx];
-    if (!particle->kind)
-        return NULL;
-    *material = (RENDER_MATERIAL){0};
-    material->tpage = effects_emitter.uv[1] >> 16;
-    material->clut = effects_emitter.uv[particle->kind == 2 ? 2 : particle->kind == 3 ? 3 : 0] >> 16;
-    for (uint32 corner = 0; corner < 4; ++corner)
+    *previous = effects_emitter.prev_particles;
+    *current = effects_emitter.particles;
+    for (uint32 idx = 0; idx < 3; ++idx)
     {
-        material->uv[corner].u = effects_emitter.uv[corner];
-        material->uv[corner].v = effects_emitter.uv[corner] >> 8;
+        RENDER_MATERIAL *mat = &mats[idx];
+        *mat = (RENDER_MATERIAL){0};
+        mat->tpage = effects_emitter.uv[1] >> 16;
+        mat->clut = effects_emitter.uv[idx ? idx + 1 : 0] >> 16;
+        for (uint32 corner = 0; corner < 4; ++corner)
+        {
+            mat->uv[corner].u = effects_emitter.uv[corner];
+            mat->uv[corner].v = effects_emitter.uv[corner] >> 8;
+        }
     }
-    return particle;
 }
 
 static void effects_render_particles(uint32 *ot)
@@ -523,12 +523,49 @@ static void effects_render_particles(uint32 *ot)
     render_packet_publish(packet_offset);
 }
 
+static void effects_create_particle(EFFECT_EMITTER *emitter, uint32 idx)
+{
+    EFFECT_PARTICLE *particle = &emitter->particles[idx];
+    sint32 random = random_next();
+    sint32 factor;
+    sint32 distance;
+    sint32 scale;
+    SVECTOR input;
+    VECTOR output;
+
+    particle->kind = random % 3 + 1;
+    random = random_next();
+    particle->size = random % 50 + 50;
+    factor = random_next() & 0x0FFF;
+    gte_intpl12(&emitter->origin[1], &emitter->origin[0], factor, &output);
+    particle->pos[0] = output.vx;
+    particle->pos[1] = output.vy;
+    particle->pos[2] = output.vz;
+    distance = 2048 - factor;
+    factor = 2048 - distance / 2;
+    gte_intpl12(&emitter->dir[1], &emitter->dir[0], factor, &output);
+    distance = abs(distance);
+    scale = sra((2048u - distance / 2) * emitter->speed, 11u);
+    random = random_next();
+    factor = random % scale + scale + emitter->speed;
+    input.vx = output.vx;
+    input.vy = output.vy;
+    input.vz = output.vz;
+    input.pad = 0;
+    gte_gpf12(&input, factor, &output);
+    particle->vel[0] = output.vx;
+    particle->vel[1] = output.vy;
+    particle->vel[2] = output.vz;
+    emitter->prev_particles[idx] = *particle;
+}
+
 static sint32 effects_update_particles(CB_NODE *node)
 {
     EFFECT_EMITTER *emitter = &effects_emitter;
     uint32 idx;
 
     FUNCTION_MARKER(0x8004199C, "MAIN.EXE");
+    memcpy(emitter->prev_particles, emitter->particles, sizeof(emitter->particles));
     emitter->timer--;
     if (emitter->timer < 0)
     {
@@ -539,37 +576,7 @@ static sint32 effects_update_particles(CB_NODE *node)
             emitter->timer = 0;
         else
         {
-            EFFECT_PARTICLE *particle = &emitter->particles[idx];
-            sint32 random = random_next();
-            sint32 factor;
-            sint32 distance;
-            sint32 scale;
-            SVECTOR input;
-            VECTOR output;
-
-            particle->kind = random % 3 + 1;
-            random = random_next();
-            particle->size = random % 50 + 50;
-            factor = random_next() & 0x0FFF;
-            gte_intpl12(&emitter->origin[1], &emitter->origin[0], factor, &output);
-            particle->pos[0] = output.vx;
-            particle->pos[1] = output.vy;
-            particle->pos[2] = output.vz;
-            distance = 2048 - factor;
-            factor = 2048 - distance / 2;
-            gte_intpl12(&emitter->dir[1], &emitter->dir[0], factor, &output);
-            distance = abs(distance);
-            scale = sra((2048u - distance / 2) * emitter->speed, 11u);
-            random = random_next();
-            factor = random % scale + scale + emitter->speed;
-            input.vx = output.vx;
-            input.vy = output.vy;
-            input.vz = output.vz;
-            input.pad = 0;
-            gte_gpf12(&input, factor, &output);
-            particle->vel[0] = output.vx;
-            particle->vel[1] = output.vy;
-            particle->vel[2] = output.vz;
+            effects_create_particle(emitter, idx);
             emitter->timer = emitter->period;
         }
     }
@@ -616,6 +623,7 @@ static sint32 effects_init_particles(void)
     emitter->floor = 1304;
     for (idx = 0; idx < EFFECT_PARTICLE_COUNT; ++idx)
         emitter->particles[idx].kind = 0;
+    memcpy(emitter->prev_particles, emitter->particles, sizeof(emitter->particles));
     emitter->uv[0] = (uint32)getClut(960, 149) << 16 | 0x20C0;
     emitter->uv[1] = (uint32)getTPage(0, 1, 896, 0) << 16 | 0x20DF;
     emitter->uv[2] = (uint32)getClut(960, 145) << 16 | 0x3FC0;
@@ -1086,9 +1094,30 @@ static void effects_draw_circle_frame(uint32 step)
     gpu_present();
 }
 
+static void effects_draw_circle_scene(uint32 step, sint32 *hd)
+{
+    if (xport_hd)
+    {
+        if (!*hd || !hd_ready())
+            hd_seed();
+        *hd = 1;
+        if (hd_begin_scene())
+        {
+            hd_draw_circle(step);
+            hd_end_frame();
+        }
+    }
+    else
+    {
+        *hd = 0;
+        effects_draw_circle_frame(step);
+    }
+}
+
 sint32 hd_effects_trans(void)
 {
     uint32 paused = race_paused;
+    sint32 hd = xport_hd;
     RENDER_SAMPLE sample = render_save_sample();
     race_paused = 1;
     for (uint32 step = 1; step < 60 && !xport_isquit(); ++step)
@@ -1097,17 +1126,9 @@ sint32 hd_effects_trans(void)
         VSync(0);
         disp_state.scene_buffer = 1 - disp_state.scene_buffer;
         spu_decrease_master_volume(0x200);
-        if (xport_hd)
-        {
-            if (hd_begin_scene())
-            {
-                hd_draw_circle(step);
-                hd_end_frame();
-            }
-        }
-        else
-            effects_draw_circle_frame(step);
-        render_restore_sample(&sample);
+        effects_draw_circle_scene(step, &hd);
+        if (!hd)
+            render_restore_sample(&sample);
     }
     race_paused = paused;
     return 0;
@@ -1117,6 +1138,9 @@ sint32 effects_run_expanding_circle_trans(void)
 {
     sint32 radius = 10;
     uint32 mode;
+    uint32 paused = race_paused;
+    sint32 mixed = 0, hd = 0;
+    RENDER_SAMPLE sample = render_save_sample();
 
     FUNCTION_MARKER(0x80043AD0, "MAIN.EXE");
     mode = race_cfg.players;
@@ -1130,6 +1154,18 @@ sint32 effects_run_expanding_circle_trans(void)
 
             DrawSync(0);
             VSync(0);
+            if (mixed || xport_hd)
+            {
+                mixed = 1;
+                race_paused = 1;
+                disp_state.scene_buffer = 1 - disp_state.scene_buffer;
+                spu_decrease_master_volume(0x200);
+                effects_draw_circle_scene((uint32)radius / 10, &hd);
+                if (!hd)
+                    render_restore_sample(&sample);
+                radius += 10;
+                continue;
+            }
             buffer = 1 - disp_state.scene_buffer;
             ot = effects_trans_ot_slot(buffer);
             disp_state.scene_buffer = buffer;
@@ -1160,6 +1196,18 @@ sint32 effects_run_expanding_circle_trans(void)
 
             DrawSync(0);
             VSync(0);
+            if (mixed || xport_hd)
+            {
+                mixed = 1;
+                race_paused = 1;
+                disp_state.scene_buffer = 1 - disp_state.scene_buffer;
+                spu_decrease_master_volume(0x200);
+                effects_draw_circle_scene((uint32)radius / 10, &hd);
+                if (!hd)
+                    render_restore_sample(&sample);
+                radius += 10;
+                continue;
+            }
             buffer = 1 - disp_state.scene_buffer;
             ot = effects_trans_ot_slot(buffer);
             disp_state.scene_buffer = buffer;
@@ -1185,5 +1233,7 @@ sint32 effects_run_expanding_circle_trans(void)
             DrawOTag(ot);
         } while (radius < 600);
     }
+    if (mixed)
+        race_paused = paused;
     return 0;
 }

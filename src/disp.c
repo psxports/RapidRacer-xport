@@ -281,7 +281,7 @@ sint32 disp_clear_quadrants(void)
     return disp_clear_region(width, height);
 }
 
-static DRAWENV *disp_swap_after_vsync(void)
+DRAWENV *disp_swap_after_vsync(void)
 {
     sint32 next;
     DRAWENV *draw_environment;

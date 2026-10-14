@@ -228,7 +228,31 @@ static sint32 text_render_clipped(char *text, sint32 x, sint16 y, sint8 adjust)
     return text_draw(text, x, y, adjust, 1);
 }
 
-static sint32 text_measure_width(char *text);
+static sint32 text_measure_width(char *text)
+{
+    FUNCTION_MARKER(0x80052600, "MAIN.EXE");
+    TEXT_FONT *font = &text_fonts[text_font_idx];
+    uint32 width = 0;
+    if (!text)
+        return 0;
+    while (*text)
+    {
+        uint8 cur = *text++;
+        uint8 next = *text;
+        sint16 glyph = font->map[cur];
+        sint16 next_glyph = font->map[next];
+        if (cur == ' ' || cur == '_')
+            width += font->space;
+        else if (glyph >= 0 && (uint32)glyph < font->count)
+        {
+            if (!next || next == ' ' || next == '_')
+                width += font->metrics[glyph].width;
+            else if (next_glyph >= 0 && (uint32)next_glyph < font->count)
+                width += font->kerning[glyph * font->count + next_glyph];
+        }
+    }
+    return (sint16)width;
+}
 
 static void text_render_rec(TEXT_RECORD *rec)
 {
@@ -468,32 +492,6 @@ sint32 text_clear_boat_names(void)
         recs[idx + 31].style = 0;
     }
     return 0;
-}
-
-static sint32 text_measure_width(char *text)
-{
-    FUNCTION_MARKER(0x80052600, "MAIN.EXE");
-    TEXT_FONT *font = &text_fonts[text_font_idx];
-    uint32 width = 0;
-    if (!text)
-        return 0;
-    while (*text)
-    {
-        uint8 cur = *text++;
-        uint8 next = *text;
-        sint16 glyph = font->map[cur];
-        sint16 next_glyph = font->map[next];
-        if (cur == ' ' || cur == '_')
-            width += font->space;
-        else if (glyph >= 0 && (uint32)glyph < font->count)
-        {
-            if (!next || next == ' ' || next == '_')
-                width += font->metrics[glyph].width;
-            else if (next_glyph >= 0 && (uint32)next_glyph < font->count)
-                width += font->kerning[glyph * font->count + next_glyph];
-        }
-    }
-    return (sint16)width;
 }
 
 TEXT_RECORD text_menu[TEXT_MENU_CAPACITY];

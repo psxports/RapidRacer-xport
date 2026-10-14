@@ -24,6 +24,22 @@ static const sint16 select_carousel_text[19] = {
     4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 31, 30,
 };
 
+float hd_menu_course_step(void)
+{
+    if (menu_state.scr != 10 || !spr_recs[0].transition_active)
+        return 0;
+    switch (menu_course_select.phase)
+    {
+        case MENU_COURSE_NEXT_WAIT:
+        case MENU_COURSE_NEXT_ENTER:
+        case MENU_COURSE_PREV_WAIT:
+        case MENU_COURSE_PREV_ENTER:
+            return (sint16)(spr_recs[0].transition_step_x >> 16);
+        default:
+            return 0;
+    }
+}
+
 // Special course label positions by language from MAIN.EXE 80098DB0
 static const uint16 select_special_label_x[5] = {136, 136, 136, 136, 136};
 
@@ -45,6 +61,13 @@ typedef struct
     uint16 x;
     uint16 y;
 } MENU_SELECT_COURSE_UI;
+
+const UI_RECORD *hd_menu_spr_parent(const UI_RECORD *rec)
+{
+    if (menu_state.scr == 10 && rec >= spr_recs + 49 && rec <= spr_recs + 54)
+        return &spr_recs[select_course_slots[rec - spr_recs - 49].rec];
+    return NULL;
+}
 
 // Original MAIN.EXE course maps at 80098D60/6C/8C/98/A4
 static const MENU_SELECT_COURSE_UI select_course_ui[6] = {

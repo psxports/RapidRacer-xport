@@ -25,7 +25,7 @@ enum
     EFFECT_PARTICLE_COUNT = 40
 };
 
-const EFFECT_PARTICLE *effects_particle(uint32 idx, RENDER_MATERIAL *material);
+void effects_particles(const EFFECT_PARTICLE **previous, const EFFECT_PARTICLE **current, RENDER_MATERIAL mats[3]);
 void effects_depth_quad(uint32 idx, SVECTOR *origin, SVECTOR *extent, RENDER_MATERIAL *material, sint32 *brightness);
 void effects_sun_material(uint32 idx, RENDER_MATERIAL *material, float *width, float *scale);
 

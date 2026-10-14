@@ -1238,26 +1238,21 @@ static sint32 menu_select_upload_images(void)
     return 0;
 }
 
-static void hd_menu_frame(void)
+static void hd_menu_frame(float fract, sint32 buffer)
 {
     if (!hd_begin_ui())
-    {
-        for (uint32 idx = 0; idx < TEXT_FONT_COUNT; ++idx)
-            text_fonts[idx].pending_count[disp_state.buffer] = 0;
-        disp_state.line_count = 0;
         return;
-    }
     if (menu_asset_counts.labels == 0)
     {
         float pos[4][2] = {{0, 0}, {0, disp_state.height}, {disp_state.width, 0}, {disp_state.width, disp_state.height}};
         float uv[4][2] = {{0, 0}, {0, disp_state.height}, {disp_state.width, 0}, {disp_state.width, disp_state.height}};
         hd_draw_ui_quad(pos, uv, getTPage(2, 0, disp_state.width, 0), 0, 0x808080, 512, 1, 0);
     }
-    hd_spr_menu();
+    hd_spr_menu(fract, buffer);
     hd_end_frame();
 }
 
-static sint32 menu_render_frame(void)
+static sint32 menu_render_frame(sint32 hd)
 {
     uint32 *ot;
     sint32 ordering_idx;
@@ -1272,11 +1267,8 @@ static sint32 menu_render_frame(void)
     spr_update_anims();
     if (menu_state.scr == 10)
         menu_select_populate_recs(0, 0, 0, 0);
-    if (xport_hd)
-    {
-        hd_menu_frame();
+    if (hd)
         return 0;
-    }
     gpu_set_raster(1);
     ot = disp_begin_menu_frame();
     ordering_idx = spr_submit_grps(0);
@@ -2061,7 +2053,7 @@ static void menu_update_ctrl_layout(void)
         if (menu_cfg[2].count == 2)
         {
             menu_state.sound = 8;
-            spr_deactivate_rec_tree(descs + 2);
+            spr_deactivate_rec_tree(menu_descs_2 + 2);
         }
         spr_recs[2].type = 1;
         menu_cfg[2].count = 3;
@@ -2083,7 +2075,7 @@ static void menu_update_ctrl_layout(void)
         sint16 rec_idx;
         UI_RECORD *owner;
 
-        spr_deactivate_rec_tree(descs + 2);
+        spr_deactivate_rec_tree(menu_descs_2 + 2);
         menu_cfg[2].selection = 0;
         menu_state.selection = 0;
         spr_activate_rec_tree(descs);
@@ -3482,7 +3474,7 @@ static sint32 menu_update_state(PAD *input)
             menu_update_card(input);
             break;
         case 25:
-            name_update_wheel(input, 0, 0, 0);
+            name_update_wheel(input);
             break;
         case 26:
             menu_state.series_mode = 3;
@@ -3604,17 +3596,25 @@ static void menu_update_pad_delay(sint32 idx)
         menu_pad_ticks[idx] += 1;
 }
 
-static void menu_after_swap(uint8 *warmup)
+static void menu_after_swap(uint8 *warmup, sint32 hd)
 {
     spr_animate_labels();
     if (*warmup < 4u && ++*warmup == 4)
     {
-        VSync(0);
+        if (!hd)
+            VSync(0);
         SetDispMask(1);
     }
 }
 
-static int menu_run_i(PAD *input, uint8 *warmup)
+static void menu_clear_queues(sint32 buffer)
+{
+    for (uint32 idx = 0; idx < TEXT_FONT_COUNT; ++idx)
+        text_fonts[idx].pending_count[buffer] = 0;
+    disp_state.line_count = 0;
+}
+
+static int menu_run_i(PAD *input, uint8 *warmup, sint32 hd)
 {
     PAD *active_input = &input_pads[0];
     sint16 cfg;
@@ -3629,6 +3629,8 @@ static int menu_run_i(PAD *input, uint8 *warmup)
         if ((uint8)game_selection.players == 2)
             active_input = &input_pads[1];
     }
+    if (hd)
+        menu_clear_queues(disp_state.buffer);
     menu_play_sound();
     input_update_states();
     menu_update_pad_delay(0);
@@ -3657,20 +3659,67 @@ static int menu_run_i(PAD *input, uint8 *warmup)
     menu_select_upload_images();
     text_render_recs();
     menu_update_desc_select();
-    menu_render_frame();
-    disp_swap_envs();
-    menu_after_swap(warmup);
+    menu_render_frame(hd);
+    if (!hd)
+    {
+        disp_swap_envs();
+        menu_after_swap(warmup, 0);
+    }
     return 1;
 }
 
 static sint32 menu_loop(PAD *input)
 {
     uint8 warmup = 0;
+    uint64 clock_idx = 0;
+    sint32 hd = 0;
+    sint32 buffer = disp_state.buffer;
 
     FUNCTION_MARKER(0x8004D16C, "MAIN.EXE");
-    while (menu_state.running != 0)
-        if (!menu_run_i(input, &warmup))
+    while (menu_state.running)
+    {
+        if (xport_isquit())
             return 0;
+        if (!xport_hd)
+        {
+            if (hd)
+            {
+                menu_clear_queues(0);
+                menu_clear_queues(1);
+            }
+            hd = 0;
+            if (!menu_run_i(input, &warmup, 0))
+                return 0;
+            continue;
+        }
+        VSync(-1);
+        game_sample_frame();
+        if (!hd)
+        {
+            hd = 1;
+            clock_idx = game_frame_index;
+            buffer = disp_state.buffer;
+            menu_clear_queues(buffer);
+            text_render_recs();
+            hd_spr_prepare_menu();
+        }
+        while (clock_idx < game_frame_index && menu_state.running && xport_hd)
+        {
+            ++clock_idx;
+            if (!menu_run_i(input, &warmup, 1))
+                return 0;
+            buffer = disp_state.buffer;
+            disp_swap_after_vsync();
+            menu_after_swap(&warmup, 1);
+            hd_spr_prepare_menu();
+            VSync(-1);
+            game_sample_frame();
+        }
+        if (!menu_state.running || !xport_hd)
+            continue;
+        hd_menu_frame(game_frame_fract, buffer);
+        xport_render_wait();
+    }
     return 0;
 }
 

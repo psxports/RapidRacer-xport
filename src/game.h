@@ -51,6 +51,11 @@ typedef struct
 
 extern GAME_TIMING game_timing;
 
+extern uint64 game_frame_index;
+extern float game_frame_fract;
+void game_sample_frame(void);
+void game_sync_frame(void);
+
 typedef struct
 {
     uint16 level;

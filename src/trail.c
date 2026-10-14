@@ -2,6 +2,7 @@
 #include "trail.h"
 #include "utils.h"
 #include "boat.h"
+#include "hd.h"
 #include "render.h"
 #include "xport_trace.h"
 #include <stdlib.h>
@@ -784,11 +785,12 @@ void trail_prepare_flare(const BOAT *boat, SVECTOR points[2][4], RENDER_MATERIAL
     }
 }
 
-void hd_trail_prepare_flare(const BOAT *boat, VEC3F points[2][4], RENDER_MATERIAL *material)
+void hd_trail_prepare_flare(const BOAT *boat, VEC3F points[2][4], RENDER_MATERIAL *material, sint32 update)
 {
     float age = (float)boat->control.boost_tick;
     float height = age < 20 ? age * 4 : age < 24 ? 80 - (age - 20) * 4 : 60;
-    height += random_next() & 3u;
+    if (update)
+        height += random_next() & 3u;
     float width = age >= 74 ? (90 - age) * 0.5f : 8;
     VEC3 point;
     trail_flare_source(boat->setup.model_idx, &point, material);

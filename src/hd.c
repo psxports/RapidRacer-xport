@@ -67,9 +67,128 @@ static float hd_focals[2];
 static float hd_proj_speed[2];
 static VID_SAMPLE *hd_sun_samples[2];
 static float hd_sun_fade[2] = {255, 255};
+static float hd_sun_fades[2][2] = {{255, 255}, {255, 255}};
 static uint32 hd_sun_ready[2];
 static uint32 hd_proj_ready;
-static MESH_RACERS hd_racers[2];
+
+typedef struct
+{
+    const SVECTOR *points;
+    VEC3F pos;
+    QUATF rotation;
+    uint32 ready;
+} HD_INDICATOR;
+
+static HD_INDICATOR hd_indicators[2][2];
+
+typedef struct
+{
+    VEC3F points[2][4];
+    RENDER_MATERIAL tex;
+} HD_FLARE;
+
+typedef struct
+{
+    HD_FLARE flares[16][2];
+    uint8 props[16];
+} HD_FLARES;
+
+static HD_FLARES hd_flares[2][2];
+
+typedef struct
+{
+    VEC3F pos, dir;
+    float width, lift, fade;
+    uint16 tex;
+    float uv[2];
+} HD_TRAIL_PARTICLE;
+
+typedef struct
+{
+    VEC3F front, rear;
+    float intensity[5];
+    uint16 scroll;
+    HD_TRAIL_PARTICLE particles[5];
+} HD_TRAIL_GROUP;
+
+typedef struct
+{
+    VEC3F origin;
+    HD_TRAIL_GROUP grps[2];
+    HD_TRAIL_PARTICLE spray[6];
+    uint32 spray_count;
+    uint32 ready;
+} HD_TRAIL;
+
+typedef struct
+{
+    VEC3F pos, prop, ground_n;
+    QUATF pose, model;
+    float steering, prop_offset, ground_dist;
+    uint32 mode, model_idx, ready;
+} HD_POSE;
+
+typedef struct
+{
+    HD_POSE boats[16];
+    uint32 ready;
+} HD_POSES;
+
+static HD_POSES hd_poses[2];
+static HD_TRAIL hd_trails[2][16];
+static HD_POSE hd_sampled_poses[16];
+static HD_TRAIL hd_sampled_trails[16];
+static uint8 hd_pose_sampled[16], hd_trail_sampled[16];
+static uint32 hd_pose_idx, hd_pose_active;
+static float hd_frame_fract = 1;
+
+typedef struct
+{
+    VEC3F pos;
+    QUATF rotation;
+    float proj;
+    uint32 mode, ready;
+} HD_VIEW_SAMPLE;
+
+static HD_VIEW_SAMPLE hd_view_samples[2][2];
+
+typedef struct
+{
+    const MESH_MODEL *model;
+    VEC3F pos;
+    QUATF rotation;
+    uint32 ready;
+} HD_COUNTDOWN;
+
+static HD_COUNTDOWN hd_countdowns[2][2];
+
+typedef struct
+{
+    VEC3F pos, extent;
+    float brightness;
+    RENDER_MATERIAL tex;
+} HD_EFFECT_QUAD;
+
+typedef struct
+{
+    HD_EFFECT_QUAD quads[2];
+    float billboard_width, billboard_height;
+    uint32 ticks, ready;
+} HD_EFFECTS;
+
+static HD_EFFECTS hd_effects[2];
+static const EFFECT_PARTICLE *hd_particles, *hd_prev_particles;
+static RENDER_MATERIAL hd_particle_mats[3];
+
+typedef struct
+{
+    VEC3F water, shore;
+    uint32 color;
+    float uv;
+} HD_RIVER_VERTEX;
+
+static HD_RIVER_VERTEX (*hd_river_samples[2])[ROUTE_VERTEX_CAPACITY];
+static uint32 hd_river_capacity, hd_river_ready;
 static MATRIXF hd_camera_rot[2];
 static HD_CAMERA hd_camera_motion[2];
 static VEC3F hd_camera_pos[2];
@@ -280,12 +399,28 @@ static VID_VERTEX *hd_alloc(HD_MATERIAL *entry, uint32 view, uint32 count)
     return vertices + used;
 }
 
+static void hd_clear_samples(void)
+{
+    memset(hd_poses, 0, sizeof(hd_poses));
+    memset(hd_trails, 0, sizeof(hd_trails));
+    memset(hd_countdowns, 0, sizeof(hd_countdowns));
+    memset(hd_view_samples, 0, sizeof(hd_view_samples));
+    memset(hd_flares, 0, sizeof(hd_flares));
+    memset(hd_indicators, 0, sizeof(hd_indicators));
+    memset(hd_effects, 0, sizeof(hd_effects));
+    hd_river_ready = 0;
+    hd_pose_idx = hd_pose_active = 0;
+    hd_particles = hd_prev_particles = NULL;
+}
+
 void hd_sync_proj(void)
 {
+    hd_clear_samples();
     for (uint32 idx = 0; idx < 2; ++idx)
     {
         hd_proj_speed[idx] = (float)render_proj_speed[idx];
         hd_camera_sync(&camera_views[idx], &hd_camera_motion[idx]);
+        hd_sun_fades[idx][0] = hd_sun_fades[idx][1] = hd_sun_fade[idx];
     }
     hd_proj_ready = 1;
 }
@@ -293,7 +428,7 @@ void hd_sync_proj(void)
 static float hd_proj(const RACE_VIEW *view, sint32 update)
 {
     if (!hd_proj_ready)
-        hd_sync_proj();
+        abort();
     if (update && !race_paused)
     {
         float target = boat_player(view)->velocity.speed * (3.0f / 256);
@@ -304,17 +439,35 @@ static float hd_proj(const RACE_VIEW *view, sint32 update)
     return race_cfg.players == 2 ? 200 : game_timing.base_rate == game_timing.frame_rate ? 290 - hd_proj_speed[view->idx] : 290;
 }
 
+static float hd_ref_aspect(void)
+{
+    return race_cfg.players == 2 ? race_cfg.layout == 2 ? 2.0f / 3.0f : 8.0f / 3.0f : 4.0f / 3.0f;
+}
+
+// Preserve the OG camera's pixel aspect while extending the horizontal view
+static float hd_scale_x(uint32 view, float value)
+{
+    float aspect = (float)hd_views[view].w / hd_views[view].h;
+    return value * hd_ref_aspect() / aspect;
+}
+
 static void hd_clip_point(VID_VERTEX *vertex, uint32 view, const float point[3], float focal)
 {
     VECTORF src = {point[0], point[1], point[2]};
-    float aspect = (float)hd_views[view].w / hd_views[view].h;
-    // Preserve the OG camera's pixel aspect before extending the horizontal view
-    float reference_aspect = race_cfg.players == 2 ? race_cfg.layout == 2 ? 2.0f / 3.0f : 8.0f / 3.0f : 4.0f / 3.0f;
-    float horizontal = focal * disp_state.view_height / disp_state.view_width * reference_aspect;
-    ProjectVertexf(&src, horizontal / aspect, focal, 16, HD_FAR_Z, vertex->pos);
+    float horizontal = hd_scale_x(view, focal * disp_state.view_height / disp_state.view_width);
+    ProjectVertexf(&src, horizontal, focal, 16, HD_FAR_Z, vertex->pos);
 }
 
-static void hd_boat_pose(const BOAT *boat, MATRIXF *pose)
+static float hd_wrap(float value)
+{
+    while (value < -32768.0f)
+        value += 65536.0f;
+    while (value >= 32768.0f)
+        value -= 65536.0f;
+    return value;
+}
+
+static void hd_read_boat_pose(const BOAT *boat, MATRIXF *pose)
 {
     QUATF quat;
     for (uint32 axis = 0; axis < 4; ++axis)
@@ -344,9 +497,9 @@ static void hd_boat_pose(const BOAT *boat, MATRIXF *pose)
         pose->t[axis] = (float)boat->pos.v[axis];
 }
 
-static void hd_boat_matrix(const BOAT *boat, MATRIXF *matrix)
+static void hd_read_boat_matrix(const BOAT *boat, MATRIXF *matrix)
 {
-    hd_boat_pose(boat, matrix);
+    hd_read_boat_pose(boat, matrix);
     if (!(boat->race.mode & 1))
     {
         QUATF pose, attitude, combined;
@@ -360,18 +513,340 @@ static void hd_boat_matrix(const BOAT *boat, MATRIXF *matrix)
     }
 }
 
+static VEC3F hd_trail_vec(const SVECTOR *src)
+{
+    return (VEC3F){{(float)src->vx, (float)src->vy, (float)src->vz}};
+}
+
+static HD_TRAIL_PARTICLE hd_trail_particle(const TRAIL_PARTICLE *src)
+{
+    return (HD_TRAIL_PARTICLE){hd_trail_vec(&src->pos), hd_trail_vec(&src->dir), (float)(sint16)src->width, 0, 0, src->tex, {0}};
+}
+
+static HD_TRAIL_PARTICLE hd_spray_particle(const TRAIL_SPRAY *src)
+{
+    return (HD_TRAIL_PARTICLE){hd_trail_vec(&src->pos), hd_trail_vec(&src->dir), 0, (float)src->lift, (float)((sint16)src->fade / 256), src->tex, {0}};
+}
+
+static void hd_capture_trail(const BOAT_TRAIL *src, HD_TRAIL *dst)
+{
+    dst->ready = src->phase == 2;
+    if (!dst->ready)
+        return;
+    dst->origin = (VEC3F){{(float)src->origin.x, (float)src->origin.y, (float)src->origin.z}};
+    for (uint32 grp = 0; grp < 2; ++grp)
+    {
+        const TRAIL_GROUP *group = &src->grps[grp];
+        HD_TRAIL_GROUP *sample = &dst->grps[grp];
+        sample->front = hd_trail_vec(&group->front);
+        sample->rear = hd_trail_vec(&group->rear);
+        sample->scroll = group->scroll;
+        for (uint32 idx = 0; idx < 5; ++idx)
+        {
+            const TRAIL_PARTICLE *particle = group->order[idx];
+            sample->intensity[idx] = (float)(sint16)group->intensity[idx];
+            sample->particles[idx] = hd_trail_particle(particle);
+        }
+    }
+    // Capture ribbon sections and their texture coordinates from head to tail
+    sint32 tex = (src->scroll & 0x3f00) + 64;
+    sint32 height = (sint8)(src->spray_order[0]->fade >> 8);
+    if (height < 40)
+        tex -= height - 40;
+    tex += 8;
+    for (uint32 idx = 0; idx < 5; ++idx)
+    {
+        const TRAIL_SPRAY *particle = src->spray_order[idx];
+        if (idx)
+            tex += particle->tex;
+        dst->spray[idx] = hd_spray_particle(particle);
+        dst->spray[idx].uv[0] = (tex & 63) / 64.0f;
+        dst->spray[idx].uv[1] = (tex >> 8) / 64.0f;
+    }
+}
+
+static void hd_read_ground(const BOAT *boat, VEC3F *normal, float *distance)
+{
+    VECTORF points[3], edge0, edge1, n;
+    float height = -10;
+    uint32 point = 0;
+    for (uint32 idx = 1; idx < 5; ++idx)
+    {
+        if (idx == 2)
+            continue;
+        const ROUTE_CONTACT *contact = &boat->contacts.points[idx];
+        if (!contact->surface)
+            height = hd_wrap((float)contact->pos.y - boat->pos.y) + contact->height;
+        points[point++] = (VECTORF){hd_wrap((float)contact->pos.x - boat->pos.x), height, hd_wrap((float)contact->pos.z - boat->pos.z)};
+    }
+    edge0 = (VECTORF){points[1].vx - points[0].vx, points[1].vy - points[0].vy, points[1].vz - points[0].vz};
+    edge1 = (VECTORF){points[2].vx - points[0].vx, points[2].vy - points[0].vy, points[2].vz - points[0].vz};
+    OuterProductf(&edge0, &edge1, &n);
+    if (n.vy < 0)
+        n = (VECTORF){-n.vx, -n.vy, -n.vz};
+    NormalizeVectorf(&n, &n);
+    *normal = (VEC3F){{n.vx, n.vy, n.vz}};
+    *distance = points[0].vx * n.vx + points[0].vy * n.vy + points[0].vz * n.vz - 10;
+}
+
+static uint32 hd_boat_idx(const BOAT *boat)
+{
+    size_t idx = boat - boat_boats;
+    if (idx >= 16)
+        abort();
+    return (uint32)idx;
+}
+
+static void hd_capture_boat(const BOAT *boat, HD_POSE *pose, HD_TRAIL *trail)
+{
+    MATRIXF matrix;
+    pose->ready = 1;
+    pose->pos = (VEC3F){{(float)boat->pos.x, (float)boat->pos.y, (float)boat->pos.z}};
+    pose->prop = (VEC3F){{(float)boat->trail.propeller.vx, (float)boat->trail.propeller.vy, (float)boat->trail.propeller.vz}};
+    pose->steering = (float)boat->control.steering;
+    pose->prop_offset = boat->setup.propellers == 2 ? (float)mesh_prop_offset(boat) : 0;
+    pose->mode = boat->race.mode;
+    pose->model_idx = boat->setup.model_idx;
+    hd_read_boat_pose(boat, &matrix);
+    MatrixQuatf(&matrix, &pose->pose);
+    hd_read_boat_matrix(boat, &matrix);
+    MatrixQuatf(&matrix, &pose->model);
+    hd_read_ground(boat, &pose->ground_n, &pose->ground_dist);
+    hd_capture_trail(&boat->trail, trail);
+}
+
+void hd_reset_boat(const BOAT *boat)
+{
+    if (!xport_hd)
+        return;
+    uint32 idx = hd_boat_idx(boat);
+    for (uint32 frame = 0; frame < 2; ++frame)
+    {
+        hd_capture_boat(boat, &hd_poses[frame].boats[idx], &hd_trails[frame][idx]);
+        for (uint32 view = 0; view < 2; ++view)
+            hd_flares[view][frame].props[idx] = 0;
+    }
+    for (uint32 view = 0; view < race_cfg.players; ++view)
+        if (boat_player(&race_views[view]) == boat)
+        {
+            memset(hd_view_samples[view], 0, sizeof(hd_view_samples[view]));
+            memset(hd_indicators[view], 0, sizeof(hd_indicators[view]));
+            hd_camera_motion[view].ready = 0;
+        }
+}
+
+static void hd_capture_boats(void)
+{
+    uint32 previous = hd_pose_idx;
+    hd_pose_idx ^= 1;
+    HD_POSES *frame = &hd_poses[hd_pose_idx];
+    if (boat_racer_count < 0 || boat_racer_count > 16)
+        abort();
+    memset(frame->boats, 0, sizeof(frame->boats));
+    for (sint32 idx = 0; idx < boat_racer_count; ++idx)
+    {
+        const BOAT *boat = boat_racers[idx];
+        uint32 slot = hd_boat_idx(boat);
+        HD_POSE *pose = &frame->boats[slot];
+        hd_capture_boat(boat, pose, &hd_trails[hd_pose_idx][slot]);
+    }
+    frame->ready = 1;
+    if (!hd_poses[previous].ready)
+    {
+        hd_poses[previous] = *frame;
+        memcpy(hd_trails[previous], hd_trails[hd_pose_idx], sizeof(hd_trails[previous]));
+    }
+}
+
+void hd_set_frame_fract(float fract)
+{
+    hd_frame_fract = fminf(1, fmaxf(0, fract));
+}
+
+static const HD_POSE *hd_pose(const HD_POSES *frame, const BOAT *boat)
+{
+    const HD_POSE *pose = &frame->boats[hd_boat_idx(boat)];
+    return frame->ready && pose->ready ? pose : NULL;
+}
+
+static void hd_lerp_vec(const VEC3F *previous, const VEC3F *current, VEC3F *dst)
+{
+    for (uint32 axis = 0; axis < 3; ++axis)
+        dst->v[axis] = previous->v[axis] + (current->v[axis] - previous->v[axis]) * hd_frame_fract;
+}
+
+static void hd_sample_trail_particles(const HD_TRAIL_PARTICLE previous[5], HD_TRAIL_PARTICLE current[5])
+{
+    for (uint32 idx = 0; idx < 5; ++idx)
+    {
+        const HD_TRAIL_PARTICLE *src = &previous[idx];
+        HD_TRAIL_PARTICLE *dst = &current[idx];
+        hd_lerp_vec(&src->pos, &dst->pos, &dst->pos);
+        hd_lerp_vec(&src->dir, &dst->dir, &dst->dir);
+        dst->width = src->width + (dst->width - src->width) * hd_frame_fract;
+        dst->lift = src->lift + (dst->lift - src->lift) * hd_frame_fract;
+        dst->fade = src->fade + (dst->fade - src->fade) * hd_frame_fract;
+    }
+}
+
+static void hd_sample_spray(const HD_TRAIL *previous, HD_TRAIL *current, float fract)
+{
+    static const float lift[5] = {0, 2867.0f / 4096, 1, 2867.0f / 4096, 0};
+    current->spray_count = fract < 1 ? 6 : 5;
+    float delta = current->spray[0].uv[1] - previous->spray[0].uv[1];
+    sint32 wraps = (sint32)delta;
+    if (delta - wraps > 0.5f)
+        ++wraps;
+    else if (delta - wraps < -0.5f)
+        --wraps;
+    // Keep the outgoing tail while each existing section advances one place
+    current->spray[5] = previous->spray[4];
+    current->spray[5].width = current->spray[5].lift = 0;
+    for (uint32 axis = 0; axis < 3; ++axis)
+        current->spray[5].pos.v[axis] += previous->origin.v[axis] - current->origin.v[axis];
+    for (sint32 idx = 4; idx >= 0; --idx)
+    {
+        uint32 prev_idx = idx ? idx - 1 : 0;
+        const HD_TRAIL_PARTICLE *src = &previous->spray[prev_idx];
+        HD_TRAIL_PARTICLE *dst = &current->spray[idx];
+        float width = idx == 4 ? 0 : fminf(dst->fade, 38);
+        float height = dst->lift * lift[idx];
+        for (uint32 axis = 0; axis < 3; ++axis)
+        {
+            dst->pos.v[axis] = src->pos.v[axis] + (dst->pos.v[axis] - src->pos.v[axis]) * fract;
+            dst->dir.v[axis] = src->dir.v[axis] + (dst->dir.v[axis] - src->dir.v[axis]) * fract;
+        }
+        dst->width = fminf(src->fade, 38) + (width - fminf(src->fade, 38)) * fract;
+        dst->lift = src->lift * lift[prev_idx] + (height - src->lift * lift[prev_idx]) * fract;
+        dst->fade = src->fade + (dst->fade - src->fade) * fract;
+        dst->uv[0] = src->uv[0] + (dst->uv[0] - src->uv[0]) * fract;
+        // Apply one V wrap to the whole ribbon to preserve texture spans
+        dst->uv[1] = src->uv[1] + (dst->uv[1] - wraps - src->uv[1]) * fract;
+    }
+}
+
+static const HD_TRAIL *hd_sample_trail(const BOAT *boat)
+{
+    uint32 idx = hd_boat_idx(boat);
+    HD_TRAIL *dst = &hd_sampled_trails[idx];
+    if (hd_trail_sampled[idx])
+        return dst;
+    hd_trail_sampled[idx] = 1;
+    const HD_POSE *current = hd_pose(&hd_poses[hd_pose_idx], boat);
+    const HD_POSE *previous = hd_pose(&hd_poses[hd_pose_idx ^ 1], boat);
+    if (!hd_pose_active || !current)
+    {
+        hd_capture_trail(&boat->trail, dst);
+        hd_sample_spray(dst, dst, 1);
+        return dst;
+    }
+    *dst = hd_trails[hd_pose_idx][current - hd_poses[hd_pose_idx].boats];
+    if (!dst->ready || !previous || previous->mode != current->mode || previous->model_idx != current->model_idx)
+    {
+        hd_sample_spray(dst, dst, 1);
+        return dst;
+    }
+    const HD_TRAIL *src = &hd_trails[hd_pose_idx ^ 1][previous - hd_poses[hd_pose_idx ^ 1].boats];
+    if (!src->ready)
+    {
+        hd_sample_spray(dst, dst, 1);
+        return dst;
+    }
+    hd_lerp_vec(&src->origin, &dst->origin, &dst->origin);
+    for (uint32 grp = 0; grp < 2; ++grp)
+    {
+        HD_TRAIL_GROUP *group = &dst->grps[grp];
+        hd_lerp_vec(&src->grps[grp].front, &group->front, &group->front);
+        hd_lerp_vec(&src->grps[grp].rear, &group->rear, &group->rear);
+        for (uint32 idx = 0; idx < 5; ++idx)
+            group->intensity[idx] = src->grps[grp].intensity[idx] + (group->intensity[idx] - src->grps[grp].intensity[idx]) * hd_frame_fract;
+        hd_sample_trail_particles(src->grps[grp].particles, group->particles);
+    }
+    hd_sample_spray(src, dst, hd_frame_fract);
+    return dst;
+}
+
+static sint32 hd_sample_boat(const BOAT *boat, HD_POSE *pose)
+{
+    if (!hd_pose_active)
+        return 0;
+    uint32 idx = hd_boat_idx(boat);
+    if (hd_pose_sampled[idx])
+    {
+        *pose = hd_sampled_poses[idx];
+        return 1;
+    }
+    const HD_POSE *current = hd_pose(&hd_poses[hd_pose_idx], boat);
+    if (!current)
+        return 0;
+    const HD_POSE *previous = hd_pose(&hd_poses[hd_pose_idx ^ 1], boat);
+    if (!previous || previous->mode != current->mode || previous->model_idx != current->model_idx)
+        previous = current;
+    *pose = *current;
+    hd_lerp_vec(&previous->pos, &current->pos, &pose->pos);
+    hd_lerp_vec(&previous->prop, &current->prop, &pose->prop);
+    hd_lerp_vec(&previous->ground_n, &current->ground_n, &pose->ground_n);
+    VECTORF ground = {pose->ground_n.x, pose->ground_n.y, pose->ground_n.z};
+    NormalizeVectorf(&ground, &ground);
+    pose->ground_n = (VEC3F){{ground.vx, ground.vy, ground.vz}};
+    pose->ground_dist = previous->ground_dist + (current->ground_dist - previous->ground_dist) * hd_frame_fract;
+    pose->steering = previous->steering + (current->steering - previous->steering) * hd_frame_fract;
+    pose->prop_offset = previous->prop_offset + (current->prop_offset - previous->prop_offset) * hd_frame_fract;
+    SlerpQuatf(&previous->pose, &current->pose, hd_frame_fract, &pose->pose);
+    SlerpQuatf(&previous->model, &current->model, hd_frame_fract, &pose->model);
+    hd_sampled_poses[idx] = *pose;
+    hd_pose_sampled[idx] = 1;
+    return 1;
+}
+
+static void hd_boat_pose(const BOAT *boat, MATRIXF *matrix)
+{
+    HD_POSE pose;
+    if (!hd_sample_boat(boat, &pose))
+    {
+        hd_read_boat_pose(boat, matrix);
+        return;
+    }
+    IdentityMatrixf(matrix);
+    QuatMatrixf(&pose.pose, matrix);
+    for (uint32 axis = 0; axis < 3; ++axis)
+        matrix->t[axis] = pose.pos.v[axis];
+}
+
+static void hd_boat_matrix(const BOAT *boat, MATRIXF *matrix)
+{
+    HD_POSE pose;
+    if (!hd_sample_boat(boat, &pose))
+    {
+        hd_read_boat_matrix(boat, matrix);
+        return;
+    }
+    IdentityMatrixf(matrix);
+    QuatMatrixf(&pose.model, matrix);
+    for (uint32 axis = 0; axis < 3; ++axis)
+        matrix->t[axis] = pose.pos.v[axis];
+}
+
 static sint32 hd_props(const BOAT *boat, const MATRIXF *matrix, MATRIXF dst[2])
 {
     sint32 count = boat->setup.propellers;
     if (count != 1 && count != 2)
         return 0;
     MATRIXF accessory = *matrix;
-    RotMatrixYf(boat->control.steering * 0.5f * RAD12, &accessory);
+    HD_POSE pose;
+    sint32 sampled = hd_sample_boat(boat, &pose);
+    float steering = sampled ? pose.steering : (float)boat->control.steering;
+    RotMatrixYf(steering * 0.5f * RAD12, &accessory);
     for (sint32 idx = 0; idx < count; ++idx)
     {
         VECTORF src = {(float)boat->trail.propeller.vx, (float)boat->trail.propeller.vy, (float)boat->trail.propeller.vz}, pos;
+        if (sampled)
+            src = (VECTORF){pose.prop.x, pose.prop.y, pose.prop.z};
         if (count == 2)
-            src.vx = (float)(idx ? -mesh_prop_offset(boat) : mesh_prop_offset(boat));
+        {
+            float offset = sampled ? pose.prop_offset : (float)mesh_prop_offset(boat);
+            src.vx = idx ? -offset : offset;
+        }
         RotTransf(matrix, &src, &pos);
         dst[idx] = accessory;
         dst[idx].t[0] = pos.vx;
@@ -379,15 +854,6 @@ static sint32 hd_props(const BOAT *boat, const MATRIXF *matrix, MATRIXF dst[2])
         dst[idx].t[2] = pos.vz;
     }
     return count;
-}
-
-static float hd_wrap(float value)
-{
-    while (value < -32768.0f)
-        value += 65536.0f;
-    while (value >= 32768.0f)
-        value -= 65536.0f;
-    return value;
 }
 
 static void hd_project_point(VID_VERTEX *vertex, const CAMERA *camera, const MATRIXF *model, const float source[3], float focal)
@@ -580,23 +1046,20 @@ static void hd_billboard_side(const RACE_VIEW *view, const VEC3F *center, uint32
 {
     static const uint8 order[6] = {0, 1, 2, 2, 1, 3};
     uint16 clut;
-    const RENDER_MATERIAL *tex = render_billboard_tex(type, (game_timing.ticks >> 2) % 15, &clut);
+    const RENDER_MATERIAL *tex = render_billboard_tex(type, (hd_effects[hd_pose_idx].ticks >> 2) % 15, &clut);
     const CAMERA *camera = camera_for_view(view);
     VID_VERTEX projected;
     VID_VERTEX *vertices;
     HD_MATERIAL *entry;
     float width = type == 1 ? 24.0f : type == 2 ? 28.0f : 64.0f;
     float height = type == 1 ? 48.0f : type == 2 ? 70.0f : 84.0f;
-    float aspect = (float)hd_views[view->idx].w / hd_views[view->idx].h;
-    float reference_aspect = race_cfg.players == 2 ? race_cfg.layout == 2 ? 2.0f / 3.0f : 8.0f / 3.0f : 4.0f / 3.0f;
-    float horizontal = focal * disp_state.view_height / disp_state.view_width * reference_aspect;
+    float horizontal = hd_scale_x(view->idx, focal * disp_state.view_height / disp_state.view_width);
     if (type == 3 && race_cfg.mode == 8)
     {
-        uint32 phase = game_timing.ticks & 127;
-        if (phase >= 64)
-            phase = 127 - phase;
-        width = (float)(phase + 64);
-        height = (float)((phase * 4 + 256) / 3);
+        const HD_EFFECTS *previous = &hd_effects[hd_pose_idx ^ 1];
+        const HD_EFFECTS *current = &hd_effects[hd_pose_idx];
+        width = previous->billboard_width + (current->billboard_width - previous->billboard_width) * hd_frame_fract;
+        height = previous->billboard_height + (current->billboard_height - previous->billboard_height) * hd_frame_fract;
     }
     if (race_cfg.players == 2)
         height *= 0.5f;
@@ -610,7 +1073,7 @@ static void hd_billboard_side(const RACE_VIEW *view, const VEC3F *center, uint32
         uint32 corner = order[idx];
         vertices[idx] = projected;
         // Expand in camera space without quantizing the projected center
-        vertices[idx].pos[0] += (corner & 1 ? width : -width) * horizontal / aspect;
+        vertices[idx].pos[0] += (corner & 1 ? width : -width) * horizontal;
         vertices[idx].pos[1] += (corner & 2 ? 0 : lower ? -height : height) * focal;
         vertices[idx].uv[0] = (tex->uv[corner].u + 0.5f) / 256.0f;
         vertices[idx].uv[1] = (tex->uv[corner].v + 0.5f) / 256.0f;
@@ -625,7 +1088,7 @@ static void hd_billboard(const RACE_VIEW *view, const VEC3F *center, uint32 type
     hd_billboard_side(view, center, type, focal, 0);
 }
 
-static void hd_river_point(const ROUTE_SEGMENT *seg, uint32 idx, sint32 shore, VEC3F *point)
+static void hd_read_river_point(const ROUTE_SEGMENT *seg, uint32 idx, sint32 shore, VEC3F *point)
 {
     const ROUTE_VERTEX *src = &seg->vertices[idx];
     uint32 phase = game_timing.ticks;
@@ -648,8 +1111,103 @@ static void hd_river_point(const ROUTE_SEGMENT *seg, uint32 idx, sint32 shore, V
     }
 }
 
-static void hd_river_uv(const ROUTE_VERTEX *const src[4], sint32 generated, float uv[4][2])
+static float hd_read_river_uv(const ROUTE_VERTEX *src, sint32 generated)
 {
+    uint32 phase = 2u * src->tex_phase + game_timing.ticks * (generated ? 1u : 2u);
+    uint32 v = generated ? render_curve[8][phase & 511] + 32u : render_curve[15][phase & 511];
+    return ((uint8)v + 0.5f) / 256;
+}
+
+static void hd_capture_river(void)
+{
+    uint32 count = route_resources.owned_count;
+    if (race_cfg.mode == 8)
+        return;
+    if (!count)
+    {
+        hd_river_ready = 0;
+        return;
+    }
+    if (count > hd_river_capacity)
+    {
+        for (uint32 frame = 0; frame < 2; ++frame)
+        {
+            void *samples = realloc(hd_river_samples[frame], count * sizeof(*hd_river_samples[frame]));
+            if (!samples)
+                abort();
+            hd_river_samples[frame] = samples;
+        }
+        hd_river_capacity = count;
+        hd_river_ready = 0;
+    }
+    render_publish_pal();
+    for (uint32 idx = 0; idx < count; ++idx)
+    {
+        const ROUTE_SEGMENT *seg = &route_resources.storage[idx];
+        for (uint32 vertex = 0; vertex < seg->vertex_count; ++vertex)
+        {
+            HD_RIVER_VERTEX *dst = &hd_river_samples[hd_pose_idx][idx][vertex];
+            sint32 height;
+            hd_read_river_point(seg, vertex, 0, &dst->water);
+            hd_read_river_point(seg, vertex, 1, &dst->shore);
+            dst->color = river_water_color(&seg->vertices[vertex], render_pal(seg->pal)[0], &height, 1);
+            dst->uv = hd_read_river_uv(&seg->vertices[vertex], race_cfg.course == 6);
+        }
+    }
+    if (!hd_river_ready)
+        memcpy(hd_river_samples[hd_pose_idx ^ 1], hd_river_samples[hd_pose_idx], count * sizeof(*hd_river_samples[0]));
+    hd_river_ready = 1;
+}
+
+static const HD_RIVER_VERTEX *hd_find_river_sample(const ROUTE_SEGMENT *seg, uint32 idx, uint32 frame)
+{
+    if (!hd_pose_active || !hd_river_ready)
+        return NULL;
+    // Race route segments belong to the decoded storage, while showcase uses its own segment
+    if (race_cfg.mode == 8)
+        return NULL;
+    size_t segment = seg - route_resources.storage;
+    if (segment >= route_resources.owned_count || idx >= seg->vertex_count)
+        abort();
+    return &hd_river_samples[frame][segment][idx];
+}
+
+static void hd_river_point(const ROUTE_SEGMENT *seg, uint32 idx, sint32 shore, VEC3F *point)
+{
+    const HD_RIVER_VERTEX *current = hd_find_river_sample(seg, idx, hd_pose_idx);
+    if (!current)
+    {
+        hd_read_river_point(seg, idx, shore, point);
+        return;
+    }
+    const HD_RIVER_VERTEX *previous = hd_find_river_sample(seg, idx, hd_pose_idx ^ 1);
+    hd_lerp_vec(shore ? &previous->shore : &previous->water, shore ? &current->shore : &current->water, point);
+}
+
+static uint32 hd_river_color(const ROUTE_SEGMENT *seg, uint32 idx)
+{
+    const HD_RIVER_VERTEX *current = hd_find_river_sample(seg, idx, hd_pose_idx);
+    if (!current)
+    {
+        sint32 height;
+        return river_water_color(&seg->vertices[idx], render_pal(seg->pal)[0], &height, 1);
+    }
+    const HD_RIVER_VERTEX *previous = hd_find_river_sample(seg, idx, hd_pose_idx ^ 1);
+    uint32 color = 0;
+    for (uint32 channel = 0; channel < 3; ++channel)
+    {
+        float src = (float)(previous->color >> (channel * 8) & 255);
+        float dst = (float)(current->color >> (channel * 8) & 255);
+        color |= (uint32)(src + (dst - src) * hd_frame_fract) << (channel * 8);
+    }
+    return color;
+}
+
+static void hd_river_uv(const ROUTE_SEGMENT *const rows[4], const uint32 indices[4], sint32 generated, float uv[4][2])
+{
+    const ROUTE_VERTEX *src[4];
+    for (uint32 corner = 0; corner < 4; ++corner)
+        src[corner] = &rows[corner]->vertices[indices[corner]];
     sint32 left = (src[0]->deform[0] || src[0]->deform[1]) && (src[2]->deform[0] || src[2]->deform[1]);
     sint32 right = (src[1]->deform[0] || src[1]->deform[1]) && (src[3]->deform[0] || src[3]->deform[1]);
     uint32 u0 = generated ? 0 : 16;
@@ -666,10 +1224,10 @@ static void hd_river_uv(const ROUTE_VERTEX *const src[4], sint32 generated, floa
     }
     for (uint32 corner = 0; corner < 4; ++corner)
     {
-        uint32 phase = 2u * src[corner]->tex_phase + game_timing.ticks * (generated ? 1u : 2u);
-        uint32 v = generated ? render_curve[8][phase & 511] + 32u : render_curve[15][phase & 511];
+        const HD_RIVER_VERTEX *current = hd_find_river_sample(rows[corner], indices[corner], hd_pose_idx);
+        const HD_RIVER_VERTEX *previous = hd_find_river_sample(rows[corner], indices[corner], hd_pose_idx ^ 1);
         uv[corner][0] = ((corner & 1 ? u1 : u0) + 0.5f) / 256;
-        uv[corner][1] = ((uint8)v + 0.5f) / 256;
+        uv[corner][1] = current ? previous->uv + (current->uv - previous->uv) * hd_frame_fract : hd_read_river_uv(src[corner], generated);
     }
 }
 
@@ -756,19 +1314,14 @@ static void hd_river(const RACE_VIEW *view, float focal)
                 }
                 else
                 {
-                    const ROUTE_VERTEX *src = &rows[v]->vertices[indices[v]];
-                    sint32 height;
-                    colors[v] = river_water_color(src, render_pal(rows[v]->pal)[0], &height, 1);
+                    colors[v] = hd_river_color(rows[v], indices[v]);
                 }
             }
             if (kind)
                 ++color_idx;
             else
             {
-                const ROUTE_VERTEX *src[4];
-                for (uint32 v = 0; v < 4; ++v)
-                    src[v] = &rows[v]->vertices[indices[v]];
-                hd_river_uv(src, race_cfg.course == 6, uv);
+                hd_river_uv(rows, indices, race_cfg.course == 6, uv);
             }
             hd_polygon(camera, NULL, vertices, uv, colors, count, 1, material->tpage, material->clut, focal, kind ? HD_DEPTH_WORLD : HD_DEPTH_WATER);
             cur_idx = cur_next;
@@ -886,42 +1439,34 @@ static sint32 hd_racer_visible(const RACE_VIEW *view, const BOAT *boat)
 {
     const CAMERA *camera = camera_for_view(view);
     float focal = hd_focals[view->idx];
-    float aspect = (float)hd_views[view->idx].w / hd_views[view->idx].h;
-    float reference_aspect = race_cfg.players == 2 ? race_cfg.layout == 2 ? 2.0f / 3.0f : 8.0f / 3.0f : 4.0f / 3.0f;
-    float radius_x = 240 * focal * disp_state.view_height / disp_state.view_width * reference_aspect / aspect;
+    float radius_x = hd_scale_x(view->idx, 240 * focal * disp_state.view_height / disp_state.view_width);
     float radius_y = 240 * focal;
     const float center[3] = {(float)boat->pos.x, (float)boat->pos.y, (float)boat->pos.z};
+    HD_POSE pose;
+    const float *pos = hd_sample_boat(boat, &pose) ? pose.pos.v : center;
     VID_VERTEX projected;
-    hd_project_point(&projected, camera, NULL, center, focal);
+    hd_project_point(&projected, camera, NULL, pos, focal);
     return projected.pos[3] + 240 >= 0 && projected.pos[0] + radius_x >= -projected.pos[3] && projected.pos[0] - radius_x <= projected.pos[3] && projected.pos[1] + radius_y >= -projected.pos[3] && projected.pos[1] - radius_y <= projected.pos[3];
 }
 
 static void hd_ground(const BOAT *boat, const MATRIXF *matrix, MATRIXF *ground)
 {
-    VECTORF points[3], edge0, edge1, n;
-    float height = -10;
-    uint32 point = 0;
-    for (uint32 idx = 1; idx < 5; ++idx)
+    HD_POSE pose;
+    VEC3F n;
+    float distance;
+    if (hd_sample_boat(boat, &pose))
     {
-        if (idx == 2)
-            continue;
-        const ROUTE_CONTACT *contact = &boat->contacts.points[idx];
-        if (!contact->surface)
-            height = hd_wrap((float)contact->pos.y - boat->pos.y) + contact->height;
-        points[point++] = (VECTORF){hd_wrap((float)contact->pos.x - boat->pos.x), height, hd_wrap((float)contact->pos.z - boat->pos.z)};
+        n = pose.ground_n;
+        distance = pose.ground_dist;
     }
-    edge0 = (VECTORF){points[1].vx - points[0].vx, points[1].vy - points[0].vy, points[1].vz - points[0].vz};
-    edge1 = (VECTORF){points[2].vx - points[0].vx, points[2].vy - points[0].vy, points[2].vz - points[0].vz};
-    OuterProductf(&edge0, &edge1, &n);
-    if (n.vy < 0)
-        n = (VECTORF){-n.vx, -n.vy, -n.vz};
-    NormalizeVectorf(&n, &n);
+    else
+        hd_read_ground(boat, &n, &distance);
     MATRIXF basis = {0};
-    basis.m[2][0] = n.vx;
-    basis.m[2][1] = -n.vy;
-    basis.m[2][2] = n.vz;
+    basis.m[2][0] = n.x;
+    basis.m[2][1] = -n.y;
+    basis.m[2][2] = n.z;
     *ground = (MATRIXF){0};
-    ground->t[2] = points[0].vx * n.vx + points[0].vy * n.vy + points[0].vz * n.vz - 10;
+    ground->t[2] = distance;
     MulMatrix0f(&basis, matrix, ground);
 }
 
@@ -1067,11 +1612,13 @@ static void hd_model(const CAMERA *camera, const BOAT *boat, const MATRIXF *matr
     }
 }
 
-static void hd_trail_quad(const RACE_VIEW *view, const VEC3F *origin, const float points[4][3], const float uv[4][2], float color, float focal)
+static void hd_trail_quad(const RACE_VIEW *view, const VEC3F *origin, const float points[4][3], const float uv[4][2], float color, float focal, float head_alpha, float tail_alpha)
 {
     static const uint8 order[6] = {0, 1, 2, 2, 1, 3};
     HD_MATERIAL *transparent;
     HD_MATERIAL *entry = hd_surface(1, getTPage(0, 1, 768, 256), getClut(784, 511), 1, HD_DEPTH_SOLID, 64, 0, 64, 1, &transparent);
+    if (head_alpha < 1 || tail_alpha < 1)
+        entry = hd_material_region(1, getTPage(0, 1, 768, 256), getClut(784, 511), VID_BLEND_ALPHA, HD_DEPTH_SOLID, 64, 0, 64, 1 | 2);
     VID_VERTEX *vertices = hd_alloc(entry, view->idx, 6);
     for (uint32 idx = 0; idx < 6; ++idx)
     {
@@ -1081,20 +1628,23 @@ static void hd_trail_quad(const RACE_VIEW *view, const VEC3F *origin, const floa
         vertices[idx].uv[0] = uv[corner][0];
         vertices[idx].uv[1] = uv[corner][1];
         vertices[idx].color[0] = vertices[idx].color[1] = vertices[idx].color[2] = color;
-        vertices[idx].color[3] = 1;
+        vertices[idx].color[3] = corner < 2 ? head_alpha : tail_alpha;
     }
     memcpy(hd_alloc(transparent, view->idx, 6), vertices, 6 * sizeof(*vertices));
 }
 
 static void hd_trail(const RACE_VIEW *view, const BOAT *boat, float focal)
 {
-    const VEC3F origin = {{(float)boat->trail.origin.x, (float)boat->trail.origin.y, (float)boat->trail.origin.z}};
+    const HD_TRAIL *sample = hd_sample_trail(boat);
+    if (!sample->ready)
+        return;
+    const VEC3F origin = sample->origin;
     for (uint32 grp = 0; grp < 2; ++grp)
     {
-        const TRAIL_GROUP *trail = &boat->trail.grps[grp];
-        const SVECTOR *dir = &trail->order[0]->dir;
-        float step[3] = {hd_wrap((float)trail->rear.vx - trail->front.vx) / 4.0f, hd_wrap((float)trail->rear.vy - trail->front.vy) / 4.0f, hd_wrap((float)trail->rear.vz - trail->front.vz) / 4.0f};
-        float pos[3] = {(float)trail->front.vx, (float)trail->front.vy, (float)trail->front.vz};
+        const HD_TRAIL_GROUP *trail = &sample->grps[grp];
+        const VEC3F *dir = &trail->particles[0].dir;
+        float step[3] = {hd_wrap(trail->rear.x - trail->front.x) / 4.0f, hd_wrap(trail->rear.y - trail->front.y) / 4.0f, hd_wrap(trail->rear.z - trail->front.z) / 4.0f};
+        float pos[3] = {trail->front.x, trail->front.y, trail->front.z};
         float points[4][3];
         float tex = 0;
         for (uint32 idx = 0; idx < 10; ++idx)
@@ -1103,7 +1653,7 @@ static void hd_trail(const RACE_VIEW *view, const BOAT *boat, float focal)
             float next_tex;
             if (idx < 5)
             {
-                amount = (sint16)trail->intensity[idx];
+                amount = trail->intensity[idx];
                 if (!idx && amount > 32)
                     amount = 32;
                 memcpy(points[2], pos, sizeof(pos));
@@ -1113,21 +1663,19 @@ static void hd_trail(const RACE_VIEW *view, const BOAT *boat, float focal)
             }
             else
             {
-                const TRAIL_PARTICLE *particle = trail->order[idx - 5];
-                points[2][0] = (float)particle->pos.vx;
-                points[2][1] = (float)particle->pos.vy;
-                points[2][2] = (float)particle->pos.vz;
+                const HD_TRAIL_PARTICLE *particle = &trail->particles[idx - 5];
+                memcpy(points[2], particle->pos.v, sizeof(points[2]));
                 dir = &particle->dir;
-                amount = (sint16)particle->width;
+                amount = particle->width;
                 next_tex = tex + particle->tex / 256.0f;
             }
-            points[3][0] = points[2][0] + dir->vx * amount / 4096.0f;
-            points[3][1] = points[2][1] + dir->vy * amount / 4096.0f;
-            points[3][2] = points[2][2] + dir->vz * amount / 4096.0f;
+            points[3][0] = points[2][0] + dir->x * amount / 4096.0f;
+            points[3][1] = points[2][1] + dir->y * amount / 4096.0f;
+            points[3][2] = points[2][2] + dir->z * amount / 4096.0f;
             if (idx)
             {
                 float uv[4][2] = {{0, tex / 64}, {63.0f / 64, tex / 64}, {0, next_tex / 64}, {63.0f / 64, next_tex / 64}};
-                hd_trail_quad(view, &origin, points, uv, 0.5f, focal);
+                hd_trail_quad(view, &origin, points, uv, 0.5f, focal, 1, 1);
             }
             memcpy(points[0], points[2], sizeof(points[0]));
             memcpy(points[1], points[3], sizeof(points[1]));
@@ -1138,31 +1686,26 @@ static void hd_trail(const RACE_VIEW *view, const BOAT *boat, float focal)
 
 static void hd_spray(const RACE_VIEW *view, const BOAT *boat, float focal)
 {
-    static const float lift[5] = {0, 2867.0f / 4096, 1, 2867.0f / 4096, 0};
-    const BOAT_TRAIL *trail = &boat->trail;
-    const VEC3F origin = {{(float)trail->origin.x, (float)trail->origin.y, (float)trail->origin.z}};
+    const HD_TRAIL *trail = hd_sample_trail(boat);
+    if (!trail->ready)
+        return;
+    const VEC3F origin = trail->origin;
     float previous[3][3];
-    sint32 tex = (trail->scroll & 0x3f00) + 64;
-    sint32 height = (sint8)(trail->spray_order[0]->fade >> 8);
-    if (height < 40)
-        tex -= height - 40;
-    tex += 8;
-    for (uint32 idx = 0; idx < 5; ++idx)
+    for (uint32 idx = 0; idx < trail->spray_count; ++idx)
     {
-        const TRAIL_SPRAY *particle = trail->spray_order[idx];
-        sint32 fade = (sint16)particle->fade / 256;
-        sint32 darken = fade > 38 ? fade - 38 : 0;
-        float amount = (float)(fade - darken);
-        float width[3] = {particle->dir.vx * amount / 4096, particle->dir.vy * amount / 4096, particle->dir.vz * amount / 4096};
+        const HD_TRAIL_PARTICLE *particle = &trail->spray[idx];
+        float darken = fmaxf(particle->fade - 38, 0);
+        float amount = particle->width;
+        float width[3] = {particle->dir.x * amount / 4096, particle->dir.y * amount / 4096, particle->dir.z * amount / 4096};
         float points[3][3];
-        float center[3] = {(float)particle->pos.vx, particle->pos.vy + particle->lift * lift[idx], (float)particle->pos.vz};
+        float center[3] = {particle->pos.x, particle->pos.y + particle->lift, particle->pos.z};
         for (uint32 side = 0; side < 3; ++side)
             for (uint32 axis = 0; axis < 3; ++axis)
-                points[side][axis] = center[axis] + (idx == 4 ? 0 : (sint32)side - 1) * width[axis];
+                points[side][axis] = center[axis] + ((sint32)side - 1) * width[axis];
         if (idx)
         {
-            sint32 next_tex = tex + particle->tex;
-            float uv[4][2] = {{63.0f / 64, (tex >> 8) / 64.0f}, {(tex & 63) / 64.0f, (tex >> 8) / 64.0f}, {63.0f / 64, (next_tex >> 8) / 64.0f}, {(next_tex & 63) / 64.0f, (next_tex >> 8) / 64.0f}};
+            const float *prev_uv = trail->spray[idx - 1].uv;
+            float uv[4][2] = {{63.0f / 64, prev_uv[1]}, {prev_uv[0], prev_uv[1]}, {63.0f / 64, particle->uv[1]}, {particle->uv[0], particle->uv[1]}};
             for (uint32 side = 0; side < 2; ++side)
             {
                 float quad[4][3];
@@ -1171,11 +1714,41 @@ static void hd_spray(const RACE_VIEW *view, const BOAT *boat, float focal)
                 memcpy(quad[1], previous[1], sizeof(quad[1]));
                 memcpy(quad[2], points[edge], sizeof(quad[2]));
                 memcpy(quad[3], points[1], sizeof(quad[3]));
-                hd_trail_quad(view, &origin, quad, uv, (64 + darken) / 128.0f, focal);
+                hd_trail_quad(view, &origin, quad, uv, (64 + darken) / 128.0f, focal, 1, idx == 5 ? 1 - hd_frame_fract : 1);
             }
-            tex = next_tex;
         }
         memcpy(previous, points, sizeof(previous));
+    }
+}
+
+static void hd_capture_effects(void)
+{
+    HD_EFFECTS *current = &hd_effects[hd_pose_idx];
+    HD_EFFECTS *previous = &hd_effects[hd_pose_idx ^ 1];
+    current->ticks = game_timing.ticks;
+    uint32 phase = game_timing.ticks & 127;
+    if (phase >= 64)
+        phase = 127 - phase;
+    current->billboard_width = (float)(phase + 64);
+    current->billboard_height = (float)((phase * 4 + 256) / 3);
+    if (race_cfg.course == 4 && race_cfg.variant == 2)
+        effects_particles(&hd_prev_particles, &hd_particles, hd_particle_mats);
+    if (race_cfg.course == 5)
+        for (uint32 idx = 0; idx < 2; ++idx)
+        {
+            HD_EFFECT_QUAD *dst = &current->quads[idx];
+            SVECTOR pos, extent;
+            sint32 brightness;
+            effects_depth_quad(idx, &pos, &extent, &dst->tex, &brightness);
+            dst->pos = hd_trail_vec(&pos);
+            dst->extent = hd_trail_vec(&extent);
+            dst->brightness = (float)brightness;
+        }
+    current->ready = 1;
+    if (!previous->ready)
+    {
+        hd_prev_particles = hd_particles;
+        *previous = *current;
     }
 }
 
@@ -1183,32 +1756,36 @@ static void hd_course_effects(const RACE_VIEW *view, float focal)
 {
     static const uint8 order[6] = {0, 1, 2, 2, 1, 3};
     const CAMERA *camera = camera_for_view(view);
-    float aspect = (float)hd_views[view->idx].w / hd_views[view->idx].h;
-    float reference_aspect = race_cfg.players == 2 ? race_cfg.layout == 2 ? 2.0f / 3.0f : 8.0f / 3.0f : 4.0f / 3.0f;
-    float horizontal = focal * disp_state.view_height / disp_state.view_width * reference_aspect / aspect;
+    float horizontal = hd_scale_x(view->idx, focal * disp_state.view_height / disp_state.view_width);
     if (race_cfg.course == 4 && race_cfg.variant == 2)
         for (uint32 idx = 0; idx < EFFECT_PARTICLE_COUNT; ++idx)
         {
-            RENDER_MATERIAL tex;
-            const EFFECT_PARTICLE *particle = effects_particle(idx, &tex);
+            const EFFECT_PARTICLE *particle = &hd_particles[idx];
+            const EFFECT_PARTICLE *previous = &hd_prev_particles[idx];
+            uint32 mat = particle->kind == 2 ? 1 : particle->kind == 3 ? 2 : 0;
+            const RENDER_MATERIAL tex = hd_particle_mats[mat];
             VID_VERTEX center, *vertices;
             HD_MATERIAL *entry;
-            float point[3], vertical;
-            if (!particle)
+            VEC3F point;
+            float vertical;
+            if (!particle->kind)
                 continue;
+            if (!previous->kind)
+                previous = particle;
             for (uint32 axis = 0; axis < 3; ++axis)
-                point[axis] = particle->pos[axis];
-            hd_project_point(&center, camera, NULL, point, focal);
+                point.v[axis] = previous->pos[axis] + ((float)particle->pos[axis] - previous->pos[axis]) * hd_frame_fract;
+            float size = previous->size + (particle->size - previous->size) * hd_frame_fract;
+            hd_project_point(&center, camera, NULL, point.v, focal);
             if (center.pos[3] < 16 || center.pos[3] >= 12800)
                 continue;
-            vertical = particle->size * (race_cfg.players == 2 ? 1.0f : 2.0f);
+            vertical = size * (race_cfg.players == 2 ? 1.0f : 2.0f);
             entry = hd_material(1, tex.tpage, tex.clut, VID_BLEND_NONE, HD_DEPTH_WORLD);
             vertices = hd_alloc(entry, view->idx, 6);
             for (uint32 vertex = 0; vertex < 6; ++vertex)
             {
                 uint32 corner = order[vertex];
                 vertices[vertex] = center;
-                vertices[vertex].pos[0] += (corner & 1 ? 1 : -1) * particle->size * horizontal;
+                vertices[vertex].pos[0] += (corner & 1 ? 1 : -1) * size * horizontal;
                 vertices[vertex].pos[1] += corner & 2 ? 0 : vertical * focal;
                 vertices[vertex].uv[0] = (tex.uv[corner].u + 0.5f) / 256.0f;
                 vertices[vertex].uv[1] = (tex.uv[corner].v + 0.5f) / 256.0f;
@@ -1219,14 +1796,17 @@ static void hd_course_effects(const RACE_VIEW *view, float focal)
     if (race_cfg.course == 5)
         for (uint32 idx = 0; idx < 2; ++idx)
         {
-            SVECTOR origin, extent;
-            RENDER_MATERIAL tex;
-            sint32 brightness;
+            const HD_EFFECT_QUAD *current = &hd_effects[hd_pose_idx].quads[idx];
+            const HD_EFFECT_QUAD *previous = &hd_effects[hd_pose_idx ^ 1].quads[idx];
+            VEC3F origin, extent;
+            hd_lerp_vec(&previous->pos, &current->pos, &origin);
+            hd_lerp_vec(&previous->extent, &current->extent, &extent);
+            const RENDER_MATERIAL tex = current->tex;
+            float brightness = previous->brightness + (current->brightness - previous->brightness) * hd_frame_fract;
             VID_VERTEX center, *vertices;
             HD_MATERIAL *entry;
             float scale;
-            effects_depth_quad(idx, &origin, &extent, &tex, &brightness);
-            hd_project(&center, camera, NULL, &origin, focal);
+            hd_project_point(&center, camera, NULL, origin.v, focal);
             if (center.pos[3] < 640 || center.pos[3] >= 13440 || fabsf(center.pos[0]) >= center.pos[3] || fabsf(center.pos[1]) >= center.pos[3])
                 continue;
             scale = (brightness + 100) * fminf(131071.0f / 65536.0f, focal * disp_state.view_height * 0.5f / center.pos[3]) / 256.0f;
@@ -1238,8 +1818,8 @@ static void hd_course_effects(const RACE_VIEW *view, float focal)
             {
                 uint32 corner = order[vertex];
                 vertices[vertex] = center;
-                vertices[vertex].pos[0] += (corner & 1 ? 2 : -2) * extent.vx * scale / disp_state.view_width * reference_aspect / aspect * center.pos[3];
-                vertices[vertex].pos[1] += (corner & 2 ? -2 : 2) * extent.vy * scale / disp_state.view_height * center.pos[3];
+                vertices[vertex].pos[0] += hd_scale_x(view->idx, (corner & 1 ? 2 : -2) * extent.x * scale / disp_state.view_width) * center.pos[3];
+                vertices[vertex].pos[1] += (corner & 2 ? -2 : 2) * extent.y * scale / disp_state.view_height * center.pos[3];
                 vertices[vertex].uv[0] = (tex.uv[corner].u + 0.5f) / 256.0f;
                 vertices[vertex].uv[1] = (tex.uv[corner].v + 0.5f) / 256.0f;
                 vertices[vertex].color[0] = vertices[vertex].color[1] = vertices[vertex].color[2] = (brightness + 128) / 128.0f;
@@ -1249,27 +1829,32 @@ static void hd_course_effects(const RACE_VIEW *view, float focal)
         }
 }
 
-static void hd_flare(const RACE_VIEW *view, const BOAT *boat, const MATRIXF *model, float focal)
+static void hd_flare(const RACE_VIEW *view, const BOAT *boat, uint32 prop, const MATRIXF *model, float focal)
 {
     static const uint8 order[6] = {0, 1, 2, 2, 1, 3};
-    VEC3F points[2][4];
-    RENDER_MATERIAL tex;
+    const HD_FLARES *current = &hd_flares[view->idx][1];
+    const HD_FLARES *previous = &hd_flares[view->idx][0];
+    uint32 slot = hd_boat_idx(boat);
+    const HD_FLARE *flare = prop < current->props[slot] ? &current->flares[slot][prop] : &previous->flares[slot][prop];
+    const HD_FLARE *old = prop < previous->props[slot] ? &previous->flares[slot][prop] : flare;
+    const RENDER_MATERIAL *tex = &flare->tex;
     HD_MATERIAL *entry, *transparent;
     VID_VERTEX *vertices;
-    hd_trail_prepare_flare(boat, points, &tex);
-    entry = hd_surface(1, tex.tpage, tex.clut, 1, HD_DEPTH_SOLID, 0, 0, 256, 0, &transparent);
+    entry = hd_surface(1, tex->tpage, tex->clut, 1, HD_DEPTH_SOLID, 0, 0, 256, 0, &transparent);
     vertices = hd_alloc(entry, view->idx, 12);
     for (uint32 side = 0; side < 2; ++side)
         for (uint32 idx = 0; idx < 6; ++idx)
         {
             uint32 corner = order[idx];
             VID_VERTEX *vertex = &vertices[side * 6 + idx];
-            VECTORF src = {points[side][corner].x, points[side][corner].y, points[side][corner].z}, dst;
+            VEC3F point;
+            hd_lerp_vec(&old->points[side][corner], &flare->points[side][corner], &point);
+            VECTORF src = {point.x, point.y, point.z}, dst;
             RotTransf(model, &src, &dst);
             const float world[3] = {dst.vx, dst.vy, dst.vz};
             hd_project_point(vertex, camera_for_view(view), NULL, world, focal);
-            vertex->uv[0] = (tex.uv[corner].u + 0.5f) / 256.0f;
-            vertex->uv[1] = (tex.uv[corner].v + 0.5f) / 256.0f;
+            vertex->uv[0] = (tex->uv[corner].u + 0.5f) / 256.0f;
+            vertex->uv[1] = (tex->uv[corner].v + 0.5f) / 256.0f;
             for (uint32 channel = 0; channel < 4; ++channel)
                 vertex->color[channel] = 1;
         }
@@ -1279,19 +1864,69 @@ static void hd_flare(const RACE_VIEW *view, const BOAT *boat, const MATRIXF *mod
 static float hd_racer_depth(const RACE_VIEW *view, const BOAT *boat)
 {
     const float point[3] = {(float)boat->pos.x, (float)boat->pos.y, (float)boat->pos.z};
+    HD_POSE pose;
+    const float *pos = hd_sample_boat(boat, &pose) ? pose.pos.v : point;
     VID_VERTEX projected;
-    hd_project_point(&projected, camera_for_view(view), NULL, point, hd_focals[view->idx]);
+    hd_project_point(&projected, camera_for_view(view), NULL, pos, hd_focals[view->idx]);
     return projected.pos[3] - 600.0f;
+}
+
+static void hd_prepare_boats(const RACE_VIEW *view, sint32 update)
+{
+    const CAMERA *camera = camera_for_view(view);
+    MESH_RACERS racers;
+    HD_FLARES *current = &hd_flares[view->idx][1];
+    HD_FLARES *previous = &hd_flares[view->idx][0];
+    *previous = *current;
+    hd_mesh_prepare_racers(view, &racers, update, hd_racer_visible, hd_racer_depth);
+    memset(current->props, 0, sizeof(current->props));
+    for (sint32 racer_idx = racers.count - 1; racer_idx >= 0; --racer_idx)
+    {
+        const BOAT *boat = racers.boats[racer_idx];
+        uint32 slot = hd_boat_idx(boat);
+        if (boat->control.mode != 1 || (boat == boat_player(view) && camera->mode == 2))
+            continue;
+        sint32 count = boat->setup.propellers;
+        if (count != 1 && count != 2)
+            continue;
+        current->props[slot] = (uint8)count;
+        for (sint32 idx = 0; idx < count; ++idx)
+        {
+            HD_FLARE *flare = &current->flares[slot][idx];
+            hd_trail_prepare_flare(boat, flare->points, &flare->tex, update);
+        }
+    }
 }
 
 static void hd_boats(const RACE_VIEW *view, float focal)
 {
     const CAMERA *camera = camera_for_view(view);
-    MESH_RACERS *racers = &hd_racers[view->idx];
-    hd_mesh_prepare_racers(view, racers, hd_racer_visible, hd_racer_depth);
-    for (sint32 racer_idx = racers->count - 1; racer_idx >= 0; --racer_idx)
+    BOAT *boats[16];
+    float depths[16];
+    sint32 count = 0;
+    if (!mesh_render_state.enabled)
+        return;
+    for (sint32 idx = 0; idx < boat_racer_count; ++idx)
     {
-        BOAT *boat = racers->boats[racer_idx];
+        BOAT *boat = boat_racers[idx];
+        if (boat == boat_player(view) && camera->mode < 2)
+            continue;
+        float depth = hd_racer_depth(view, boat);
+        if (depth < -800 || depth >= 8000 * HD_DRAW_SCALE || !hd_racer_visible(view, boat))
+            continue;
+        sint32 dst = count++;
+        while (dst && depths[dst - 1] > depth)
+        {
+            boats[dst] = boats[dst - 1];
+            depths[dst] = depths[dst - 1];
+            --dst;
+        }
+        boats[dst] = boat;
+        depths[dst] = depth;
+    }
+    for (sint32 racer_idx = count - 1; racer_idx >= 0; --racer_idx)
+    {
+        BOAT *boat = boats[racer_idx];
         const MESH_BOAT_MODELS *models = &mesh_boat_models[view->idx][boat->model_slot];
         MATRIXF matrix;
         hd_boat_matrix(boat, &matrix);
@@ -1309,7 +1944,7 @@ static void hd_boats(const RACE_VIEW *view, float focal)
             {
                 hd_model(camera, boat, &props[idx], &models->prop[idx], focal, 0);
                 if (boat->control.mode == 1)
-                    hd_flare(view, boat, &props[idx], focal);
+                    hd_flare(view, boat, idx, &props[idx], focal);
             }
         }
     }
@@ -1333,13 +1968,9 @@ sint32 hd_begin_ui(void)
     return 1;
 }
 
-sint32 hd_begin_frame(void)
+static void hd_resize_views(void)
 {
     sint32 width, height;
-    if (hd_active)
-        abort();
-    if (!vid_begin((track_horizon->colors[2].word & 255) / 255.0f, (track_horizon->colors[2].word >> 8 & 255) / 255.0f, (track_horizon->colors[2].word >> 16 & 255) / 255.0f))
-        return 0;
     vid_resize(&width, &height);
     hd_views[0] = hd_views[1] = (VID_RECT){0, 0, width, height};
     if (race_cfg.players == 2)
@@ -1357,6 +1988,17 @@ sint32 hd_begin_frame(void)
             hd_views[1].w = width - width / 2;
         }
     }
+}
+
+sint32 hd_begin_frame(void)
+{
+    if (hd_active)
+        abort();
+    memset(hd_pose_sampled, 0, sizeof(hd_pose_sampled));
+    memset(hd_trail_sampled, 0, sizeof(hd_trail_sampled));
+    if (!vid_begin((track_horizon->colors[2].word & 255) / 255.0f, (track_horizon->colors[2].word >> 8 & 255) / 255.0f, (track_horizon->colors[2].word >> 16 & 255) / 255.0f))
+        return 0;
+    hd_resize_views();
     if (!hd_shader || !hd_vram)
         abort();
     hd_mesh_next = &hd_meshes;
@@ -1472,7 +2114,7 @@ void hd_draw_sprite(const RACE_VIEW *view, float x, float y, float width, float 
 
 void hd_draw_hud_sprite(const RACE_VIEW *view, float x, float y, float width, float height, uint16 u, uint16 v, uint16 tpage, uint16 clut, uint32 color, float ax, float ay)
 {
-    float aspect = race_cfg.players == 2 ? race_cfg.layout == 2 ? 2.0f / 3.0f : 8.0f / 3.0f : 4.0f / 3.0f;
+    float aspect = hd_ref_aspect();
     hd_sprite(view, x, y, width, height, u, v, tpage, clut, color, aspect, ax, ay);
 }
 
@@ -1519,19 +2161,20 @@ void hd_draw_ui_quad(const float pos[4][2], const float uv[4][2], uint16 tpage, 
 static void hd_player_markers(const RACE_VIEW *view, float focal)
 {
     static const uint8 order[6] = {0, 1, 2, 2, 1, 3};
-    const MESH_RACERS *racers = &hd_racers[view->idx];
-    float aspect = (float)hd_views[view->idx].w / hd_views[view->idx].h;
-    float reference_aspect = race_cfg.layout == 2 ? 2.0f / 3.0f : 8.0f / 3.0f;
     if (race_cfg.players != 2)
         return;
-    for (sint32 idx = 0; idx < racers->count; ++idx)
+    for (sint32 idx = 0; idx < boat_racer_count; ++idx)
     {
-        const BOAT *boat = racers->boats[idx];
+        const BOAT *boat = boat_racers[idx];
         RENDER_MATERIAL tex;
         HD_MATERIAL *entry;
         VID_GEOMETRY *mesh;
         VID_VERTEX center, *vertices;
-        const float point[3] = {(float)boat->pos.x, boat->pos.y + 100.0f, (float)boat->pos.z};
+        HD_POSE pose;
+        VEC3F pos = {{(float)boat->pos.x, (float)boat->pos.y, (float)boat->pos.z}};
+        if (hd_sample_boat(boat, &pose))
+            pos = pose.pos;
+        const float point[3] = {pos.x, pos.y + 100, pos.z};
         if (boat == boat_player(view) || (boat->control.driver != 2 && boat->control.driver != 3))
             continue;
         hd_project_point(&center, camera_for_view(view), NULL, point, focal);
@@ -1547,7 +2190,7 @@ static void hd_player_markers(const RACE_VIEW *view, float focal)
         {
             uint32 corner = order[vertex];
             vertices[vertex] = center;
-            vertices[vertex].pos[0] += (corner & 1 ? 44.0f : -44.0f) / disp_state.view_width * reference_aspect / aspect * center.pos[3];
+            vertices[vertex].pos[0] += hd_scale_x(view->idx, (corner & 1 ? 44.0f : -44.0f) / disp_state.view_width) * center.pos[3];
             vertices[vertex].pos[1] += (corner & 2 ? 0 : 40.0f) / disp_state.view_height * center.pos[3];
             vertices[vertex].uv[0] = (tex.uv[corner].u + 0.5f) / 256.0f;
             vertices[vertex].uv[1] = (tex.uv[corner].v + 0.5f) / 256.0f;
@@ -1561,17 +2204,54 @@ static void hd_player_markers(const RACE_VIEW *view, float focal)
     }
 }
 
+static void hd_capture_indicator(const RACE_VIEW *view, sint32 update)
+{
+    HD_INDICATOR *previous = &hd_indicators[view->idx][0];
+    HD_INDICATOR *current = &hd_indicators[view->idx][1];
+    MATRIXF matrix;
+    const SVECTOR *points = NULL;
+    *previous = *current;
+    uint32 result = race_cfg.mode == 8 ? 1 : update ? hd_render_prepare_indicator(view, &matrix, &points) : hd_render_read_indicator(&matrix, &points);
+    current->ready = !result;
+    if (current->ready)
+    {
+        current->points = points;
+        for (uint32 axis = 0; axis < 3; ++axis)
+        {
+            current->pos.v[axis] = matrix.t[axis];
+            matrix.m[0][axis] *= 4096.0f / 1000;
+            matrix.m[1][axis] *= 4096.0f / 1000;
+        }
+        MatrixQuatf(&matrix, &current->rotation);
+    }
+    if (!previous->ready || previous->points != current->points)
+        *previous = *current;
+}
+
 static void hd_target_indicator(const RACE_VIEW *view)
 {
     static const uint8 order[6] = {0, 1, 2, 2, 1, 3};
-    const SVECTOR *points;
+    const HD_INDICATOR *previous = &hd_indicators[view->idx][0];
+    const HD_INDICATOR *current = &hd_indicators[view->idx][1];
+    const SVECTOR *points = current->points;
     MATRIXF matrix;
     float scr[8][2];
     HD_MATERIAL *entry;
     VID_GEOMETRY *mesh;
     VID_VERTEX *vertices;
-    if (race_cfg.mode == 8 || (race_paused ? hd_render_read_indicator(&matrix, &points) : hd_render_prepare_indicator(view, &matrix, &points)))
+    if (!current->ready)
         return;
+    QUATF rotation;
+    VEC3F pos;
+    SlerpQuatf(&previous->rotation, &current->rotation, hd_frame_fract, &rotation);
+    hd_lerp_vec(&previous->pos, &current->pos, &pos);
+    QuatMatrixf(&rotation, &matrix);
+    for (uint32 axis = 0; axis < 3; ++axis)
+    {
+        matrix.t[axis] = pos.v[axis];
+        matrix.m[0][axis] *= 1000.0f / 4096;
+        matrix.m[1][axis] *= 1000.0f / 4096;
+    }
     entry = hd_material(0, 0, 0, VID_BLEND_NONE, HD_DEPTH_NONE);
     mesh = hd_mesh(42);
     if (!mesh)
@@ -1610,13 +2290,63 @@ static void hd_target_indicator(const RACE_VIEW *view)
         abort();
 }
 
+static float hd_camera_scale(void)
+{
+    return race_cfg.players == 2 ? -1840.0f / 4096 : -5120.0f / 4096;
+}
+
+static void hd_capture_countdown(const RACE_VIEW *view)
+{
+    HD_COUNTDOWN *previous = &hd_countdowns[view->idx][0];
+    HD_COUNTDOWN *current = &hd_countdowns[view->idx][1];
+    MATRIXF matrix;
+    *previous = *current;
+    current->model = hd_effects_countdown(view, &matrix);
+    if (current->model)
+    {
+        float scale = hd_camera_scale();
+        for (uint32 axis = 0; axis < 3; ++axis)
+        {
+            current->pos.v[axis] = matrix.t[axis];
+            matrix.m[1][axis] /= scale;
+        }
+        MatrixQuatf(&matrix, &current->rotation);
+    }
+    current->ready = 1;
+    if (!previous->ready || previous->model != current->model)
+        *previous = *current;
+}
+
+static const MESH_MODEL *hd_sample_countdown(const RACE_VIEW *view, MATRIXF *matrix)
+{
+    const HD_COUNTDOWN *previous = &hd_countdowns[view->idx][0];
+    const HD_COUNTDOWN *current = &hd_countdowns[view->idx][1];
+    if (!current->ready)
+        abort();
+    if (current->model)
+    {
+        QUATF rotation;
+        VEC3F pos;
+        SlerpQuatf(&previous->rotation, &current->rotation, hd_frame_fract, &rotation);
+        hd_lerp_vec(&previous->pos, &current->pos, &pos);
+        QuatMatrixf(&rotation, matrix);
+        float scale = hd_camera_scale();
+        for (uint32 axis = 0; axis < 3; ++axis)
+        {
+            matrix->m[1][axis] *= scale;
+            matrix->t[axis] = pos.v[axis];
+        }
+    }
+    return current->model;
+}
+
 static void hd_countdown(const RACE_VIEW *view, float focal)
 {
     static const uint8 order[6] = {0, 1, 2, 2, 1, 3};
     static const MATRIXF light = {{{0, 0, -1}, {200.0f / 4096, 200.0f / 4096, -400.0f / 4096}, {0, 0, 0}}, {0, 0, 0}};
     static const MATRIXF light_colors = {{{1, 1, 0}, {1, 1, 0}, {1, 1, 0}}, {32, 32, 32}};
     MATRIXF matrix;
-    const MESH_MODEL *model = hd_effects_countdown(view, &matrix);
+    const MESH_MODEL *model = hd_sample_countdown(view, &matrix);
     if (!model)
         return;
     vid_viewport(hd_views[view->idx]);
@@ -1756,9 +2486,7 @@ static sint32 hd_showcase_model(const RACE_VIEW *view, const MESH_MODEL *model, 
     RotMatrixZf((1024 - (rec->angle & 4095)) * RAD12, &matrix);
     hd_project_point(&center, camera, &matrix, origin, focal);
     float radius = 1040 * focal;
-    float aspect = (float)hd_views[view->idx].w / hd_views[view->idx].h;
-    float reference_aspect = race_cfg.players == 2 ? race_cfg.layout == 2 ? 2.0f / 3.0f : 8.0f / 3.0f : 4.0f / 3.0f;
-    float radius_x = radius * disp_state.view_height / disp_state.view_width * reference_aspect / aspect;
+    float radius_x = hd_scale_x(view->idx, radius * disp_state.view_height / disp_state.view_width);
     if (center.pos[3] + 1035 < 16 || center.pos[3] - 1035 >= 8001 || center.pos[0] + radius_x < -center.pos[3] || center.pos[0] - radius_x > center.pos[3] || center.pos[1] + radius < -center.pos[3] || center.pos[1] - radius > center.pos[3])
         return 0;
     float proj = hd_proj(view, 0);
@@ -1895,9 +2623,7 @@ static void hd_sun_quad(const RACE_VIEW *view, uint32 idx, const float center[2]
     RENDER_MATERIAL tex;
     float width, scale;
     effects_sun_material(idx, &tex, &width, &scale);
-    float aspect = (float)hd_views[view->idx].w / hd_views[view->idx].h;
-    float ref_aspect = race_cfg.players == 2 ? race_cfg.layout == 2 ? 2.0f / 3 : 8.0f / 3 : 4.0f / 3;
-    float half_x = 2 * width * ref_aspect / (disp_state.view_width * aspect);
+    float half_x = hd_scale_x(view->idx, 2 * width / disp_state.view_width);
     float half_y = 2 * (race_cfg.players == 2 ? width * 0.5f : width) / disp_state.view_height;
     HD_MATERIAL *transparent;
     HD_MATERIAL *entry = hd_surface(1, tex.tpage, tex.clut, 1, HD_DEPTH_NONE, 0, 0, 256, 32, &transparent);
@@ -1920,10 +2646,10 @@ static void hd_sun_quad(const RACE_VIEW *view, uint32 idx, const float center[2]
         abort();
 }
 
-static void hd_sun(const RACE_VIEW *view, float focal, sint32 update, sint32 lens)
+static sint32 hd_sun_project(const RACE_VIEW *view, float focal, float center[2], float *depth)
 {
     if (!render_capture_enabled)
-        return;
+        return 0;
     MATRIXF matrix;
     VECTORF direction = {0, 0, 4096}, world, point;
     if (race_cfg.mode == 8)
@@ -1939,25 +2665,42 @@ static void hd_sun(const RACE_VIEW *view, float focal, sint32 update, sint32 len
     }
     ApplyMatrixf(&hd_camera_rot[view->idx], &world, &point);
     if (point.vz < 512)
-        return;
+        return 0;
     const float pos[3] = {point.vx, point.vy, point.vz};
     VID_VERTEX projected;
     hd_clip_point(&projected, view->idx, pos, focal);
-    const float center[2] = {projected.pos[0] / projected.pos[3], projected.pos[1] / projected.pos[3]};
+    center[0] = projected.pos[0] / projected.pos[3];
+    center[1] = projected.pos[1] / projected.pos[3];
+    *depth = point.vz;
+    return 1;
+}
+
+static void hd_sun_update(const RACE_VIEW *view)
+{
+    float center[2], depth;
+    hd_sun_fades[view->idx][0] = hd_sun_fades[view->idx][1];
+    if (race_paused || !hd_sun_project(view, hd_focals[view->idx], center, &depth))
+        return;
+    uint32 color = hd_sun_ready[view->idx] ? vid_sample_color(hd_sun_samples[view->idx]) : 0;
+    float step = game_timing.base_rate == game_timing.frame_rate ? 10 : 20;
+    float delta = (color & 0xf8f8f8) == 0xf8f8f8 ? -step : step;
+    hd_sun_fade[view->idx] = fminf(255, fmaxf(0, hd_sun_fade[view->idx] + delta));
+    hd_sun_fades[view->idx][1] = hd_sun_fade[view->idx];
+}
+
+static void hd_sun(const RACE_VIEW *view, float focal, sint32 update, sint32 lens)
+{
+    float center[2], depth;
+    if (!hd_sun_project(view, focal, center, &depth))
+        return;
     vid_viewport(hd_views[view->idx]);
     if (!lens)
     {
-        if (update && !race_paused)
-        {
-            uint32 color = hd_sun_ready[view->idx] ? vid_sample_color(hd_sun_samples[view->idx]) : 0;
-            float step = game_timing.base_rate == game_timing.frame_rate ? 10 : 20;
-            float delta = (color & 0xf8f8f8) == 0xf8f8f8 ? -step : step;
-            hd_sun_fade[view->idx] = fminf(255, fmaxf(0, hd_sun_fade[view->idx] + delta));
-        }
         hd_sun_quad(view, 0, center, 128);
         return;
     }
-    float intensity = fmaxf(0, fminf(255, (point.vz - 512) / 32) - hd_sun_fade[view->idx]);
+    float fade = hd_sun_fades[view->idx][0] + (hd_sun_fades[view->idx][1] - hd_sun_fades[view->idx][0]) * hd_frame_fract;
+    float intensity = fmaxf(0, fminf(255, (depth - 512) / 32) - fade);
     if (intensity > 0)
         for (uint32 idx = 1; idx < 7; ++idx)
             hd_sun_quad(view, idx, center, intensity);
@@ -1975,7 +2718,7 @@ static void hd_sun(const RACE_VIEW *view, float focal, sint32 update, sint32 len
     }
 }
 
-static void hd_scene(const RACE_VIEW *view, float focal, sint32 update)
+static void hd_prepare_camera(const RACE_VIEW *view, sint32 update)
 {
     MATRIXF pose;
     hd_boat_pose(boat_player(view), &pose);
@@ -1986,11 +2729,109 @@ static void hd_scene(const RACE_VIEW *view, float focal, sint32 update)
         hd_camera_update(camera_for_view(view), boat_player(view), &pose, state);
     hd_camera_matrix(camera_for_view(view), boat_player(view), &pose, state, &hd_camera_rot[view->idx], &hd_camera_pos[view->idx]);
     state->pos = hd_camera_pos[view->idx];
+    HD_VIEW_SAMPLE *previous = &hd_view_samples[view->idx][0];
+    HD_VIEW_SAMPLE *current = &hd_view_samples[view->idx][1];
+    *previous = *current;
+    current->pos = hd_camera_pos[view->idx];
+    MATRIXF rotation = hd_camera_rot[view->idx];
+    float scale = hd_camera_scale();
+    for (uint32 axis = 0; axis < 3; ++axis)
+        rotation.m[1][axis] /= scale;
+    MatrixQuatf(&rotation, &current->rotation);
+    current->proj = hd_proj(view, 0);
+    current->mode = camera_for_view(view)->mode;
+    current->ready = 1;
+    if (!previous->ready || previous->mode != current->mode)
+        *previous = *current;
+}
+
+static float hd_sample_camera(const RACE_VIEW *view, float focal)
+{
+    const HD_VIEW_SAMPLE *previous = &hd_view_samples[view->idx][0];
+    const HD_VIEW_SAMPLE *current = &hd_view_samples[view->idx][1];
+    if (!hd_pose_active || !current->ready)
+        return focal;
+    QUATF rotation;
+    SlerpQuatf(&previous->rotation, &current->rotation, hd_frame_fract, &rotation);
+    QuatMatrixf(&rotation, &hd_camera_rot[view->idx]);
+    float scale = hd_camera_scale();
+    for (uint32 axis = 0; axis < 3; ++axis)
+    {
+        hd_camera_rot[view->idx].m[1][axis] *= scale;
+        hd_camera_pos[view->idx].v[axis] = previous->pos.v[axis] + (current->pos.v[axis] - previous->pos.v[axis]) * hd_frame_fract;
+    }
+    float proj = previous->proj + (current->proj - previous->proj) * hd_frame_fract;
+    return 2 * proj / disp_state.view_height;
+}
+
+sint32 hd_ready(void)
+{
+    if (!hd_proj_ready || !hd_poses[hd_pose_idx].ready || !hd_effects[hd_pose_idx].ready)
+        return 0;
+    for (uint32 view = 0; view < race_cfg.players; ++view)
+        if (!hd_view_samples[view][1].ready || !hd_countdowns[view][1].ready)
+            return 0;
+    return race_cfg.mode == 8 || hd_river_ready;
+}
+
+void hd_capture_frame(void)
+{
+    hd_capture_boats();
+    hd_capture_effects();
+    hd_capture_river();
+}
+
+void hd_seed(void)
+{
+    hd_sync_proj();
+    hd_resize_views();
+    hd_set_frame_fract(1);
+    for (uint32 idx = 0; idx < race_cfg.players; ++idx)
+    {
+        const RACE_VIEW *view = &race_views[idx];
+        hd_focals[idx] = 2.0f * hd_proj(view, 0) / disp_state.view_height;
+        hd_prepare_camera(view, 0);
+        hd_capture_countdown(view);
+        hd_prepare_boats(view, 0);
+        hd_capture_indicator(view, 0);
+        hd_flares[idx][0] = hd_flares[idx][1];
+        hd_sun_fades[idx][0] = hd_sun_fades[idx][1] = hd_sun_fade[idx];
+        hd_hud_init(view, render_frame_hud(render_frame(camera_for_view(view), disp_state.scene_buffer)));
+        hd_hud_update(view);
+    }
+    hd_capture_frame();
+}
+
+void hd_update_player(const RACE_VIEW *view)
+{
+    hd_resize_views();
+    render_update_proj(view);
+    hd_focals[view->idx] = 2.0f * hd_proj(view, 1) / disp_state.view_height;
+    hd_prepare_camera(view, 1);
+    hd_capture_countdown(view);
+    hd_prepare_boats(view, 1);
+    hd_sun_update(view);
+    hd_capture_indicator(view, 1);
+    if (race_cfg.mode == 8)
+        hd_river_update();
+    if (!race_paused)
+    {
+        hd_race_update(view);
+        pickup_update(view, boat_player(view));
+        hd_hud_update(view);
+    }
+}
+
+static void hd_scene(const RACE_VIEW *view, float focal, sint32 update)
+{
+    if (!hd_ready())
+        abort();
+    focal = hd_sample_camera(view, focal);
+    hd_focals[view->idx] = focal;
     hd_horizon(view, focal);
     hd_sun(view, focal, update, 0);
     if (race_cfg.mode == 8)
     {
-        hd_river_update();
         hd_showcase_ground(view, focal);
         hd_showcase_models(view, focal);
     }
@@ -2015,9 +2856,8 @@ void hd_render_player(const RACE_VIEW *view)
     float focal;
     if (!hd_active || view->idx >= race_cfg.players)
         abort();
-    // Keep the OG projection ready without using its quantized result in HD
-    render_update_proj(view);
-    focal = 2.0f * hd_proj(view, 1) / disp_state.view_height;
+    hd_pose_active = 1;
+    focal = 2.0f * hd_proj(view, 0) / disp_state.view_height;
     hd_focals[view->idx] = focal;
     hd_scene(view, focal, 1);
     if (race_cfg.mode == 5)
@@ -2025,14 +2865,13 @@ void hd_render_player(const RACE_VIEW *view)
         hd_draw_sprite(view, 224, 32, 128, 66, 0, 0, getTPage(0, 0, 704, 256), getClut(704, 330), 0x808080);
         hd_draw_sprite(view, 288, 400, 64, 80, 128, 0, getTPage(0, 0, 704, 256), getClut(704, 331), 0x808080);
     }
-    hud_publish(render_frame_hud(render_frame(camera_for_view(view), disp_state.scene_buffer)));
     if (race_paused)
         hd_hud_render(view);
     else
     {
         hd_race_results(view);
-        pickup_update(view, boat_player(view));
     }
+    hd_pose_active = 0;
 }
 
 sint32 hd_end_frame(void)
@@ -2050,15 +2889,16 @@ sint32 hd_begin_scene(void)
 {
     if (!hd_begin_frame())
         return 0;
+    hd_pose_active = 1;
     for (uint32 idx = 0; idx < race_cfg.players; ++idx)
     {
         const RACE_VIEW *player = &race_views[idx];
         float focal = 2.0f * hd_proj(player, 0) / disp_state.view_height;
         hd_focals[idx] = focal;
         hd_scene(player, focal, 0);
-        hud_publish(render_frame_hud(render_frame(camera_for_view(player), disp_state.scene_buffer)));
         hd_hud_background(player);
     }
+    hd_pose_active = 0;
     return 1;
 }
 
@@ -2101,7 +2941,7 @@ void hd_draw_circle(uint32 step)
         abort();
 }
 
-void hd_render_pause(const RACE_VIEW *view, sint32 sel, const HUD *hud, PAD *input)
+void hd_render_pause(const RACE_VIEW *view, const HUD *hud)
 {
     static const uint8 order[6] = {0, 1, 2, 2, 1, 3};
     sint32 width, height;
@@ -2135,7 +2975,7 @@ void hd_render_pause(const RACE_VIEW *view, sint32 sel, const HUD *hud, PAD *inp
         abort();
     disp_state.view_width = area->w;
     disp_state.view_height = area->h;
-    hd_menu_pause_render(view, sel, hud, input);
+    hd_menu_pause_render(view, hud);
     disp_state.view_width = saved_width;
     disp_state.view_height = saved_height;
     hd_end_frame();
@@ -2143,12 +2983,15 @@ void hd_render_pause(const RACE_VIEW *view, sint32 sel, const HUD *hud, PAD *inp
 
 void hd_reset(void)
 {
+    hd_clear_samples();
+    hd_frame_fract = 1;
     hd_proj_ready = 0;
     for (uint32 idx = 0; idx < 2; ++idx)
     {
         hd_camera_motion[idx].ready = 0;
         hd_water[idx].count = 0;
         hd_sun_fade[idx] = 255;
+        hd_sun_fades[idx][0] = hd_sun_fades[idx][1] = 255;
         hd_sun_ready[idx] = 0;
     }
     vid_cancel();
@@ -2165,6 +3008,10 @@ void hd_free(void)
     HD_MATERIAL *entry;
     HD_MESH *mesh;
     hd_reset();
+    free(hd_river_samples[0]);
+    free(hd_river_samples[1]);
+    hd_river_samples[0] = hd_river_samples[1] = NULL;
+    hd_river_capacity = 0;
     for (uint32 idx = 0; idx < 2; ++idx)
     {
         free(hd_water[idx].draws);

@@ -441,7 +441,7 @@ static sint32 menu_pause_render(sint32 sel, const HUD *hud, PAD *input)
     return result;
 }
 
-void hd_menu_pause_render(const RACE_VIEW *view, sint32 sel, const HUD *hud, PAD *input)
+void hd_menu_pause_update(sint32 sel, const HUD *hud, PAD *input)
 {
     if (race_cfg.players == 1)
         menu_pause_prepare(sel, hud, input);
@@ -451,9 +451,13 @@ void hd_menu_pause_render(const RACE_VIEW *view, sint32 sel, const HUD *hud, PAD
         menu_pause_update_recs(hud_state.prims);
         menu_pause_update_prims(sel);
     }
-    for (sint32 idx = 0; idx < hud_state.menu_count; ++idx)
+}
+
+void hd_menu_pause_render(const RACE_VIEW *view, const HUD *hud)
+{
+    for (sint32 idx = 0; idx < hud->menu_count; ++idx)
     {
-        const HUD_PRIM *prim = &hud_state.prims[hud_state.hud_count + idx];
+        const HUD_PRIM *prim = &hud->prims[hud->hud_count + idx];
         const SPRT *sprite = &prim->spr;
         if (prim->state == 1)
             hd_draw_sprite(view, sprite->p[0].xy.x, sprite->p[0].xy.y, sprite->w, sprite->h, sprite->p[0].uv.u, sprite->p[0].uv.v, prim->mode.code[0] & 0x1ff, sprite->p[0].attr, sprite->rgbc.rgbc);
@@ -532,6 +536,7 @@ sint32 menu_pause_run(const RACE_VIEW *context)
     uint8 exit_requested = 0;
     uint8 mode_eight = 0;
     sint32 forced = 0;
+    sint32 hd_pause = xport_hd;
 
     FUNCTION_MARKER(0x80011540, "MAIN.EXE");
     if (race_cfg.mode == 5)
@@ -559,6 +564,8 @@ sint32 menu_pause_run(const RACE_VIEW *context)
     menu_input = input_for_context(context);
     race_paused = 1;
     confirm = MENU_CONFIRM_CLOSED;
+    if (hd_pause && !hd_ready())
+        hd_seed();
     disp_state.scene_buffer = 1 - buffer_idx;
     pause_capture = 0;
     if (!xport_hd)
@@ -732,6 +739,7 @@ sint32 menu_pause_run(const RACE_VIEW *context)
             if (race_cfg.players == 2)
                 voice_restore_reverb(sound_for_context(&race_views[1]));
             race_paused = 0;
+            game_sync_frame();
             menu_pause_release_capture();
             return 0;
         }
@@ -740,12 +748,15 @@ sint32 menu_pause_run(const RACE_VIEW *context)
         VSync(0);
         if (xport_hd)
         {
-            RENDER_SAMPLE state = render_save_sample();
+            if (!hd_pause)
+                hd_seed();
+            hd_pause = 1;
             HUD *hud = render_frame_hud(render_frame(camera_for_view(context), disp_state.scene_buffer));
-            hd_render_pause(context, menu, hud, menu_input);
-            render_restore_sample(&state);
+            hd_menu_pause_update(menu, hud, menu_input);
+            hd_render_pause(context, hud);
             continue;
         }
+        hd_pause = 0;
         gpu_set_raster(1);
         if (!pause_capture)
         {

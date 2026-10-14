@@ -5,8 +5,10 @@
 #include "disp.h"
 #include "utils.h"
 #include "menu.h"
+#include "menu_select.h"
 #include "render.h"
 #include "hd.h"
+#include "name.h"
 #include "xport_trace.h"
 #include <stdlib.h>
 #include <string.h>
@@ -885,39 +887,122 @@ sint32 spr_copy_anim_rec_bytes(const UI_RECORD *src, UI_RECORD *dst)
     return src->unknown_52[1];
 }
 
-sint32 spr_update_anims(void)
+static void spr_step_anim(UI_RECORD *rec, SPRITE_RENDER *spr)
 {
-    UI_RECORD *recs = spr_recs;
-    uint32 idx;
-
-    FUNCTION_MARKER(0x80047BA4, "MAIN.EXE");
-    for (idx = 0; idx < 180; ++idx)
+    sint32 delta_x, delta_y;
+    delta_x = rec->inset_x;
+    delta_y = rec->inset_y;
+    if (delta_x != 0)
     {
-        UI_RECORD *rec = recs + idx;
-        SPRITE_RENDER *spr;
-        sint32 delta_x;
-        sint32 delta_y;
+        uint16 pos = rec->x;
+        uint32 spr_pos;
 
-        if (rec->active == 0)
-            continue;
-        sint16 spr_idx = rec->val;
-        SPRITE_RENDER *spr_base = rec->data;
-
-        spr = spr_render_at(spr_base, spr_idx);
+        pos = pos + delta_x;
         delta_x = rec->inset_x;
+        rec->x = pos;
+        spr_pos = spr->width - delta_x;
+        spr->width = spr_pos;
+        delta_x = rec->inset_x;
+        spr_pos -= delta_x;
+        spr->width = spr_pos;
+    }
+    if (delta_y != 0)
+    {
+        uint16 pos = rec->y;
+        uint32 spr_pos;
+
+        pos = pos + delta_y;
         delta_y = rec->inset_y;
+        rec->y = pos;
+        spr_pos = spr->height - delta_y;
+        spr->height = spr_pos;
+        delta_y = rec->inset_y;
+        spr_pos -= delta_y;
+        spr->height = spr_pos;
+    }
+    if (rec->command == 1)
+    {
+        if (rec->returning != 0)
+        {
+            sint16 val = rec->delta_x;
+
+            if (val != 0)
+                rec->delta_x = val - rec->step_x;
+            val = rec->delta_y;
+            if (val != 0)
+                rec->delta_y = val - rec->step_y;
+            val = rec->delta_x;
+            if (val == 0 && rec->delta_y == 0)
+            {
+                rec->returning = 0;
+                rec->command = 0;
+            }
+        }
+        else
+        {
+            sint16 step = rec->step_x;
+
+            if (step >= 0)
+            {
+                sint16 val = rec->delta_x;
+                sint16 target = rec->target0;
+
+                if (val != target)
+                    rec->delta_x = val + step;
+            }
+            step = rec->step_y;
+            if (step >= 0)
+            {
+                sint16 val = rec->delta_y;
+                sint16 target = rec->target1;
+
+                if (val != target)
+                    rec->delta_y = val + step;
+            }
+            if (rec->delta_x == rec->target0 && rec->delta_y == rec->target1)
+                rec->returning = 1;
+        }
+    }
+    if (rec->transition_active == 1)
+    {
+        rec->transition_x += rec->transition_step_x;
+        rec->transition_y += rec->transition_step_y;
+        --rec->transition_ticks;
+        rec->y = (rec->transition_y >> 16) + rec->transition_base_y;
+        rec->transition0 += rec->transition_step0;
+        rec->transition1 += rec->transition_step1;
+        rec->delta_y = (rec->transition1 >> 16) + rec->transition_base1;
+        rec->x = (rec->transition_x >> 16) + rec->transition_base_x;
+        rec->delta_x = (rec->transition0 >> 16) + rec->transition_base0;
+        if (rec->transition_ticks == 0)
+        {
+            rec->transition_active = 0;
+            rec->transition0 = 0;
+            rec->transition1 = 0;
+            rec->transition_step0 = 0;
+            rec->transition_step1 = 0;
+            rec->x = rec->transition_target_x;
+            rec->y = rec->transition_target_y;
+            rec->delta_x = rec->transition_target0;
+            rec->delta_y = rec->transition_target1;
+        }
+    }
+    if (rec->command != 0)
+    {
+        delta_x = rec->delta_x;
+        delta_y = rec->delta_y;
         if (delta_x != 0)
         {
             uint16 pos = rec->x;
             uint32 spr_pos;
 
-            pos = pos + delta_x;
-            delta_x = rec->inset_x;
+            pos = pos - delta_x;
+            delta_x = rec->delta_x;
             rec->x = pos;
-            spr_pos = spr->width - delta_x;
+            spr_pos = spr->width + delta_x;
             spr->width = spr_pos;
-            delta_x = rec->inset_x;
-            spr_pos -= delta_x;
+            delta_x = rec->delta_x;
+            spr_pos += delta_x;
             spr->width = spr_pos;
         }
         if (delta_y != 0)
@@ -925,120 +1010,31 @@ sint32 spr_update_anims(void)
             uint16 pos = rec->y;
             uint32 spr_pos;
 
-            pos = pos + delta_y;
-            delta_y = rec->inset_y;
-            rec->y = pos;
-            spr_pos = spr->height - delta_y;
-            spr->height = spr_pos;
-            delta_y = rec->inset_y;
-            spr_pos -= delta_y;
-            spr->height = spr_pos;
-        }
-        if (rec->command == 1)
-        {
-            if (rec->returning != 0)
-            {
-                sint16 val = rec->delta_x;
-
-                if (val != 0)
-                    rec->delta_x = val - rec->step_x;
-                val = rec->delta_y;
-                if (val != 0)
-                    rec->delta_y = val - rec->step_y;
-                val = rec->delta_x;
-                if (val == 0 && rec->delta_y == 0)
-                {
-                    rec->returning = 0;
-                    rec->command = 0;
-                }
-            }
-            else
-            {
-                sint16 step = rec->step_x;
-
-                if (step >= 0)
-                {
-                    sint16 val = rec->delta_x;
-                    sint16 target = rec->target0;
-
-                    if (val != target)
-                        rec->delta_x = val + step;
-                }
-                step = rec->step_y;
-                if (step >= 0)
-                {
-                    sint16 val = rec->delta_y;
-                    sint16 target = rec->target1;
-
-                    if (val != target)
-                        rec->delta_y = val + step;
-                }
-                if (rec->delta_x == rec->target0 && rec->delta_y == rec->target1)
-                    rec->returning = 1;
-            }
-        }
-        if (rec->transition_active == 1)
-        {
-            rec->transition_x += rec->transition_step_x;
-            rec->transition_y += rec->transition_step_y;
-            --rec->transition_ticks;
-            rec->y = (rec->transition_y >> 16) + rec->transition_base_y;
-            rec->transition0 += rec->transition_step0;
-            rec->transition1 += rec->transition_step1;
-            rec->delta_y = (rec->transition1 >> 16) + rec->transition_base1;
-            rec->x = (rec->transition_x >> 16) + rec->transition_base_x;
-            rec->delta_x = (rec->transition0 >> 16) + rec->transition_base0;
-            if (rec->transition_ticks == 0)
-            {
-                rec->transition_active = 0;
-                rec->transition0 = 0;
-                rec->transition1 = 0;
-                rec->transition_step0 = 0;
-                rec->transition_step1 = 0;
-                rec->x = rec->transition_target_x;
-                rec->y = rec->transition_target_y;
-                rec->delta_x = rec->transition_target0;
-                rec->delta_y = rec->transition_target1;
-            }
-        }
-        if (rec->command != 0)
-        {
-            delta_x = rec->delta_x;
+            pos = pos - delta_y;
             delta_y = rec->delta_y;
-            if (delta_x != 0)
-            {
-                uint16 pos = rec->x;
-                uint32 spr_pos;
-
-                pos = pos - delta_x;
-                delta_x = rec->delta_x;
-                rec->x = pos;
-                spr_pos = spr->width + delta_x;
-                spr->width = spr_pos;
-                delta_x = rec->delta_x;
-                spr_pos += delta_x;
-                spr->width = spr_pos;
-            }
-            if (delta_y != 0)
-            {
-                uint16 pos = rec->y;
-                uint32 spr_pos;
-
-                pos = pos - delta_y;
-                delta_y = rec->delta_y;
-                rec->y = pos;
-                spr_pos = spr->height + delta_y;
-                spr->height = spr_pos;
-                delta_y = rec->delta_y;
-                spr_pos += delta_y;
-                spr->height = spr_pos;
-            }
+            rec->y = pos;
+            spr_pos = spr->height + delta_y;
+            spr->height = spr_pos;
+            delta_y = rec->delta_y;
+            spr_pos += delta_y;
+            spr->height = spr_pos;
         }
-        uint16 next_delta_x = rec->delta_x;
-        uint16 next_delta_y = rec->delta_y;
+    }
+    uint16 next_delta_x = rec->delta_x;
+    uint16 next_delta_y = rec->delta_y;
 
-        rec->inset_x = next_delta_x;
-        rec->inset_y = next_delta_y;
+    rec->inset_x = next_delta_x;
+    rec->inset_y = next_delta_y;
+}
+
+sint32 spr_update_anims(void)
+{
+    FUNCTION_MARKER(0x80047BA4, "MAIN.EXE");
+    for (uint32 idx = 0; idx < 180; ++idx)
+    {
+        UI_RECORD *rec = &spr_recs[idx];
+        if (rec->active)
+            spr_step_anim(rec, spr_render_at(rec->data, rec->val));
     }
     return 0;
 }
@@ -1223,22 +1219,46 @@ static void hd_spr_rect(float x, float y, float width, float height, float u, fl
     hd_draw_ui_quad(pos, uv, tpage, clut, color, 256, textured, semi);
 }
 
-static void hd_spr_anim(SPRITE_RENDER *state, float x, float y)
+static void hd_spr_sample(const UI_RECORD *rec, float fract, float rect[4])
 {
+    const SPRITE_RENDER *spr = spr_render_at(rec->data, rec->val);
+    UI_RECORD next = *rec;
+    SPRITE_RENDER next_spr = *spr;
+    if (rec->active && fract > 0)
+        spr_step_anim(&next, &next_spr);
+    rect[0] = rec->x + (next.x - rec->x) * fract;
+    rect[1] = rec->y + (next.y - rec->y) * fract;
+    rect[2] = (float)spr->width + ((float)next_spr.width - spr->width) * fract;
+    rect[3] = (float)spr->height + ((float)next_spr.height - spr->height) * fract;
+}
+
+static void hd_spr_anim(const UI_RECORD *rec, float fract)
+{
+    const SPRITE_RENDER *state = spr_render_at(rec->data, rec->val);
+    float rect[4];
+    hd_spr_sample(rec, fract, rect);
+    const UI_RECORD *parent = hd_menu_spr_parent(rec);
+    if (parent)
+    {
+        float parent_rect[4];
+        hd_spr_sample(parent, fract, parent_rect);
+        rect[0] += parent_rect[0] - parent->x;
+        rect[1] += parent_rect[1] - parent->y;
+    }
+    else if (menu_state.scr == 10 && rec >= spr_recs + 18 && rec <= spr_recs + 20)
+        rect[0] += hd_menu_course_step() * fract;
     if (state->kind == 1)
     {
         const SPRT *spr = &state->simple;
-        hd_spr_rect(x, y, spr->w, spr->h, spr->p[0].uv.u, spr->p[0].uv.v, state->draw_mode.code[0] & 0x1ff, spr->p[0].attr, spr->rgbc.rgbc, 1, (spr->rgbc.code & 2) != 0);
+        hd_spr_rect(rect[0], rect[1], spr->w, spr->h, spr->p[0].uv.u, spr->p[0].uv.v, state->draw_mode.code[0] & 0x1ff, spr->p[0].attr, spr->rgbc.rgbc, 1, (spr->rgbc.code & 2) != 0);
     }
     else if (state->kind == 0)
     {
         float pos[4][2], uv[4][2];
-        if (state->orientation != state->last_orientation)
-            spr_config_uv_orientation(state);
         for (uint32 idx = 0; idx < 4; ++idx)
         {
-            pos[idx][0] = x + (idx & 2 ? state->width : 0);
-            pos[idx][1] = y + (idx & 1 ? state->height : 0);
+            pos[idx][0] = rect[0] + (idx & 2 ? rect[2] : 0);
+            pos[idx][1] = rect[1] + (idx & 1 ? rect[3] : 0);
             uv[idx][0] = state->quad.p[idx].uv.u;
             uv[idx][1] = state->quad.p[idx].uv.v;
         }
@@ -1246,20 +1266,8 @@ static void hd_spr_anim(SPRITE_RENDER *state, float x, float y)
     }
 }
 
-static void hd_spr_grps(void)
+void hd_spr_prepare_menu(void)
 {
-    for (sint32 idx = menu_asset_counts.labels - 1; idx >= 0; --idx)
-    {
-        UI_RECORD *rec = &spr_recs[idx + 160];
-        if (rec->active)
-        {
-            if (rec->val >= menu_asset_counts.labels)
-                return;
-            hd_spr_anim(spr_render_at(rec->data, rec->val), rec->x, rec->y);
-        }
-    }
-    if (menu_notice.val == 1)
-        hd_spr_rect(132, 54, 248, 120, 0, 0, 0, 0, 0, 0, 0);
     for (sint32 idx = 0; idx < (sint16)menu_notice.lines; ++idx)
     {
         sint16 x = (idx << 7) + 128, y = 50;
@@ -1281,28 +1289,69 @@ static void hd_spr_grps(void)
         render_dispatch_rec(spr_render_at(spr_notice_packets, idx), idx, 2);
         spr_init_anim_rec(idx + 170, spr_notice_packets, 1, idx, x, y, 1);
     }
-    for (sint32 idx = (sint16)menu_notice.lines - 1; idx >= 0; --idx)
+    for (sint32 idx = 0; idx < 180; ++idx)
     {
-        UI_RECORD *rec = &spr_recs[idx + 170];
-        hd_spr_anim(spr_render_at(rec->data, rec->val), rec->x, rec->y);
+        const UI_RECORD *rec = &spr_recs[idx];
+        if (idx < 160)
+        {
+            if (!(rec->type && rec->flags))
+                continue;
+        }
+        else if (idx < 170)
+        {
+            if (idx >= 160 + menu_asset_counts.labels || !rec->active || rec->val >= menu_asset_counts.labels)
+                continue;
+        }
+        else if (idx >= 170 + menu_notice.lines)
+            continue;
+        SPRITE_RENDER *spr = spr_render_at(rec->data, rec->val);
+        if (spr->orientation != spr->last_orientation)
+            spr_config_uv_orientation(spr);
     }
 }
 
-static void hd_spr_layers(void)
+static void hd_spr_grps(float fract)
+{
+    for (sint32 idx = menu_asset_counts.labels - 1; idx >= 0; --idx)
+    {
+        UI_RECORD *rec = &spr_recs[idx + 160];
+        if (rec->active)
+        {
+            if (rec->val >= menu_asset_counts.labels)
+                return;
+            hd_spr_anim(rec, fract);
+        }
+    }
+    if (menu_notice.val == 1)
+        hd_spr_rect(132, 54, 248, 120, 0, 0, 0, 0, 0, 0, 0);
+    for (sint32 idx = (sint16)menu_notice.lines - 1; idx >= 0; --idx)
+    {
+        UI_RECORD *rec = &spr_recs[idx + 170];
+        hd_spr_anim(rec, fract);
+    }
+}
+
+static void hd_spr_layers(float fract)
 {
     sint32 layers = menu_state.scr == 10 ? 13 : 1;
     for (sint32 layer = layers - 1; layer >= 0; --layer)
         for (sint32 idx = 159; idx >= 0; --idx)
         {
+            if (menu_state.scr == 25 && idx == 57)
+            {
+                hd_name_wheel(fract);
+                idx = 43;
+                continue;
+            }
             const UI_RECORD *rec = &spr_recs[idx];
             if (rec->layer == layer && rec->type && rec->flags)
-                hd_spr_anim(spr_render_at(rec->data, rec->val), rec->x, rec->y);
+                hd_spr_anim(rec, fract);
         }
 }
 
-static void hd_spr_lines(void)
+static void hd_spr_lines(sint32 buffer)
 {
-    const LINE_F2 *lines = disp_line_buffer(disp_state.buffer);
+    const LINE_F2 *lines = disp_line_buffer(buffer);
     if (disp_state.line_count > 200)
         abort();
     for (sint32 idx = (sint32)disp_state.line_count - 1; idx >= 0; --idx)
@@ -1320,12 +1369,10 @@ static void hd_spr_lines(void)
         }
         hd_draw_ui_quad(pos, NULL, 0, 0, line->rgbc.rgbc, 256, 0, 0);
     }
-    disp_state.line_count = 0;
 }
 
-static void hd_spr_pools(void)
+static void hd_spr_pools(sint32 buffer)
 {
-    sint32 buffer = disp_state.buffer;
     if (buffer < 0 || buffer >= 2)
         abort();
     for (sint32 grp = TEXT_FONT_COUNT - 1; grp >= 0; --grp)
@@ -1340,16 +1387,15 @@ static void hd_spr_pools(void)
             const SPRT *spr = &spr_text_packets[grp][buffer][idx];
             hd_spr_rect(glyph->x, glyph->y, glyph->width, glyph->height, glyph->u, glyph->v, spr_text_modes[grp][buffer].code[0] & 0x1ff, spr->p[0].attr, spr->rgbc.rgbc, 1, (spr->rgbc.code & 2) != 0);
         }
-        font->pending_count[buffer] = 0;
     }
 }
 
-void hd_spr_menu(void)
+void hd_spr_menu(float fract, sint32 buffer)
 {
-    hd_spr_grps();
-    hd_spr_layers();
-    hd_spr_lines();
-    hd_spr_pools();
+    hd_spr_grps(fract);
+    hd_spr_layers(fract);
+    hd_spr_lines(buffer);
+    hd_spr_pools(buffer);
 }
 
 sint32 spr_text_init_packets(void)

@@ -10,6 +10,7 @@
 #include "trail.h"
 #include "upgrades.h"
 #include "boat.h"
+#include "hd.h"
 #include "sound.h"
 #include "utils.h"
 #include "route.h"
@@ -385,6 +386,7 @@ static sint32 boat_init(BOAT *boat, sint16 seg_idx, sint16 entry, sint32 driver,
         ai_init_race(boat, seg_idx, cfg_idx);
     result = boat->contacts.points[0].left;
     boat->route.target_lane = result;
+    hd_reset_boat(boat);
     return result;
 }
 

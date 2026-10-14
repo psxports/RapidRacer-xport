@@ -10,6 +10,8 @@
 #include "text.h"
 #include "xport_trace.h"
 #include <stdlib.h>
+#include <math.h>
+#include "hd.h"
 
 NAME_EDITOR name_editor;
 NAME_REELS name_reels;
@@ -87,26 +89,18 @@ uint8 *name_save_byte(uint32 offset)
     return field < 5 ? (uint8 *)&name->text[field] : &name->reserved;
 }
 
-// Native ring helper used by name_update_wheel (MAIN.EXE 0x800581E8)
+// Keep the hidden seam opposite the visible side of the wheel
 static void name_fill_ring(sint32 start)
 {
-    sint32 idx;
-    sint32 val;
-
-    for (idx = 0; idx < 14; ++idx)
+    for (sint32 idx = 0; idx < 15; ++idx)
     {
-        val = (sint16)(start + idx);
-        name_wheel.slots[idx].glyph = val;
+        sint32 val = start + idx - (idx >= 8 ? 15 : 0);
+        if (val < 0)
+            val += 37;
         if (val >= 37)
-            name_wheel.slots[idx].glyph = val - 37;
+            val -= 37;
+        name_wheel.slots[idx].glyph = val;
     }
-    val = (sint16)(start - 1);
-    name_wheel.slots[14].glyph = val;
-    if (val < 0)
-        name_wheel.slots[14].glyph = val + 37;
-    val = (sint16)name_wheel.slots[14].glyph;
-    if (val >= 37)
-        name_wheel.slots[14].glyph = val - 37;
 }
 
 void name_apply_player_name_cheats(void)
@@ -358,6 +352,19 @@ static sint32 name_build_glyphs(void)
     return 52 << 16;
 }
 
+static sint32 name_find_glyph(sint8 val)
+{
+    sint32 idx;
+
+    FUNCTION_MARKER(0x80057EF4, "MAIN.EXE");
+    for (idx = 0; idx < 37; ++idx)
+    {
+        if ((uint8)name_alphabet[idx] == (uint8)val)
+            return idx;
+    }
+    return 37;
+}
+
 sint32 name_reset_wheel(void)
 {
     uint16 cfg = menu_state.scr;
@@ -367,7 +374,10 @@ sint32 name_reset_wheel(void)
     FUNCTION_MARKER(0x80057D28, "MAIN.EXE");
     name_editor.player_slot = 0;
     name_editor.phase = NAME_EDITOR_IDLE;
-    name_editor.glyph = 0;
+    name_editor.sel_char = 0;
+    name_editor.target_char = 0;
+    name_editor.wheel_angle = 0;
+    name_editor.wheel_step = 0;
     menu_pulse.brightness = 0;
     menu_pulse.falling = 0;
     name_editor.pending_glyph = -1;
@@ -385,37 +395,17 @@ sint32 name_reset_wheel(void)
         spr = spr_render_at(rec->data, spr_idx);
         name_wheel.glyphs[idx].height = spr->height;
     }
-    cfg = name_editor.glyph;
     for (idx = 0; idx < 15; ++idx)
-    {
-        sint32 val = (sint16)(cfg + idx - 2);
-
         name_wheel.order[idx] = idx;
-        NAME_WHEEL_SLOT *wheel_slot = name_wheel.slots + idx;
-        wheel_slot->glyph = val;
-        if (val < 0)
-            wheel_slot->glyph = val + 37;
-        val = (sint16)wheel_slot->glyph;
-        if (val >= 37)
-            wheel_slot->glyph = val - 37;
-    }
     for (idx = 0; idx < 37; ++idx)
         spr_recs[idx + 6].type = 0;
     name_refresh_menu_text();
-    return name_update_wheel(&input_pads[0], 0, 0, 0);
-}
-
-static sint32 name_find_glyph(sint8 val)
-{
-    sint32 idx;
-
-    FUNCTION_MARKER(0x80057EF4, "MAIN.EXE");
-    for (idx = 0; idx < 37; ++idx)
-    {
-        if ((uint8)name_alphabet[idx] == (uint8)val)
-            return idx;
-    }
-    return 37;
+    name_editor.glyph = name_find_glyph(text_menu[name_editor.sel_char + 5].text[0]);
+    sint32 start = name_editor.glyph - 2;
+    if (start < 0)
+        start += 37;
+    name_fill_ring(start);
+    return name_update_wheel(&input_pads[0]);
 }
 
 static sint32 name_layout_wheel(sint16 offset_x, sint16 offset_y)
@@ -456,6 +446,76 @@ static sint32 name_layout_wheel(sint16 offset_x, sint16 offset_y)
         slot->y += offset_y;
     }
     return 0;
+}
+
+void hd_name_wheel(float fract)
+{
+    float angle = (sint16)name_editor.wheel_angle;
+    switch (name_editor.phase)
+    {
+        case NAME_EDITOR_STEP_PREV:
+            angle += 6 * fract;
+            break;
+        case NAME_EDITOR_STEP_NEXT:
+            angle -= 6 * fract;
+            break;
+        case NAME_EDITOR_SEEK_PREV:
+            angle += 12 * fract;
+            break;
+        case NAME_EDITOR_SEEK_NEXT:
+            angle -= 12 * fract;
+            break;
+        default:
+            break;
+    }
+
+    struct
+    {
+        float x, y, depth;
+        uint32 slot;
+    } samples[15];
+
+    uint32 count = 0;
+    for (uint32 idx = 0; idx < 15; ++idx)
+    {
+        float phase = (36 * idx + angle - 90) * (4096.0f / 540) * RAD12;
+        float radial = 70 * sinf(phase);
+        float depth = 7 * cosf(phase);
+        if (depth < -2)
+            continue;
+        uint32 dst = count++;
+        float x = (radial + 70) * sinf(508 * RAD12) + 355;
+        float y = (radial + 70) * cosf(508 * RAD12) + 70;
+        while (dst && (samples[dst - 1].depth > depth || (samples[dst - 1].depth == depth && samples[dst - 1].y > y)))
+        {
+            samples[dst] = samples[dst - 1];
+            --dst;
+        }
+        samples[dst].x = x;
+        samples[dst].y = y;
+        samples[dst].depth = depth;
+        samples[dst].slot = idx;
+    }
+    for (uint32 idx = 0; idx < count; ++idx)
+    {
+        uint32 glyph = name_wheel.slots[samples[idx].slot].glyph;
+        const NAME_WHEEL_METRIC *metric = &name_wheel.glyphs[glyph];
+        const SPRITE_RENDER *spr = &spr_glyphs[glyph];
+        float depth = samples[idx].depth;
+        float x = samples[idx].x - (metric->width >> 1) - depth;
+        float y = samples[idx].y - depth;
+        float width = metric->width + 2 * depth;
+        float height = metric->height + 2 * depth;
+        float pos[4][2], uv[4][2];
+        for (uint32 corner = 0; corner < 4; ++corner)
+        {
+            pos[corner][0] = x + (corner & 2 ? width : 0);
+            pos[corner][1] = y + (corner & 1 ? height : 0);
+            uv[corner][0] = spr->quad.p[corner].uv.u;
+            uv[corner][1] = spr->quad.p[corner].uv.v;
+        }
+        hd_draw_ui_quad(pos, uv, spr->quad.p[1].attr, spr->quad.p[0].attr, spr->quad.rgbc.rgbc, 256, 1, (spr->quad.rgbc.code & 2) != 0);
+    }
 }
 
 static sint32 name_scroll_char(void)
@@ -562,7 +622,7 @@ static sint32 name_draw_entry(void)
     return result;
 }
 
-sint32 name_update_wheel(PAD *input, uint32 unused2, uint32 unused3, uint32 unused4)
+sint32 name_update_wheel(PAD *input)
 {
     sint32 state;
     sint32 idx;
@@ -582,21 +642,9 @@ sint32 name_update_wheel(PAD *input, uint32 unused2, uint32 unused3, uint32 unus
     if (state == NAME_EDITOR_STEP_PREV || state == NAME_EDITOR_STEP_NEXT)
     {
         sint32 angle = (sint16)name_editor.wheel_angle;
-        sint16 old_step = name_editor.wheel_step;
-        sint32 step = old_step + 6;
+        sint32 step = name_editor.wheel_step + 6;
 
-        if (state == NAME_EDITOR_STEP_PREV)
-        {
-            angle -= old_step;
-            name_editor.prev_angle = angle;
-            angle += step;
-        }
-        else
-        {
-            angle += old_step;
-            name_editor.prev_angle = angle;
-            angle -= step;
-        }
+        angle += state == NAME_EDITOR_STEP_PREV ? 6 : -6;
         if (angle < 0)
             angle += 540;
         if (angle >= 540)
@@ -604,30 +652,18 @@ sint32 name_update_wheel(PAD *input, uint32 unused2, uint32 unused3, uint32 unus
         name_editor.wheel_step = step;
         name_editor.wheel_angle = angle;
         if (step >= 36)
-            name_editor.phase = state == NAME_EDITOR_STEP_PREV ? NAME_EDITOR_COMMIT_STEP : NAME_EDITOR_COMMIT_STEP;
+            name_editor.phase = NAME_EDITOR_COMMIT_STEP;
     }
     else if (state == NAME_EDITOR_SEEK_PREV || state == NAME_EDITOR_SEEK_NEXT)
     {
         sint32 angle = (sint16)name_editor.wheel_angle;
-        sint16 old_step = name_editor.wheel_step;
-        sint32 step = old_step + 12;
+        sint32 step = name_editor.wheel_step + 12;
 
-        if (state == NAME_EDITOR_SEEK_PREV)
-        {
-            angle -= old_step;
-            name_editor.prev_angle = angle;
-            angle += step;
-            if (angle >= 540)
-                angle -= 540;
-        }
-        else
-        {
-            angle += old_step;
-            name_editor.prev_angle = angle;
-            angle -= step;
-            if (angle < 0)
-                angle += 540;
-        }
+        angle += state == NAME_EDITOR_SEEK_PREV ? 12 : -12;
+        if (angle < 0)
+            angle += 540;
+        if (angle >= 540)
+            angle -= 540;
         name_editor.wheel_step = step;
         name_editor.wheel_angle = angle;
         if (step >= 36)

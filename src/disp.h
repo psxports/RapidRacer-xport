@@ -46,6 +46,7 @@ sint32 disp_clear_region(sint16 x, sint16 y);
 sint32 disp_move_page_rect(sint32 src_page, sint32 dst_page);
 sint32 disp_clear_quadrants(void);
 DRAWENV *disp_swap_envs(void);
+DRAWENV *disp_swap_after_vsync(void);
 void disp_set_line_color(sint8 r, sint8 g, sint8 b);
 
 sint32 disp_queue_line_seg(sint16 x0, sint16 y0, sint16 x1, sint16 y1);

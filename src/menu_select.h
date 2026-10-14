@@ -2,6 +2,8 @@
 #define MENU_SELECT_H
 #include "psx.h"
 #include "input.h"
+#include "sprite.h"
+#include "text.h"
 
 typedef enum
 {
@@ -42,6 +44,9 @@ typedef struct
 } MENU_COURSE_SELECT;
 
 extern MENU_COURSE_SELECT menu_course_select;
+
+float hd_menu_course_step(void);
+const UI_RECORD *hd_menu_spr_parent(const UI_RECORD *rec);
 
 sint32 menu_select_advance_boat(sint16 action, PAD *input);
 sint32 menu_select_advance(void);

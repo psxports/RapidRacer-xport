@@ -39,10 +39,16 @@ typedef struct
     const RACE_VIEW *view1;
     const RACE_CFG *cfg;
     sint32 warmup;
+    uint64 clock_idx;
+    uint32 clock_reset;
+    sint32 hd;
 } RACE_LOOP;
 
 // Timing from MAIN.EXE 800B3D88/800B69DC
 GAME_TIMING game_timing = {50, 0};
+
+uint64 game_frame_index;
+float game_frame_fract;
 
 const RACE_VIEW race_views[2] = {{0}, {1}};
 
@@ -50,6 +56,7 @@ RACE_CFG race_cfg = {1, {0, 1}, 3, 1, 1, 0};
 uint32 race_paused;
 uint32 race_start_phase;
 static sint32 game_hd_frame;
+static uint32 game_clock_reset;
 
 GAME_SELECTION game_selection;
 
@@ -236,15 +243,30 @@ static sint32 game_init_defaults(void)
     return name_reels.code;
 }
 
+void game_sample_frame(void)
+{
+    uint64 scaled = xport_timer_get() * FIELD_RATE;
+    game_frame_index = scaled / 1000000;
+    game_frame_fract = (uint32)(scaled % 1000000) / 1000000.0f;
+}
+
+void game_sync_frame(void)
+{
+    ++game_clock_reset;
+}
+
 static void race_begin_loop(RACE_LOOP *state, const RACE_VIEW *view0, const RACE_VIEW *view1, const RACE_CFG *cfg, sint32 warmup)
 {
     state->view0 = view0;
     state->view1 = view1;
     state->cfg = cfg;
     state->warmup = warmup;
+    state->clock_idx = 0;
+    state->clock_reset = game_clock_reset;
+    state->hd = 0;
 }
 
-static sint32 race_loop_before_frame(RACE_LOOP *state)
+static sint32 race_loop_before_frame(RACE_LOOP *state, sint32 hd)
 {
     sint32 buffer;
     sint32 dispatch_argument;
@@ -259,7 +281,9 @@ static sint32 race_loop_before_frame(RACE_LOOP *state)
     // Host quit boundary for original loop at 0x800104AC
     if (xport_isquit())
         return -1;
-    game_timing.frame_rate = cfg->players == 2 && !xport_hd ? game_timing.base_rate / 2 : game_timing.base_rate;
+    game_hd_frame = hd;
+    gpu_set_raster(!hd);
+    game_timing.frame_rate = cfg->players == 2 && !hd ? game_timing.base_rate / 2 : game_timing.base_rate;
     if (game_timing.base_rate == game_timing.frame_rate)
     {
         game_timing.ticks = game_timing.ticks + 2u;
@@ -267,12 +291,12 @@ static sint32 race_loop_before_frame(RACE_LOOP *state)
             game_timing.ticks = 0;
         buffer = 1 - disp_state.scene_buffer;
         disp_state.scene_buffer = buffer;
-        if (buffer != 0 || xport_hd)
+        if (buffer != 0 || hd)
         {
             input_update_states();
             if (state->warmup == 0 && (menu_pause_run(view0) != 0 || (cfg->players == 2 && menu_pause_run(view1) != 0)))
                 return 0;
-            if (xport_hd)
+            if (hd)
             {
                 hd_boat_input(boat_player(view0), view0);
                 if (cfg->players == 2)
@@ -302,6 +326,14 @@ static sint32 race_loop_before_frame(RACE_LOOP *state)
         race_update_racers(0);
         dispatch_argument = 1;
     }
+    if (state->clock_reset != game_clock_reset)
+    {
+        game_sample_frame();
+        state->clock_idx = game_frame_index;
+        state->clock_reset = game_clock_reset;
+        if (hd)
+            hd_sync_proj();
+    }
     race_update_racers(dispatch_argument);
 #if 0
     perf_mark_frame();
@@ -319,15 +351,11 @@ static sint32 race_loop_before_frame(RACE_LOOP *state)
 #if 0
     perf_mark_frame();
 #endif
-    if (xport_hd && !game_hd_frame)
-        hd_sync_proj();
-    game_hd_frame = xport_hd != 0;
-    if (game_hd_frame)
-        game_hd_frame = hd_begin_frame();
-    gpu_set_raster(!game_hd_frame);
     camera_update(camera_for_view(view0), boat_player(view0));
     if (game_hd_frame)
-        hd_render_player(view0);
+    {
+        hd_update_player(view0);
+    }
     else
         track_render_player(view0, buffer);
 #if 0
@@ -341,12 +369,16 @@ static sint32 race_loop_before_frame(RACE_LOOP *state)
     {
         camera_update(camera_for_view(view1), boat_player(view1));
         if (game_hd_frame)
-            hd_render_player(view1);
+        {
+            hd_update_player(view1);
+        }
         else
             track_render_player(view1, buffer);
         if (race_cfg.mode != 5)
             boat_update_audio(view1);
     }
+    if (hd)
+        hd_capture_frame();
 #if 0
     perf_mark_frame();
 #endif
@@ -355,7 +387,6 @@ static sint32 race_loop_before_frame(RACE_LOOP *state)
 
 static void race_loop_after_frame(RACE_LOOP *state)
 {
-    game_render_frame();
     if (state->warmup != 0 && --state->warmup == 0)
         SetDispMask(1);
 }
@@ -364,6 +395,8 @@ static sint32 race_finish_loop(RACE_LOOP *state)
 {
     sint32 hd = xport_hd != 0;
     sint32 result;
+    if (hd && !hd_ready())
+        hd_seed();
     game_hd_frame = 0;
     disp_state.scene_buffer = 1 - disp_state.scene_buffer;
     if (!hd && race_paused == 0 && race_cfg.players == 1)
@@ -380,8 +413,56 @@ static sint32 race_loop_resume(const RACE_VIEW *view0, const RACE_VIEW *view1, c
     sint32 step;
 
     race_begin_loop(&state, view0, view1, cfg, warmup);
-    while ((step = race_loop_before_frame(&state)) > 0)
-        race_loop_after_frame(&state);
+    step = 1;
+    while (step > 0)
+    {
+        if (xport_isquit())
+        {
+            step = -1;
+            break;
+        }
+        sint32 hd = xport_hd != 0;
+        if (hd != state.hd)
+        {
+            state.hd = hd;
+            if (hd)
+            {
+                hd_seed();
+                game_sample_frame();
+                state.clock_idx = game_frame_index;
+            }
+        }
+        if (!hd)
+        {
+            step = race_loop_before_frame(&state, 0);
+            if (step > 0)
+            {
+                game_render_frame();
+                race_loop_after_frame(&state);
+            }
+            continue;
+        }
+        // Poll native VBlank without coupling the render cadence to FIELD_RATE
+        VSync(-1);
+        game_sample_frame();
+        while (step > 0 && state.clock_idx < game_frame_index && xport_hd)
+        {
+            ++state.clock_idx;
+            step = race_loop_before_frame(&state, 1);
+            if (step > 0)
+                race_loop_after_frame(&state);
+            VSync(-1);
+            game_sample_frame();
+        }
+        if (step <= 0)
+            break;
+        if (!xport_hd)
+            continue;
+        hd_set_frame_fract(game_frame_fract);
+        game_hd_frame = 1;
+        game_render_frame();
+        xport_render_wait();
+    }
     return step < 0 ? 0 : race_finish_loop(&state);
 }
 
@@ -632,10 +713,10 @@ sint32 game_frame_og(void)
 
 static sint32 game_frame_hd(void)
 {
-    if (game_timing.base_rate == game_timing.frame_rate)
-        cb_sync_video_field();
-    else
-        VSync(2);
+    if (!hd_begin_frame())
+        return 0;
+    for (uint32 idx = 0; idx < race_cfg.players; ++idx)
+        hd_render_player(&race_views[idx]);
     return hd_end_frame();
 }
 

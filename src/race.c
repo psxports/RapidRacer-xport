@@ -979,11 +979,15 @@ sint32 race_render_results(const RACE_VIEW *state, uint32 *ot)
     return race_finish_results();
 }
 
-void hd_race_results(const RACE_VIEW *view)
+void hd_race_update(const RACE_VIEW *view)
 {
     race_update_player(view, 0);
-    hd_hud_render(view);
     race_finish_results();
+}
+
+void hd_race_results(const RACE_VIEW *view)
+{
+    hd_hud_render(view);
 }
 
 void race_handle_2p(void)

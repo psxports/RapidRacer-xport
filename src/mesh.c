@@ -543,7 +543,7 @@ static sint32 hd_route_seg_is_in_window(const RACE_VIEW *view, sint32 offset)
     return distance <= width;
 }
 
-void hd_mesh_prepare_racers(const RACE_VIEW *view, MESH_RACERS *dst, sint32 (*is_visible)(const RACE_VIEW *, const BOAT *), float (*get_depth)(const RACE_VIEW *, const BOAT *))
+void hd_mesh_prepare_racers(const RACE_VIEW *view, MESH_RACERS *dst, sint32 update, sint32 (*is_visible)(const RACE_VIEW *, const BOAT *), float (*get_depth)(const RACE_VIEW *, const BOAT *))
 {
     BOAT **candidates = dst->boats;
     uint16 *buckets = dst->buckets;
@@ -556,15 +556,18 @@ void hd_mesh_prepare_racers(const RACE_VIEW *view, MESH_RACERS *dst, sint32 (*is
     dst->carried = NULL;
     if (!mesh_render_state.enabled)
         return;
-    if (boat_player(view)->contacts.points[0].height <= 0)
+    if (update)
     {
-        mesh_render_state.rand_bit = 0;
-        mesh_render_state.rand_pair = 0;
-    }
-    else
-    {
-        mesh_render_state.rand_bit = random_next() & 1;
-        mesh_render_state.rand_pair = random_next() & 3;
+        if (boat_player(view)->contacts.points[0].height <= 0)
+        {
+            mesh_render_state.rand_bit = 0;
+            mesh_render_state.rand_pair = 0;
+        }
+        else
+        {
+            mesh_render_state.rand_bit = random_next() & 1;
+            mesh_render_state.rand_pair = random_next() & 3;
+        }
     }
     for (idx = 0; idx < boat_racer_count; ++idx)
     {
@@ -594,7 +597,7 @@ void hd_mesh_prepare_racers(const RACE_VIEW *view, MESH_RACERS *dst, sint32 (*is
         }
         if (visible == 0)
         {
-            if (race_cfg.players == 1)
+            if (update && race_cfg.players == 1)
                 racer->trail.phase = 0;
             continue;
         }
@@ -661,7 +664,7 @@ void hd_mesh_prepare_racers(const RACE_VIEW *view, MESH_RACERS *dst, sint32 (*is
         visible_limit = 2;
     if (race_cfg.players == 2)
         visible_limit = 8;
-    for (idx = 0; idx < count; ++idx)
+    for (idx = 0; update && idx < count; ++idx)
     {
         BOAT *racer = candidates[idx];
 

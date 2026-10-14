@@ -78,7 +78,7 @@ typedef struct
 } MESH_RACERS;
 
 void mesh_prepare_racers(const struct RACE_VIEW *view, MESH_RACERS *dst, sint32 (*visible)(const struct RACE_VIEW *, const struct BOAT *));
-void hd_mesh_prepare_racers(const struct RACE_VIEW *view, MESH_RACERS *dst, sint32 (*visible)(const struct RACE_VIEW *, const struct BOAT *), float (*depth)(const struct RACE_VIEW *, const struct BOAT *));
+void hd_mesh_prepare_racers(const struct RACE_VIEW *view, MESH_RACERS *dst, sint32 update, sint32 (*visible)(const struct RACE_VIEW *, const struct BOAT *), float (*depth)(const struct RACE_VIEW *, const struct BOAT *));
 sint32 mesh_prop_offset(const struct BOAT *boat);
 sint32 mesh_prepare_props(struct BOAT *boat, MATRIX dst[2]);
 

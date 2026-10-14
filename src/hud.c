@@ -322,7 +322,7 @@ static sint32 hud_update_results(const RACE_VIEW *state)
         hud_update_pickup_pals(state);
         descs = hud_state.descs;
         result = time_copy_chars7((char *)race_time.text, descs[0].text);
-        hud_text.time[4] = 0;
+        descs[0].text[4] = 0;
         return result;
     }
 
@@ -364,7 +364,7 @@ static sint32 hud_update_results(const RACE_VIEW *state)
     descs[9].visible = alternate;
     descs[0].visible = alternate ? (sint32)(result_state.bonus_timer >> 3 & 1) : 1;
     time_copy_chars7((char *)time_rec->text, descs[0].text);
-    hud_text.time[4] = 0;
+    descs[0].text[4] = 0;
 
     pos = alternate;
     if (!alternate)
@@ -428,7 +428,7 @@ static sint32 hud_update_results(const RACE_VIEW *state)
     leader_count = boat_leader_count;
     trailer_count = boat_trailer_count;
     desc->visible = language_is_six;
-    hud_desc_bank(HUD_LAYOUT_SINGLE, 0)[12].visible = language_is_six;
+    descs[12].visible = language_is_six;
     alternate = src->racer_num;
     total = racer_count + leader_count;
     text = descs[1].text;
@@ -467,26 +467,26 @@ static sint32 hud_update_results(const RACE_VIEW *state)
 
     alternate = race_cfg.mode == 4;
     if (alternate)
-        hud_desc_bank(HUD_LAYOUT_SINGLE, 0)[0].visible = 0;
-    hud_desc_bank(HUD_LAYOUT_SINGLE, 0)[1].visible = 1 - alternate;
-    hud_desc_bank(HUD_LAYOUT_SINGLE, 0)[7].visible = 1 - alternate;
-    hud_desc_bank(HUD_LAYOUT_SINGLE, 0)[13].visible = alternate;
-    hud_desc_bank(HUD_LAYOUT_SINGLE, 0)[12].visible = alternate;
-    hud_desc_bank(HUD_LAYOUT_SINGLE, 0)[15].visible = alternate;
-    hud_desc_bank(HUD_LAYOUT_SINGLE, 0)[14].visible = alternate;
+        descs[0].visible = 0;
+    descs[1].visible = 1 - alternate;
+    descs[7].visible = 1 - alternate;
+    descs[13].visible = alternate;
+    descs[12].visible = alternate;
+    descs[15].visible = alternate;
+    descs[14].visible = alternate;
     if (alternate)
     {
         if ((sint16)pos >= 10)
-            hud_text.lap[2] = 0;
+            descs[2].text[2] = 0;
         else
-            hud_text.lap[1] = 0;
-        hud_desc_bank(HUD_LAYOUT_SINGLE, 0)[8].visible = 0;
-        hud_desc_bank(HUD_LAYOUT_SINGLE, 0)[9].visible = 0;
+            descs[2].text[1] = 0;
+        descs[8].visible = 0;
+        descs[9].visible = 0;
         result = (sint16)pos < 10;
     }
     else
     {
-        hud_text.lap[1] = '/';
+        descs[2].text[1] = '/';
         result = '/';
     }
     return result;
@@ -649,7 +649,7 @@ static sint32 hud_update_race(const RACE_VIEW *state)
     }
     descs[0].visible = flag ? (race_time.ticks >> 4 & 1) : 1u;
     time_copy_chars7((char *)(flag ? race_bonus_time.text : race_time.text), descs[0].text);
-    hud_text.time[4] = 0;
+    descs[0].text[4] = 0;
 
     if (src->delta_timer != 0)
     {
@@ -737,7 +737,7 @@ static sint32 hud_update_trial(const RACE_VIEW *state)
     descs[9].visible = alternate;
     descs[0].visible = alternate ? (race_time.ticks >> 4 & 1) : 1u;
     time_copy_chars7((char *)(alternate ? race_bonus_time.text : race_time.text), descs[0].text);
-    hud_text.time[4] = 0;
+    descs[0].text[4] = 0;
 
     for (idx = 0; idx < 5; ++idx)
         prims[idx + 4].state = idx < src->pickups[2].count;
@@ -886,11 +886,11 @@ sint32 hud_render(const RACE_VIEW *state, uint32 *ot, sint32 result)
     return (sint16)result;
 }
 
-static void hd_hud_sprite(const RACE_VIEW *view, sint32 idx, const HUD_PRIM *prim)
+static void hd_hud_sprite(const RACE_VIEW *view, const HUD *hud, sint32 idx, const HUD_PRIM *prim)
 {
     const SPRT *sprite = &prim->spr;
     float ax = 0.5f, ay = 0;
-    if (idx < hud_state.hud_count)
+    if (idx < hud->hud_count)
     {
         if (idx < 10)
         {
@@ -912,11 +912,49 @@ static void hd_hud_sprite(const RACE_VIEW *view, sint32 idx, const HUD_PRIM *pri
         hd_draw_sprite(view, sprite->p[0].xy.x, sprite->p[0].xy.y, sprite->w, sprite->h, sprite->p[0].uv.u, sprite->p[0].uv.v, prim->mode.code[0] & 0x1ff, sprite->p[0].attr, sprite->rgbc.rgbc);
 }
 
-static void hd_hud_text(const RACE_VIEW *view)
+typedef struct
 {
-    for (sint32 idx = 0; idx < hud_state.desc_count; ++idx)
+    HUD hud;
+    HUD_PRIM prims[38];
+    HUD_DESC descs[21];
+    HUD_TEXT text;
+} HD_HUD;
+
+static HD_HUD hd_huds[2];
+
+void hd_hud_init(const RACE_VIEW *view, const HUD *src)
+{
+    HD_HUD *dst = &hd_huds[view->idx];
+    sint32 count = src->hud_count + src->menu_count;
+    if (count < 0 || count > 38 || src->desc_count < 0 || src->desc_count > 21)
+        abort();
+    dst->hud = *src;
+    dst->hud.prim_count = count;
+    dst->hud.text_count = 0;
+    dst->hud.prims = dst->prims;
+    dst->hud.descs = dst->descs;
+    dst->text = hud_text;
+    memcpy(dst->prims, src->prims, count * sizeof(*dst->prims));
+    for (sint32 idx = 0; idx < src->desc_count; ++idx)
     {
-        const HUD_DESC *desc = &hud_state.descs[idx];
+        const HUD_DESC *desc = &src->descs[idx];
+        HUD_DESC *out = &dst->descs[idx];
+        *out = *desc;
+        uintptr_t offset = (uintptr_t)desc->text - (uintptr_t)&hud_text;
+        if (offset >= sizeof(hud_text))
+            abort();
+        // Records are published by the race, while per-player text belongs to the HUD
+        out->text = desc->text == hud_text.rec || desc->text == hud_text.best ? desc->text : (char *)&dst->text + offset;
+        out->shape = &dst->prims[desc->font->glyph].spr;
+        out->mode = &dst->prims[desc->font->glyph].mode;
+    }
+}
+
+static void hd_hud_text(const RACE_VIEW *view, const HUD *hud)
+{
+    for (sint32 idx = 0; idx < hud->desc_count; ++idx)
+    {
+        const HUD_DESC *desc = &hud->descs[idx];
         float advance = 0, x, ax = 0.5f, ay = 0;
         sint32 centered = race_cfg.players == 2 ? idx == 0 || idx >= 4 : idx == 0 || (idx >= 8 && idx <= 10) || idx >= 16;
         if (desc->visible != 1)
@@ -942,37 +980,45 @@ static void hd_hud_text(const RACE_VIEW *view)
     }
 }
 
-void hd_hud_render(const RACE_VIEW *view)
+void hd_hud_update(const RACE_VIEW *view)
 {
     if (race_cfg.mode == 5)
         return;
+    hud_state = hd_huds[view->idx].hud;
     hud_dispatch_layout(view);
     if (race_paused)
         menu_pause_update_recs(hud_state.prims);
     else
         hud_transition_prims(hud_state.prims);
-    for (sint32 idx = 0; idx < hud_state.hud_count + hud_state.menu_count; ++idx)
+}
+
+void hd_hud_render(const RACE_VIEW *view)
+{
+    if (race_cfg.mode == 5)
+        return;
+    const HUD *hud = &hd_huds[view->idx].hud;
+    for (sint32 idx = 0; idx < hud->hud_count + hud->menu_count; ++idx)
     {
-        const HUD_PRIM *prim = &hud_state.prims[idx];
+        const HUD_PRIM *prim = &hud->prims[idx];
         if (prim->state != 1)
             continue;
-        hd_hud_sprite(view, idx, prim);
+        hd_hud_sprite(view, hud, idx, prim);
     }
     if (race_paused)
         return;
-    hd_hud_text(view);
+    hd_hud_text(view, hud);
 }
 
 void hd_hud_background(const RACE_VIEW *view)
 {
-    hud_dispatch_layout(view);
-    for (sint32 idx = 0; idx < hud_state.hud_count; ++idx)
+    const HUD *hud = &hd_huds[view->idx].hud;
+    for (sint32 idx = 0; idx < hud->hud_count; ++idx)
     {
-        const HUD_PRIM *prim = &hud_state.prims[idx];
+        const HUD_PRIM *prim = &hud->prims[idx];
         if (prim->state)
-            hd_hud_sprite(view, idx, prim);
+            hd_hud_sprite(view, hud, idx, prim);
     }
-    hd_hud_text(view);
+    hd_hud_text(view, hud);
 }
 
 HUD_SPRITE *hud_sprs(HUD_LAYOUT layout)
