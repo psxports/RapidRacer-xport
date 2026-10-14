@@ -217,7 +217,7 @@ static const char hd_fragment[] = "uint wordAt(ivec2 p){uvec4 c=uvec4(round(texe
                                   "vec4 texColor(uint w,int flags){bool stp=(w&32768u)!=0u;"
                                   "if(w==0u||((flags&2)!=0&&stp)||((flags&4)!=0&&!stp))return vec4(0.0);"
                                   "uvec3 c=uvec3(w&31u,(w>>5)&31u,(w>>10)&31u);return vec4(vec3((c<<3)|(c>>2))/255.0,1.0);}\n"
-                                  "void main(){if(uTextured==0){outColor=vColor;return;}"
+                                  "void main(){if(uTextured==0){outColor=vidFog(vColor);return;}"
                                   "ivec4 page=ivec4(uParams[0]);ivec4 rect=ivec4(uParams[1]);"
                                   "vec2 uv=(rect.w&1)!=0?fract(vUV):clamp(vUV,vec2(0.0),vec2(0.999999));"
                                   "vec4 color=texColor(texWord(page,rect,ivec2(floor(uv*float(rect.z)))),rect.w);"
@@ -230,7 +230,7 @@ static const char hd_fragment[] = "uint wordAt(ivec2 p){uvec4 c=uvec4(round(texe
                                   "color=mix(mix(a,b,f.x),mix(c,d,f.x),f.y);"
                                   "if(color.a==0.0)discard;color.rgb/=color.a;}"
                                   "float alpha=(rect.w&8)!=0?0.5:(rect.w&16)!=0?0.25:1.0;"
-                                  "outColor=vec4(color.rgb,alpha)*vColor;}\n";
+                                  "outColor=vidFog(vec4(color.rgb,alpha)*vColor);}\n";
 
 static VID_GEOMETRY *hd_mesh(uint32 count)
 {
@@ -2830,6 +2830,23 @@ static void hd_scene(const RACE_VIEW *view, float focal, sint32 update)
     hd_focals[view->idx] = focal;
     hd_horizon(view, focal);
     hd_sun(view, focal, update, 0);
+    // Fade through the authored fog color before merging into the actual backdrop
+    CVECTOR color = track_horizon->colors[0].rgb;
+    if (race_cfg.mode != 8 && race_cfg.course == 2 && race_cfg.variant != 2)
+    {
+        color.r = 0xD0;
+        color.g = 0xD8;
+        color.b = 0xF8;
+    }
+    if (race_cfg.mode != 8 && race_cfg.course == 1 && race_cfg.variant != 2)
+    {
+        color.r = 0xBC;
+        color.g = 0xD0;
+        color.b = 0xEC;
+    }
+    float horizontal = hd_scale_x(view->idx, focal * disp_state.view_height / disp_state.view_width);
+    const VID_FOG fog = {8192.0f, 20480.0f, 24576.0f, {color.r / 255.0f, color.g / 255.0f, color.b / 255.0f}, {horizontal, focal}};
+    vid_fog(&fog);
     if (race_cfg.mode == 8)
     {
         hd_showcase_ground(view, focal);
@@ -2843,6 +2860,7 @@ static void hd_scene(const RACE_VIEW *view, float focal, sint32 update)
     hd_boats(view, focal);
     hd_course_effects(view, focal);
     hd_submit_world(view->idx);
+    vid_fog(NULL);
     hd_sun(view, focal, update, 1);
     if (race_cfg.mode == 8)
         hd_showcase_backdrop(view);
