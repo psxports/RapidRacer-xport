@@ -1,17 +1,18 @@
-#include "menu_select.h"
-#include "game.h"
-#include "name.h"
-#include "input.h"
-#include "disp.h"
-#include "movie.h"
-#include "track.h"
 #include "upgrades.h"
-#include "race.h"
-#include "utils.h"
+#include "disp.h"
+#include "game.h"
+#include "input.h"
 #include "menu.h"
+#include "menu_select.h"
+#include "movie.h"
+#include "name.h"
 #include "profile.h"
+#include "race.h"
+#include "save.h"
 #include "sprite.h"
 #include "text.h"
+#include "track.h"
+#include "utils.h"
 #include "xport_trace.h"
 #include <stdlib.h>
 
@@ -1167,6 +1168,7 @@ sint32 upgrades_apply_upgrade(void)
         }
         row->offset[column] = state;
     }
+    save_flush();
     return profile_build_vehicle_grid(2, profile_row, 383, 169);
 }
 
@@ -1183,6 +1185,7 @@ sint32 upgrades_apply_unlock(void)
     FUNCTION_MARKER(0x80061D88, "MAIN.EXE");
     row = profile_grid_row(race_selection.boats[0]);
     row->offset[result_state.column] = 2;
+    save_flush();
     spr_recs[31].type = 0;
     return profile_build_vehicle_grid(2, menu_notice.boat, 383, 169);
 }

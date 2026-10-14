@@ -1,44 +1,40 @@
-#include "menu_select.h"
-#include "hud.h"
+#include "menu.h"
+#include "arena.h"
+#include "boat.h"
 #include "camera.h"
-#include "tournament.h"
+#include "cd.h"
+#include "disp.h"
 #include "effects.h"
-#include "psx_gpu.h"
 #include "framebuffer.h"
+#include "game.h"
+#include "hd.h"
+#include "hud.h"
+#include "input.h"
+#include "menu_select.h"
 #include "movie.h"
 #include "name.h"
+#include "object.h"
 #include "pickup.h"
-#include "ranking.h"
-#include "upgrades.h"
-#include "boat.h"
-#include "mc.h"
-#include "game.h"
-#include "cd.h"
 #include "profile.h"
+#include "psx_gpu.h"
 #include "race.h"
-#include "arena.h"
-#include "input.h"
+#include "ranking.h"
+#include "render.h"
+#include "save.h"
 #include "sound.h"
 #include "sprite.h"
-#include "disp.h"
-#include "menu.h"
-#include "timer.h"
-#include "utils.h"
-#include "object.h"
-#include "render.h"
-#include "hd.h"
-#include "track.h"
 #include "text.h"
+#include "timer.h"
+#include "tournament.h"
+#include "track.h"
+#include "upgrades.h"
+#include "utils.h"
 #include "xport_trace.h"
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 // Default CD directory from MAIN.EXE 800B4080
 static const char menu_root_dir[] = "\\";
-
-// Card dialog label positions from MAIN.EXE 80096854/60
-static const uint16 menu_card_label_x[5] = {136, 136, 136, 136, 136};
-static const uint16 menu_overwrite_label_x[5] = {245, 245, 285, 245, 245};
 
 typedef struct
 {
@@ -104,10 +100,10 @@ static const uint16 menu_commands_1[] = {1, 101, 1, 103, 5, 102, 3, 0, 103, 104,
 static const uint16 menu_commands_1_alternate[] = {1, 101, 3, 103, 5, 102, 3, 0, 103, 104, 104, 104, 0, 101, 0, 103, 5, 123, 103, 104, 105, 104};
 
 // Original 80096AA0
-static const uint16 menu_commands_2[] = {1, 101, 1, 103, 5, 102, 24, 1, 103, 104, 0, 101, 0, 103, 1, 101, 2, 103, 5, 102, 34, 0, 103, 104, 0, 101, 1, 103, 5, 122, 103, 104, 105, 4, 120, 1, 3, 103, 104};
+static const uint16 menu_commands_2[] = {1, 101, 1, 103, 5, 102, 34, 0, 103, 104, 0, 101, 0, 103, 5, 122, 103, 104, 105, 4, 120, 1, 3, 103, 104};
 
 // Original 80096AF0
-static const uint16 menu_commands_2_alternate[] = {1, 101, 1, 103, 5, 102, 24, 0, 103, 104, 0, 101, 0, 103, 5, 102, 34, 0, 103, 104, 105, 4, 120, 1, 3, 103, 104};
+static const uint16 menu_commands_2_alternate[] = {5, 102, 34, 0, 103, 104, 105, 4, 120, 1, 3, 103, 104};
 
 // Original 80096BB8
 static const uint16 menu_commands_3[] = {1, 101, 1, 103, 2, 107, 103, 3, 106, 103, 104, 0, 101, 0, 103, 2, 107, 103, 3, 106, 103, 104, 105, 4, 120, 1, 0, 103, 104};
@@ -179,7 +175,6 @@ static const uint16 menu_commands_22[] = {104, 105, 4, 120, 21, 0, 103, 5, 102, 
 static const uint16 menu_commands_23[] = {104, 105, 5, 102, 3, 0, 103, 104};
 
 // Original 80097924
-static const uint16 menu_commands_24[] = {1, 101, 1, 103, 104, 0, 101, 0, 103, 104, 104, 105, 4, 120, 2, 0, 103, 104};
 
 // Original 8009795C
 static const uint16 menu_commands_25[] = {104, 0};
@@ -230,10 +225,8 @@ static const uint16 menu_commands_45[] = {104, 105, 104};
 static const uint16 menu_commands_46[] = {104, 105, 104};
 
 // Original 80097CE0
-static const uint16 menu_commands_52[] = {104, 105, 104};
 
 // Original 80097CFC
-static const uint16 menu_commands_47[] = {104, 105, 104};
 
 // Original 80097D18
 static const uint16 menu_commands_48[] = {104, 105, 5, 100, 10, 103, 104};
@@ -432,15 +425,13 @@ static MENU_DESC menu_descs_1[4] = {
 };
 
 // Descriptors from MAIN.EXE 80096A28
-static MENU_DESC menu_descs_2[3] = {
-    {1, 0, 1, 0, NULL, NULL},
+static MENU_DESC menu_descs_2[2] = {
     {1, 0, 1, 1, NULL, NULL},
     {1, 0, 1, 2, NULL, NULL},
 };
 
 // Descriptors from MAIN.EXE 80096A64
-static MENU_DESC menu_descs_2_alternate[2] = {
-    {1, 0, 1, 0, NULL, NULL},
+static MENU_DESC menu_descs_2_alternate[1] = {
     {1, 0, 1, 1, NULL, NULL},
 };
 
@@ -569,11 +560,6 @@ static MENU_DESC menu_descs_23[1] = {
 };
 
 // Descriptors from MAIN.EXE 800978E8
-static MENU_DESC menu_descs_24[3] = {
-    {1, 0, 1, 0, NULL, NULL},
-    {1, 0, 1, 1, NULL, NULL},
-    {1, 0, 1, 2, NULL, NULL},
-};
 
 // Descriptors from MAIN.EXE 80097948
 static MENU_DESC menu_descs_25[1] = {
@@ -659,14 +645,8 @@ static MENU_DESC menu_descs_46[1] = {
 };
 
 // Descriptors from MAIN.EXE 80097CCC
-static MENU_DESC menu_descs_52[1] = {
-    {1, 0, 1, 0, NULL, NULL},
-};
 
 // Descriptors from MAIN.EXE 80097CE8
-static MENU_DESC menu_descs_47[1] = {
-    {1, 0, 1, 0, NULL, NULL},
-};
 
 // Descriptors from MAIN.EXE 80097D04
 static MENU_DESC menu_descs_48[1] = {
@@ -792,7 +772,7 @@ MENU_ASSET_COUNTS menu_asset_counts;
 MENU_CONFIGURATION menu_cfg[53] = {
     {0, 5, menu_descs_0, menu_commands_0},
     {0, 4, menu_descs_1, menu_commands_1},
-    {0, 3, menu_descs_2, menu_commands_2},
+    {0, 2, menu_descs_2, menu_commands_2},
     {0, 2, menu_descs_3, menu_commands_3},
     {0, 6, menu_descs_4, menu_commands_4},
     {0, 8, menu_descs_5, menu_commands_5},
@@ -814,7 +794,7 @@ MENU_CONFIGURATION menu_cfg[53] = {
     {0, 1, menu_descs_21, menu_commands_21},
     {0, 1, menu_descs_22, menu_commands_22},
     {0, 1, menu_descs_23, menu_commands_23},
-    {0, 3, menu_descs_24, menu_commands_24},
+    {0, 0, NULL, NULL},
     {0, 1, menu_descs_25, menu_commands_25},
     {0, 3, menu_descs_26, menu_commands_26},
     {0, 3, menu_descs_27, menu_commands_27},
@@ -837,12 +817,12 @@ MENU_CONFIGURATION menu_cfg[53] = {
     {0, 1, menu_descs_44, menu_commands_44},
     {0, 1, menu_descs_45, menu_commands_45},
     {0, 1, menu_descs_46, menu_commands_46},
-    {0, 1, menu_descs_47, menu_commands_47},
+    {0, 0, NULL, NULL},
     {0, 1, menu_descs_48, menu_commands_48},
     {0, 1, menu_descs_49, menu_commands_49},
     {0, 1, menu_descs_50, menu_commands_50},
     {0, 1, menu_descs_51, menu_commands_51},
-    {0, 1, menu_descs_52, menu_commands_52},
+    {0, 0, NULL, NULL},
 };
 
 MENU_PULSE menu_pulse;
@@ -1028,7 +1008,6 @@ static void menu_init_runtime(void)
     menu_pad_ticks[1] = 0;
     menu_pad_ticks[0] = 0;
     menu_state.course_cleared = 0;
-    mc_state.notice_scr = 1;
     menu_tex.heading = 0;
     menu_assets.audio_enabled = 0;
     menu_tex.sel = 0xFFFF;
@@ -1043,7 +1022,6 @@ static void menu_init_runtime(void)
     menu_state.prev_scr = 0xFFFF;
     menu_state.series_confirm = 0;
     menu_state.pad_missing = 0;
-    mc_load_icon();
     menu_reset_disp_flags();
 }
 
@@ -1783,156 +1761,6 @@ static sint32 menu_config(void)
     return scr >= 18 ? 21 : 11;
 }
 
-static sint32 menu_refresh_card_status(sint16 mode)
-{
-    sint32 changed = 0;
-    sint16 saved = mc_state.format_pending;
-    sint32 visible;
-
-    FUNCTION_MARKER(0x8004C28C, "MAIN.EXE");
-    menu_update_flag_idx(10, 0);
-    menu_update_flag_idx(11, 0);
-    menu_update_flag_idx(12, 0);
-    menu_update_flag_idx(13, 0);
-    if ((uint16)(mode - 4) >= 2u)
-        mc_state.card_status = mode;
-    mc_state.format_prompt = 0;
-    mc_state.format_pending = 0;
-    switch (mc_state.card_status)
-    {
-        case 1:
-            menu_clear_rec_bytes();
-            menu_update_flag_idx(10, 1);
-            menu_update_flag_idx(mc_state.format_sel != 0 ? 23 : 11, 1);
-            mc_state.format_pending = saved;
-            mc_state.format_prompt = 1;
-            visible = 0;
-            break;
-        case 2:
-            visible = changed;
-            break;
-        case 3:
-            menu_clear_rec_bytes();
-            menu_update_flag_idx(12, 1);
-            menu_update_flag_idx(13, 1);
-            visible = 0;
-            break;
-        default:
-            changed = 1;
-            visible = changed;
-            break;
-    }
-    if (visible == 0)
-    {
-        menu_set_selection(24, 2);
-        mc_state.overwrite_prompt = 0;
-    }
-    else if (menu_state.selection == 2 && mc_state.overwrite_prompt == 0 && mc_state.format_prompt == 0)
-        menu_set_selection(24, 1);
-    return changed;
-}
-
-static uint32 menu_propagate_vis(void)
-{
-    UI_RECORD *menu = spr_recs;
-    TEXT_RECORD *recs = text_menu;
-    uint32 table_idx = menu_state.language;
-    uint8 a = 0, b = 0, c = 1, d = 1, e = 0, f = 0, g = 0, h = 0;
-    uint16 val = menu_card_label_x[table_idx];
-
-    FUNCTION_MARKER(0x8004C41C, "MAIN.EXE");
-    if (mc_state.overwrite_prompt != 0)
-    {
-        c = 0;
-        b = 1;
-        if (mc_state.overwrite_sel != 0)
-        {
-            f = 1;
-            a = 1;
-            d = 0;
-            h = 1;
-        }
-        else
-        {
-            g = 1;
-            e = 1;
-            val = menu_overwrite_label_x[table_idx];
-        }
-    }
-    else if (mc_state.format_prompt != 0)
-    {
-        c = 0;
-        b = 1;
-        if (mc_state.format_sel != 0)
-        {
-            f = 1;
-            a = 1;
-            d = 0;
-        }
-        else
-        {
-            d = 0;
-            g = 1;
-        }
-        if (mc_state.format_pending != 0)
-        {
-            d = 0;
-            b = 0;
-            c = 0;
-            g = 0;
-        }
-    }
-    else if (mc_state.card_status == 3)
-    {
-        c = 0;
-        d = 0;
-    }
-    menu[6].type = b;
-    menu[8].type = a;
-    menu[7].type = d;
-    menu[7].x = val;
-    recs[2].visible = e;
-    recs[3].visible = g;
-    recs[4].visible = g;
-    recs[5].visible = f;
-    recs[6].visible = f;
-    recs[7].visible = c;
-    menu_update_flag_idx(16, h != 0 || e != 0);
-    menu_update_flag_idx(17, e);
-    return menu_update_flag_idx(24, h);
-}
-
-static uint32 menu_init_card(void)
-{
-    TEXT_RECORD *strings = text_menu;
-    UI_RECORD *recs = spr_recs;
-    sint32 idx;
-
-    FUNCTION_MARKER(0x8004C614, "MAIN.EXE");
-    for (idx = 0; idx < 26; ++idx)
-        strings[idx + 8].visible = 0;
-    menu_assets.refresh_enabled = 1;
-    mc_state.phase = MC_IDLE;
-    mc_state.card = 0;
-    mc_state.observed_status = mc_probe_status(0);
-    menu_refresh_card_status(mc_state.observed_status);
-    mc_state.overwrite_prompt = 0;
-    mc_state.format_prompt = 0;
-    mc_state.format_pending = 0;
-    mc_state.overwrite = 0;
-    mc_state.overwrite_sel = 0;
-    mc_state.format_sel = 0;
-    recs[7].type = 0;
-    recs[6].type = 0;
-    strings[2].visible = 0;
-    strings[3].visible = 0;
-    strings[4].visible = 0;
-    strings[5].visible = 0;
-    strings[6].visible = 0;
-    menu_set_selection(24, 1);
-    return menu_propagate_vis();
-}
-
 static sint32 menu_update_language_labels(void)
 {
     sint16 cfg_idx = menu_state.scr;
@@ -2047,35 +1875,36 @@ static void menu_update_ctrl_layout(void)
     sint32 available;
 
     FUNCTION_MARKER(0x80050CE4, "MAIN.EXE");
+    spr_recs[0].type = 0;
     available = menu_has_special_ctrl();
     if ((uint32)available << 16 != 0)
     {
-        if (menu_cfg[2].count == 2)
+        if (menu_cfg[2].count == 1)
         {
             menu_state.sound = 8;
-            spr_deactivate_rec_tree(menu_descs_2 + 2);
+            spr_deactivate_rec_tree(menu_descs_2 + 1);
         }
         spr_recs[2].type = 1;
-        menu_cfg[2].count = 3;
+        menu_cfg[2].count = 2;
         menu_cfg[2].descs = menu_descs_2;
         menu_cfg[2].commands = menu_commands_2;
         return;
     }
-    if (menu_cfg[2].count == 3)
+    if (menu_cfg[2].count == 2)
         menu_state.sound = 8;
     spr_recs[2].type = 0;
     sint16 selection = menu_state.selection;
 
-    menu_cfg[2].count = 2;
+    menu_cfg[2].count = 1;
     menu_cfg[2].descs = menu_descs_2_alternate;
     menu_cfg[2].commands = menu_commands_2_alternate;
-    if (selection == 2)
+    if (selection == 1)
     {
         sint16 desc_idx;
         sint16 rec_idx;
         UI_RECORD *owner;
 
-        spr_deactivate_rec_tree(menu_descs_2 + 2);
+        spr_deactivate_rec_tree(menu_descs_2 + 1);
         menu_cfg[2].selection = 0;
         menu_state.selection = 0;
         spr_activate_rec_tree(descs);
@@ -2422,9 +2251,6 @@ static sint32 menu_dispatch_state(void)
         case 22:
             ranking_init_scr();
             break;
-        case 24:
-            menu_init_card();
-            break;
         case 25:
             name_reset_wheel();
             break;
@@ -2592,6 +2418,22 @@ static sint32 menu_dispatch_state_jump_table(sint32 val)
     sint16 state = menu_state.scr;
 
     FUNCTION_MARKER(0x8004F3FC, "MAIN.EXE");
+    switch (state)
+    {
+        case 0:
+        case 4:
+        case 26:
+        case 27:
+        case 28:
+        case 34:
+        case 35:
+        case 37:
+            menu_save_desc_payloads(state);
+            save_flush();
+            break;
+        default:
+            break;
+    }
     switch (state)
     {
         case 0:
@@ -3102,13 +2944,13 @@ scan_stream:
                 menu_state.phase = 2;
                 if (menu_has_special_ctrl() != 0)
                 {
-                    menu_cfg[2].count = 3;
+                    menu_cfg[2].count = 2;
                     menu_cfg[2].descs = menu_descs_2;
                     menu_cfg[2].commands = menu_commands_2;
                 }
                 else
                 {
-                    menu_cfg[2].count = 2;
+                    menu_cfg[2].count = 1;
                     menu_cfg[2].descs = menu_descs_2_alternate;
                     menu_cfg[2].commands = menu_commands_2_alternate;
                 }
@@ -3139,135 +2981,6 @@ scan_stream:
     selection = menu_state.selection;
     context->selection = selection;
     return selection;
-}
-
-static sint32 menu_update_card(PAD *input)
-{
-    sint16 prev_prompt = mc_state.overwrite_prompt;
-    sint16 prev_format = mc_state.format_prompt;
-    sint32 handled = 0;
-    sint32 phase = mc_state.phase;
-
-    FUNCTION_MARKER(0x8004C740, "MAIN.EXE");
-    if (phase == MC_IDLE || phase == MC_OVERWRITE)
-    {
-        sint32 card_state;
-        sint32 can_format;
-        uint16 buttons = input->cur;
-
-        if (menu_state.frame % 6 == 0)
-            mc_state.observed_status = mc_probe_status(mc_state.card);
-        card_state = mc_state.observed_status;
-        can_format = menu_refresh_card_status(card_state);
-        if (menu_state.input_enabled != 0 && menu_state.frame >= 26)
-        {
-            if (mc_state.overwrite_prompt != 0)
-            {
-                mc_state.countdown = 50;
-                if ((buttons & 0x20u) != 0)
-                {
-                    menu_state.sound = 1;
-                    handled = 1;
-                    if (mc_state.overwrite_sel != 0)
-                    {
-                        mc_state.overwrite_prompt = 0;
-                        mc_state.overwrite_sel = 0;
-                    }
-                    else
-                        mc_state.overwrite_sel = 1;
-                }
-                if ((buttons & 0x80u) != 0 && mc_state.overwrite_sel != 0)
-                {
-                    menu_state.sound = 1;
-                    mc_state.overwrite_prompt = 0;
-                    mc_state.overwrite_sel = 0;
-                    mc_state.overwrite = 1;
-                    mc_state.phase = MC_SAVE;
-                    handled = 1;
-                }
-                if ((buttons & 0x40u) != 0 && mc_state.overwrite_sel == 0)
-                {
-                    menu_state.sound = 1;
-                    mc_state.overwrite_prompt = 0;
-                    handled = 1;
-                }
-                if (handled != 0)
-                    menu_clear_rec_bytes();
-                if (mc_state.overwrite != 0)
-                    menu_update_flag_idx(20, 1);
-            }
-            else if (mc_state.format_prompt != 0)
-            {
-                if ((buttons & 0x20u) != 0)
-                {
-                    menu_state.sound = 1;
-                    mc_state.format_sel = 1 - mc_state.format_sel;
-                }
-                if ((buttons & 0x80u) != 0 && mc_state.format_sel != 0)
-                {
-                    menu_state.sound = 1;
-                    mc_state.countdown = 50;
-                    mc_state.format_pending = 1;
-                    mc_state.format_sel = 0;
-                }
-            }
-            else if ((buttons & 0x40u) != 0 && can_format << 16 != 0)
-            {
-                menu_state.sound = 1;
-                mc_state.countdown = 50;
-                menu_update_flag_idx(0, 1);
-                if (menu_cfg[24].selection == 0)
-                {
-                    mc_state.phase = MC_LOAD;
-                    menu_update_flag_idx(2, 1);
-                }
-                else if (menu_cfg[24].selection == 1)
-                {
-                    mc_state.overwrite = 0;
-                    mc_state.phase = MC_SAVE;
-                    menu_update_flag_idx(14, 1);
-                }
-            }
-        }
-    }
-    if (mc_state.format_pending != 0)
-    {
-        if (mc_state.countdown != 0)
-        {
-            mc_state.countdown--;
-            if (mc_state.countdown != 0)
-            {
-                menu_clear_rec_bytes();
-                menu_update_flag_idx(21, 1);
-            }
-            else
-            {
-                mc_state.format_pending = 0;
-                if (mc_format(mc_state.card) != 0)
-                {
-                    menu_state.frame = 0;
-                    mc_state.observed_status = 0;
-                    mc_state.format_prompt = 0;
-                    mc_state.format_sel = 0;
-                    menu_clear_rec_bytes();
-                }
-            }
-        }
-    }
-    else
-    {
-        mc_save_state_update();
-        mc_load_state_update();
-    }
-    if ((sint16)mc_state.overwrite_prompt != prev_prompt || (sint16)mc_state.format_prompt != prev_format)
-        menu_set_selection(24, 2);
-    return menu_propagate_vis();
-}
-
-static sint32 mc_state_is_3(void)
-{
-    FUNCTION_MARKER(0x8004CC1C, "MAIN.EXE");
-    return mc_probe_status(mc_state.card) == 3;
 }
 
 static sint32 menu_update_custom_champ(void)
@@ -3372,10 +3085,7 @@ static sint32 menu_update_state(PAD *input)
             if ((input->pressed & 0x40u) != 0 || menu_state.state_ticks >= 2500)
             {
                 voice_start_scaled((sint16)sound_banks.main, 1);
-                if (mc_state_is_3() != 0 || mc_poll_state() != 0)
-                    menu_state.phase = mc_state.notice_scr;
-                else
-                    menu_state.phase = 1;
+                menu_state.phase = 1;
             }
             break;
         case 1:
@@ -3469,10 +3179,6 @@ static sint32 menu_update_state(PAD *input)
         case 23:
             profile_confirm_mode(input);
             break;
-        case 24:
-            handled = 1;
-            menu_update_card(input);
-            break;
         case 25:
             name_update_wheel(input);
             break;
@@ -3534,22 +3240,6 @@ static sint32 menu_update_state(PAD *input)
         case 46:
             handled = 1;
             menu_update_stick_range();
-            break;
-        case 47:
-            handled = 1;
-            if ((input->pressed & 0x40u) != 0 || mc_state_is_3() == 0)
-            {
-                menu_state.sound = 1;
-                menu_state.phase = 1;
-            }
-            break;
-        case 52:
-            handled = 1;
-            if ((input->pressed & 0x40u) != 0 || mc_poll_state() == 0)
-            {
-                menu_state.sound = 1;
-                menu_state.phase = 1;
-            }
             break;
         case 80:
             if (menu_state.state_ticks >= 250 || (input->cur & 1u) != 0)
@@ -3827,7 +3517,7 @@ static sint32 menu_init_mode(void)
 
 static void menu_dispatch_frame(uint32 unused1, uint32 unused2, uint32 unused3, uint32 unused4)
 {
-    sint32 state;
+    sint32 state = (sint16)game_selection.mode;
 
     FUNCTION_MARKER(0x80063BC4, "MAIN.EXE");
     menu_notice.val = 0;
@@ -3859,6 +3549,8 @@ static void menu_dispatch_frame(uint32 unused1, uint32 unused2, uint32 unused3, 
         menu_build_player_mode_table();
     }
     menu_select_update_limits();
+    if (game_selection.ready != 0 && race_cfg.mode != 9 && state != 4)
+        save_flush();
 }
 
 static sint32 menu_pop_active_workspace(void)
@@ -3920,16 +3612,8 @@ static sint32 menu_frame_loop(void)
     menu_assets.refresh_enabled = 0;
     if (game_selection.ready == 0)
     {
-        mc_load_begin();
-        game_selection.ready = 0;
-        menu_state.scr = 0;
-        game_selection.event = 0;
-        if (mc_state.load_error == 0)
-        {
-            menu_load_course_tex(3);
-            menu_state.scr = 1;
-            game_selection.event = 1;
-        }
+        menu_state.scr = save_loaded ? 1 : 0;
+        game_selection.event = menu_state.scr;
     }
     sound_start_special_voice(7);
     menu_reset_counts();
@@ -3937,7 +3621,7 @@ static sint32 menu_frame_loop(void)
     menu_load_localized_data();
     menu_init();
     menu_state.from_scr = -1;
-    menu_state.selection = 0;
+    menu_state.selection = menu_state.scr == 0 ? menu_state.language : 0;
     VSync(0);
     DrawSync(0);
     disp_clear_region(0, 0);
@@ -3985,8 +3669,6 @@ static sint32 menu_after_entry(void)
         menu_init_runtime();
         menu_frame_loop();
     }
-    mc_disable_events();
-    mc_close_events();
     arena_pop();
     result = menu_root_dir[0];
     strcpy(cd_dir, menu_root_dir);
@@ -3999,8 +3681,6 @@ static sint32 menu_outer_loop(void)
     arena_push();
     if (game_selection.ready == 0)
         menu_reset_disp();
-    mc_open_events();
-    mc_enable_events();
     menu_init_runtime();
     menu_frame_loop();
     return menu_after_entry();
@@ -4175,29 +3855,6 @@ sint32 menu_clear_notice(void)
     menu_notice.default_lines = 0;
     menu_notice.lines = 0;
     return -1;
-}
-
-uint32 menu_clear_rec_bytes(void)
-{
-    uint32 idx;
-    TEXT_RECORD *result = 0;
-
-    FUNCTION_MARKER(0x8004C250, "MAIN.EXE");
-    for (idx = 0; idx < 26; ++idx)
-    {
-        result = &text_menu[idx];
-        result[8].visible = 0;
-    }
-    return 1;
-}
-
-uint32 menu_update_flag_idx(sint32 idx, sint8 val)
-{
-    TEXT_RECORD *base = text_menu;
-
-    FUNCTION_MARKER(0x8004C724, "MAIN.EXE");
-    base[idx + 8].visible = val;
-    return 1;
 }
 
 sint32 menu_tex_refresh_if_needed(void)

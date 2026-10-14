@@ -1,17 +1,18 @@
-#include "movie.h"
-#include "game.h"
-#include "input.h"
-#include "disp.h"
 #include "name.h"
-#include "utils.h"
+#include "disp.h"
+#include "game.h"
+#include "hd.h"
+#include "input.h"
 #include "menu.h"
+#include "movie.h"
 #include "profile.h"
+#include "save.h"
 #include "sprite.h"
 #include "text.h"
+#include "utils.h"
 #include "xport_trace.h"
-#include <stdlib.h>
 #include <math.h>
-#include "hd.h"
+#include <stdlib.h>
 
 NAME_EDITOR name_editor;
 NAME_REELS name_reels;
@@ -212,10 +213,8 @@ void name_apply_player_name_cheats(void)
         }
         if (name_matches(0, "bxtr") != 0)
         {
-            uint16 flags = game_selection.flags;
             menu_state.sound = 3;
-            if ((flags & 0x20u) != 0)
-                game_selection.flags = flags + 8u;
+            game_selection.flags |= 0x28;
         }
         if (name_matches(0, name_code_hurr) != 0)
         {
@@ -234,6 +233,7 @@ void name_apply_player_name_cheats(void)
             game_selection.flags = flags + 64u;
         }
         profile_reset_grid_flags();
+        save_flush();
         return;
     }
 }
@@ -302,6 +302,7 @@ static void name_commit_chars(void)
 
         name_player_text(selection)[idx] = (char)val;
     }
+    save_flush();
 }
 
 static sint32 name_build_glyphs(void)

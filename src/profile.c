@@ -1,22 +1,23 @@
-#include "menu_select.h"
-#include "render.h"
-#include "game.h"
-#include "boat.h"
-#include "input.h"
-#include "tournament.h"
-#include "disp.h"
-#include "sound.h"
-#include "ranking.h"
-#include "name.h"
 #include "profile.h"
-#include "upgrades.h"
 #include "arena.h"
-#include "utils.h"
+#include "boat.h"
+#include "disp.h"
+#include "game.h"
+#include "input.h"
 #include "menu.h"
+#include "menu_select.h"
+#include "name.h"
 #include "race.h"
+#include "ranking.h"
+#include "render.h"
+#include "save.h"
+#include "sound.h"
 #include "sprite.h"
 #include "text.h"
 #include "timer.h"
+#include "tournament.h"
+#include "upgrades.h"
+#include "utils.h"
 #include "xport_trace.h"
 #include <stdlib.h>
 
@@ -504,7 +505,7 @@ static uint8 *profile_save_opaque_byte(uint32 offset)
     return NULL;
 }
 
-// Native save encoder used by mc_save_encode (MAIN.EXE 0x8004B644)
+// Native field encoder from MAIN.EXE 0x8004B644
 uint8 profile_save_read_byte(uint32 offset)
 {
     uint8 *name = name_save_byte(offset);
@@ -648,7 +649,7 @@ uint8 profile_save_read_byte(uint32 offset)
     return val >> 8 * (field & 1);
 }
 
-// Native save decoder used by mc_save_decode (MAIN.EXE 0x8004B6BC)
+// Native field decoder from MAIN.EXE 0x8004B6BC
 void profile_save_write_byte(uint32 offset, uint8 val)
 {
     uint8 *name = name_save_byte(offset);
@@ -1180,11 +1181,13 @@ sint32 profile_unlock(sint16 idx)
         if (*tail != 0)
             return 0;
         *tail = 1;
+        save_flush();
         return 1;
     }
     if (profile->availability[idx] == 0)
     {
         profile->availability[idx] = 1;
+        save_flush();
         return 1;
     }
     return 0;

@@ -3,8 +3,8 @@
 #include "movie.h"
 
 #include "input.h"
-#include "sprite.h"
 #include "render.h"
+#include "sprite.h"
 
 #include "psx.h"
 
@@ -146,9 +146,6 @@ sint32 menu_startup_tim_disp(void);
 sint32 menu_load_tex(SPRITE_IMAGE *state, const char *prefix);
 
 sint32 menu_clear_notice(void);
-uint32 menu_clear_rec_bytes(void);
-
-uint32 menu_update_flag_idx(sint32 idx, sint8 val);
 
 sint32 menu_tex_refresh_if_needed(void);
 

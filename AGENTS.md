@@ -95,3 +95,5 @@ Resolve `[XPORT_ROOT]` from `xport-project.json` and read `[XPORT_ROOT]/AGENTS.m
 - Before relying on them, record reviewed language decision, dummy scope and any future native adapter contract with evidence links here
 - Audit/replay binding contract is `xport-audit-replay-v1`; `rr_stage_adapter.py`, `rr_full_probe.py` and `rr_hardware_adapter.py` contain Rapid Racer facts and delegate common lifecycle, checkpoint and comparison work to xport
 - DRAM view layouts, address-access invariants and unresolved-family counts are documented in `status/audits/dram-layouts.md` and `status/audits/dram-layout-inventory.json`
+
+- Native autosaves use save.c/.h and shared xport_load/save: version 1 + 5684 data bytes, no checksum; persistent codec spans exclude race/menu transients. Calls commit results, unlocks, upgrades, names and settings without prompts or dirty state; bxtr grants Porsche directly. Card screens 24/47/52 and mc.c/.h are removed while other resource IDs stay stable. Evidence: status/audits/autosave/report.json

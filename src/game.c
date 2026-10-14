@@ -1,37 +1,37 @@
-#include "menu_pause.h"
-#include "hud.h"
-#include "river.h"
-#include "name.h"
+#include "game.h"
 #include "ai.h"
-#include "psx_gpu.h"
+#include "arena.h"
+#include "boat.h"
+#include "callbacks.h"
 #include "camera.h"
+#include "cd.h"
 #include "disp.h"
 #include "effects.h"
+#include "hd.h"
+#include "hud.h"
 #include "input.h"
-#include "mc.h"
-#include "mesh.h"
-#include "object.h"
-#include "pickup.h"
-#include "perf.h"
-#include "profile.h"
-#include "route.h"
-#include "track.h"
-#include "boat.h"
-#include "utils.h"
-#include "upgrades.h"
-#include "cd.h"
-#include "race.h"
-#include "sound.h"
-#include "arena.h"
-#include "callbacks.h"
-#include "movie.h"
 #include "menu.h"
+#include "menu_pause.h"
+#include "mesh.h"
+#include "movie.h"
+#include "name.h"
+#include "object.h"
+#include "perf.h"
+#include "pickup.h"
+#include "profile.h"
+#include "psx_gpu.h"
+#include "race.h"
+#include "render.h"
+#include "river.h"
+#include "route.h"
+#include "save.h"
+#include "sound.h"
+#include "track.h"
+#include "upgrades.h"
+#include "utils.h"
+#include "xport_trace.h"
 #include <stdio.h>
 #include <stdlib.h>
-#include "render.h"
-#include "game.h"
-#include "hd.h"
-#include "xport_trace.h"
 
 typedef struct
 {
@@ -632,6 +632,7 @@ void game_start(void)
     cb_init_vblank_timer();
     cb_init_pool();
     game_init_defaults();
+    save_load();
     xport_set_cleanup(hd_free);
     hd_init();
     sound_init_audio();

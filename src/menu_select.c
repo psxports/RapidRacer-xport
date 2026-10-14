@@ -1,19 +1,20 @@
 #include "menu_select.h"
-#include "game.h"
-#include "menu.h"
-#include "race.h"
 #include "boat.h"
+#include "game.h"
+#include "input.h"
+#include "menu.h"
+#include "name.h"
+#include "profile.h"
+#include "race.h"
+#include "ranking.h"
 #include "render.h"
+#include "save.h"
+#include "sound.h"
 #include "sprite.h"
 #include "text.h"
-#include "profile.h"
-#include "ranking.h"
-#include "upgrades.h"
-#include "tournament.h"
-#include "name.h"
-#include "sound.h"
-#include "input.h"
 #include "timer.h"
+#include "tournament.h"
+#include "upgrades.h"
 #include "utils.h"
 #include "xport_trace.h"
 #include <stdlib.h>
@@ -1741,6 +1742,7 @@ static sint32 menu_select_reset_recs(void)
             profile_at(profile_idx)->availability[0] = 1;
             profile_at(profile_idx)->availability[1] = 1;
             profile_at(profile_idx)->availability[2] = 1;
+            save_flush();
         }
         result = profile_idx + 1 < 3;
     }
@@ -2337,6 +2339,7 @@ void menu_select_complete(void)
     profile_data->course = column + 1;
     series->completed++;
     menu_course_select.course = profile_data->course;
+    save_flush();
     if (profile_data->course == 6)
     {
         menu_select_apply_action(10);
@@ -2455,6 +2458,8 @@ sint32 menu_select_commit(void)
         rec[0].x = 332;
         rec[0].y = 145;
     }
+    if (initial_state != 4)
+        save_flush();
     if (state != 6 && (uint8)game_selection.players == 2)
     {
         name_copy_player_name_bytes(0, hud_text.names[0]);
