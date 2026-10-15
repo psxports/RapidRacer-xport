@@ -97,3 +97,9 @@ Resolve `[XPORT_ROOT]` from `xport-project.json` and read `[XPORT_ROOT]/AGENTS.m
 - DRAM view layouts, address-access invariants and unresolved-family counts are documented in `status/audits/dram-layouts.md` and `status/audits/dram-layout-inventory.json`
 
 - Native autosaves use save.c/.h and shared xport_load/save: version 1 + 5684 data bytes, no checksum; persistent codec spans exclude race/menu transients. Calls commit results, unlocks, upgrades, names and settings without prompts or dirty state; bxtr grants Porsche directly. Card screens 24/47/52 and mc.c/.h are removed while other resource IDs stay stable. Evidence: status/audits/autosave/report.json
+
+- HD vertex transforms/projection, flat/Gouraud lighting, ground UVs, radial fog and wireframe expansion run in the game-owned GPU vertex shader through VID. Immutable boat/shore meshes persist during a race; CPU pose interpolation, procedural geometry, coarse visibility and physics retain their owners. API, actual GL/WebGL shader checks and Debug builds: `status/audits/gpu-vertices/report.json`
+
+- HD batching uses compact integer source vertices and flat texture metadata, explicit VID passes, immutable directional water meshes with GPU wave/UV animation, and a shared bank/environment mesh selected by per-view indices. Water needs one draw or two across the ring seam; shaders and common dynamic capacities persist across races. Native/WebGL2 shader pixels, circular topology and ownership checks: `status/audits/hd-batching/report.json`
+
+- OG cadence regression fixed in shared native VSync/frame skipping: elapsed fields satisfy the next blocking wait and initial skip deadline includes its first requested span. The controlled 20 ms workload no longer alternates raster/skip; HD render-only query cadence is unchanged. Evidence: `status/audits/og-cadence/report.json`
