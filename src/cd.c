@@ -141,7 +141,7 @@ static sint32 cd_host_file_size(const char *path, uint32 *size)
     *size = 0;
     if (!xport_cd_file_size_native(path, "DATA", &host_size) || host_size > UINT32_MAX)
         return 0;
-    *size = host_size;
+    *size = (uint32)host_size;
     return 1;
 }
 
@@ -153,7 +153,7 @@ static sint32 cd_read_host_file(const char *path, void *dst, uint32 capacity, ui
     *size = 0;
     if (!xport_cd_file_read_native(path, "DATA", dst, capacity, &host_size) || host_size > UINT32_MAX)
         return 0;
-    *size = host_size;
+    *size = (uint32)host_size;
     return 1;
 }
 
