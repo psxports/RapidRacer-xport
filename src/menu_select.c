@@ -72,7 +72,12 @@ const UI_RECORD *hd_menu_spr_parent(const UI_RECORD *rec)
 
 // Original MAIN.EXE course maps at 80098D60/6C/8C/98/A4
 static const MENU_SELECT_COURSE_UI select_course_ui[6] = {
-    {0, 23, 4, 85, 107}, {1, 24, 5, 125, 83}, {2, 25, 6, 171, 71}, {3, 26, 7, 205, 65}, {4, 27, 8, 252, 60}, {5, 28, 9, 322, 56},
+    {0, 23, 4, 85, 107},
+    {1, 24, 5, 125, 83},
+    {2, 25, 6, 171, 71},
+    {3, 26, 7, 205, 65},
+    {4, 27, 8, 252, 60},
+    {5, 28, 9, 322, 56},
 };
 
 // Original MAIN.EXE course text map at 80098D3C
@@ -2462,8 +2467,8 @@ sint32 menu_select_commit(void)
         save_flush();
     if (state != 6 && (uint8)game_selection.players == 2)
     {
-        name_copy_player_name_bytes(0, hud_text.names[0]);
-        return name_copy_player_name_bytes(1, hud_text.names[1]);
+        name_copy_player_name_bytes(0, hud_names[0]);
+        return name_copy_player_name_bytes(1, hud_names[1]);
     }
     return 2;
 }

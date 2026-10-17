@@ -14,7 +14,6 @@ enum
 };
 
 static uint8 save_data[SAVE_HEADER_BYTES + SAVE_DATA_BYTES];
-sint32 save_loaded;
 
 // Keep persistent fields at their existing codec offsets
 static sint32 save_persistent(uint32 offset)
@@ -47,7 +46,6 @@ void save_load(void)
     sound_mix.music = sound_options.music;
     sound_mix.effects = sound_options.effects;
     name_update_cheats();
-    save_loaded = 1;
 }
 
 void save_flush(void)

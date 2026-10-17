@@ -4,28 +4,9 @@
 #include "input.h"
 struct RACE_VIEW;
 
-typedef struct
-{
-    char time[8];
-    char lap[8];
-    char rank[8];
-    char laps[4][12];
-    char best_lap[12];
-    char rec_label[8];
-    char best_label[8];
-    char rec[12];
-    char best[12];
-    char markers[3][4];
-    char trial_time[8];
-    char names[2][16];
-    char time_label[8];
-    char extended[12];
-    char wrong_way[12];
-    char test[8];
-    char delta[12];
-} HUD_TEXT;
-
-extern HUD_TEXT hud_text;
+extern char *const hud_rec;
+extern char *const hud_best;
+extern char *const hud_names[2];
 
 typedef struct HUD_FONT HUD_FONT;
 
@@ -41,7 +22,7 @@ typedef struct
     sint16 font_id, x, y, align;
     uint8 visible;
     uint16 clut;
-    char *text;
+    char text[16];
     const HUD_FONT *font;
     SPRT *shape;
     DR_MODE *mode;

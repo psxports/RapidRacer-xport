@@ -16,7 +16,12 @@
 
 // Course target parts from MAIN.EXE 800996A0
 static const uint16 tournament_course_times[6][2] = {
-    {1, 30}, {1, 40}, {1, 40}, {2, 20}, {1, 40}, {2, 20},
+    {1, 30},
+    {1, 40},
+    {1, 40},
+    {2, 20},
+    {1, 40},
+    {2, 20},
 };
 
 // Round adjustments from MAIN.EXE 800996D0
@@ -228,7 +233,7 @@ static sint32 tournament_enter_race(void)
     {
         game_selection.menu_variant = 0;
         game_selection.event = 30;
-        name_copy_player_name_bytes(tournament_champ.player, hud_text.names[0]);
+        name_copy_player_name_bytes(tournament_champ.player, hud_names[0]);
         profile_data->course = tournament_champ.course;
         profile_data->level = menu_course_select.level;
     }
@@ -236,7 +241,7 @@ static sint32 tournament_enter_race(void)
     {
         sint16 val;
         game_selection.event = 30;
-        name_copy_player_name_bytes(tournament_grid.player, hud_text.names[0]);
+        name_copy_player_name_bytes(tournament_grid.player, hud_names[0]);
         val = tournament_target_time(menu_course_select.course, tournament_grid.round);
         tournament_times[0].parts[0] = val / 60;
         tournament_times[0].parts[1] = val % 60;
@@ -245,8 +250,8 @@ static sint32 tournament_enter_race(void)
     {
         sint32 row = tournament_matches.match;
         game_selection.event = 31;
-        name_copy_player_name_bytes(tournament_matches.winners[row], hud_text.names[0]);
-        name_copy_player_name_bytes(tournament_matches.opponents[row], hud_text.names[1]);
+        name_copy_player_name_bytes(tournament_matches.winners[row], hud_names[0]);
+        name_copy_player_name_bytes(tournament_matches.opponents[row], hud_names[1]);
     }
     game_selection.event_arg = 0;
     menu_state.exit_wait = 5;

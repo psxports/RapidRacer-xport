@@ -333,11 +333,11 @@ sint32 time_init_disp(void)
     if (val != 0)
     {
         timer_format_text(text, val);
-        time_copy_chars7((char *)text, hud_text.rec);
+        time_copy_chars7((char *)text, hud_rec);
     }
     else
     {
-        memcpy(hud_text.rec, "n/a", 4u);
+        memcpy(hud_rec, "n/a", 4u);
         result_state.rec_ticks = -1;
     }
     if (game_selection.mode == 3)

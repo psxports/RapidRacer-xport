@@ -535,7 +535,7 @@ static sint32 race_advance_page(const RACE_VIEW *state, struct BOAT_MENU *menu, 
         if (cur == 1)
         {
             replay_finish(&boat_players[0]->contacts.points[0], 1);
-            time_copy_chars7((char *)entry->text, hud_text.best);
+            time_copy_chars7((char *)entry->text, hud_best);
             prev = result_state.rec_ticks;
             result_state.best_lap_ticks = val;
         }
@@ -550,14 +550,14 @@ static sint32 race_advance_page(const RACE_VIEW *state, struct BOAT_MENU *menu, 
             }
             replay_finish(&boat_players[0]->contacts.points[0], 1);
             result_state.best_lap_ticks = val;
-            time_copy_chars7((char *)entry->text, hud_text.best);
+            time_copy_chars7((char *)entry->text, hud_best);
             prev = result_state.rec_ticks;
         }
         if (val < prev)
         {
             sound_queue_command(sound_for_context(state), 1, 0);
             result_state.rec_ticks = val;
-            time_copy_chars7((char *)entry->text, hud_text.rec);
+            time_copy_chars7((char *)entry->text, hud_rec);
             time_copy(&menu->best_time, entry);
         }
         menu->checkpoint_idx = 1;

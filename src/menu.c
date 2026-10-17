@@ -3612,7 +3612,8 @@ static sint32 menu_frame_loop(void)
     menu_assets.refresh_enabled = 0;
     if (game_selection.ready == 0)
     {
-        menu_state.scr = save_loaded ? 1 : 0;
+        menu_state.scr = 0;
+        menu_cfg[0].selection = menu_state.language;
         game_selection.event = menu_state.scr;
     }
     sound_start_special_voice(7);
