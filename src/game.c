@@ -249,9 +249,12 @@ static sint32 game_init_defaults(void)
 
 void game_sample_frame(void)
 {
-    uint64 scaled = xport_timer_get() * FIELD_RATE;
-    game_frame_index = scaled / 1000000;
-    game_frame_fract = (uint32)(scaled % 1000000) / 1000000.0f;
+    uint64 elapsed = xport_timer_get();
+    uint64 seconds = elapsed / 1000000 * FIELD_RATE_NUMERATOR;
+    uint64 fraction = seconds % FIELD_RATE_DENOMINATOR * 1000000 + elapsed % 1000000 * FIELD_RATE_NUMERATOR;
+    uint64 period = (uint64)1000000 * FIELD_RATE_DENOMINATOR;
+    game_frame_index = seconds / FIELD_RATE_DENOMINATOR + fraction / period;
+    game_frame_fract = (float)(fraction % period) / (float)period;
 }
 
 void game_sync_frame(void)
