@@ -5,6 +5,7 @@
 #include "arena.h"
 #include "timer.h"
 #include "pickup.h"
+#include "race_stats.h"
 #include "utils.h"
 #include "boat.h"
 #include "sound.h"
@@ -162,6 +163,8 @@ static sint32 pickup_apply_command(const RACE_VIEW *state, struct BOAT_MENU *men
     }
     if (command == 3)
     {
+        if (state == &race_views[0] && menu->mode == 4)
+            ++race_stats.turbos_collected;
         if (menu->pickups[1].count != 0)
         {
             --menu->pickups[1].count;
@@ -177,6 +180,8 @@ static sint32 pickup_apply_command(const RACE_VIEW *state, struct BOAT_MENU *men
     }
     if (command == 4)
     {
+        if (state == &race_views[0] && menu->mode == 4)
+            race_stats.bonus_seconds += 3;
         time_format(&race_freeze_time, 300);
         sound_queue_command(sound_for_context(state), 10, 1);
         return sound_queue_command(sound_for_context(state), 30, 2);

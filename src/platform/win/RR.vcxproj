@@ -61,7 +61,7 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets"><Import Project="$(VCTargetsPath)\BuildCustomizations\masm.targets" /></ImportGroup>
 
-  <ItemGroup><ClCompile Include="..\..\banner.c" /><ClInclude Include="..\..\banner.h" /><ClCompile Include="..\..\hud.c" /><ClInclude Include="..\..\hud.h" /><ClCompile Include="..\..\menu_select.c" /><ClInclude Include="..\..\menu_select.h" /><ClCompile Include="..\..\movie.c" /><ClInclude Include="..\..\movie.h" /><ClCompile Include="..\..\race.c" /><ClInclude Include="..\..\race.h" /></ItemGroup>
+  <ItemGroup><ClCompile Include="..\..\banner.c" /><ClInclude Include="..\..\banner.h" /><ClCompile Include="..\..\hud.c" /><ClInclude Include="..\..\hud.h" /><ClCompile Include="..\..\menu_select.c" /><ClInclude Include="..\..\menu_select.h" /><ClCompile Include="..\..\movie.c" /><ClInclude Include="..\..\movie.h" /><ClCompile Include="..\..\race.c" /><ClCompile Include="..\..\race_stats.c" /><ClInclude Include="..\..\race.h" /><ClInclude Include="..\..\race_stats.h" /></ItemGroup>
   <ItemGroup><ClCompile Include="..\..\menu_pause.c" /><ClInclude Include="..\..\menu_pause.h" /></ItemGroup>
   <ItemGroup><ClCompile Include="..\..\editor_vis.c" Condition="'$(Configuration)'=='Debug'" /><ClInclude Include="..\..\editor_vis.h" /><ClInclude Include="..\..\track_vis.h" /></ItemGroup>
 

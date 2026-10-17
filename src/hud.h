@@ -72,6 +72,11 @@ typedef struct
     uint8 state;
 } HUD_SPRITE;
 
+typedef struct
+{
+    uint16 u, v, w, h, tpage;
+} HUD_GLYPH;
+
 extern const HUD_SPRITE *hud_geom;
 
 extern HUD hud_state;
@@ -82,4 +87,7 @@ sint32 hud_init_prims(HUD *hud, HUD_PRIM *prims, DR_MODE modes[2], const HUD_SPR
 HUD_PRIM *hud_publish(const HUD *hud);
 HUD_SPRITE *hud_sprs(HUD_LAYOUT layout);
 sint32 hud_submit_active_recs(HUD_PRIM *prims, uint32 *ot);
+void hud_stats_glyph(uint8 ch, HUD_GLYPH *glyph);
+void hud_stats_render(uint32 *ot);
+void hud_stats_bars(uint32 *ot);
 #endif

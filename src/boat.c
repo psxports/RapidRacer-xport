@@ -10,6 +10,7 @@
 #include "trail.h"
 #include "upgrades.h"
 #include "boat.h"
+#include "race_stats.h"
 #include "hd.h"
 #include "sound.h"
 #include "utils.h"
@@ -677,6 +678,8 @@ static sint32 boat_input_update(BOAT *boat, const RACE_VIEW *context, sint32 hal
         boat->control.steering = 512;
     if (acceleration != 0 && boat->control.mode == 0 && (stage->pickups[3].count != 0 || (game_selection.flags & 0x40) != 0))
     {
+        if (context == &race_views[0] && stage->mode == 4)
+            ++race_stats.turbos_used;
         sound_queue_command(sound_for_context(context), 0, 1);
         if ((random_next() & 3) < 2)
             sound_queue_command(sound_for_context(context), 6, 0);
@@ -1585,14 +1588,14 @@ static sint32 boat_assign_list_identifiers(void)
     {
         BOAT_MENU *entry = boat_player_menu(&race_views[0]);
         uint32 type = entry->mode;
-        if (type == 5 || type == 7)
+        if (type == 5 || type == 7 || type == 8)
             reserved0 = entry->racer_num;
     }
     if (race_cfg.players == 2)
     {
         BOAT_MENU *entry = boat_player_menu(&race_views[1]);
         uint32 type = entry->mode;
-        if (type == 5 || type == 7)
+        if (type == 5 || type == 7 || type == 8)
             reserved1 = entry->racer_num;
     }
     for (idx = 0; idx < boat_leader_count; ++idx)
@@ -1878,6 +1881,34 @@ static sint32 boat_update_steering_force(BOAT *boat)
     return result;
 }
 
+static void boat_finish_autopilot(BOAT *boat)
+{
+    // Common fields of the NTSC post-finish route preset at 8008B44C
+    static const AI_ROUTE_CFG cfg = {100, 1100, 350, -16, 384, 128, 4, 3, 1, 2, 5400};
+    BOAT_ROUTE *route = &boat->route;
+    if (!race_stats.autopilot)
+    {
+        route_init_lookahead(boat, boat->contacts.points[0].seg, route_resources.count);
+        boat->race.mode = 4;
+        route->speed = SquareRoot0(boat->force.x * boat->force.x + boat->force.z * boat->force.z) >> 4;
+        boat->control.force_arm.vx = boat->control.force_arm.vy = 0;
+        boat->control.force_arm.vz = 100;
+        route->settings = &cfg;
+        race_stats.autopilot = 1;
+    }
+    route_advance_target(route, &route_resources);
+    route_init_steps(boat, boat->contacts.points[0].seg);
+    route->speed_adjust = 5000;
+    route_select_dir(boat, &route_resources);
+    boat_update_steering_force(boat);
+    boat->route_target.len = 0;
+    boat->route_target.vector.y = 0;
+    boat->control.thrust *= 8;
+    boat->route_target.vector.x *= 8;
+    boat->route_target.vector.z *= 8;
+    boat_apply_force(boat, &boat->route_target.vector, &boat->control.force_arm, NULL);
+}
+
 static sint32 boat_mark_contacts(BOAT *boat)
 {
     sint32 count = boat->race.mode == 4 ? 2 : 1;
@@ -2042,7 +2073,7 @@ sint32 race_update_racers(sint32 argument)
                 uint32 status0 = boat_player_menu(&race_views[0])->mode;
                 uint32 status1 = boat_player_menu(&race_views[1])->mode;
 
-                if (type == 2 && status0 == 4 || status0 - 5 < 2 || type == 3 && status1 == 4 || status1 - 5 < 2)
+                if (type == 2 && status0 == 4 || status0 - 5 < 2 || status0 == 8 || type == 3 && status1 == 4 || status1 - 5 < 2 || status1 == 8)
                     boat_horizontal_locked = 0;
                 else if (type != 0)
                     boat_horizontal_locked = 1;
@@ -2105,7 +2136,12 @@ sint32 race_update_racers(sint32 argument)
         }
         else
         {
-            if (deferred[idx]->menu.mode == 5)
+            if (boat->menu.mode == 8)
+            {
+                boat_finish_autopilot(boat);
+                continue;
+            }
+            if (boat->menu.mode == 5)
                 boat_steer_edge(boat);
             boat_control_force(boat);
         }
@@ -2137,7 +2173,7 @@ sint32 race_update_racers(sint32 argument)
             uint32 status0 = boat_player_menu(&race_views[0])->mode;
             uint32 status1 = boat_player_menu(&race_views[1])->mode;
 
-            if (type == 2 && status0 == 4 || status0 - 5 < 2 || type == 3 && status1 == 4 || status1 - 5 < 2)
+            if (type == 2 && status0 == 4 || status0 - 5 < 2 || status0 == 8 || type == 3 && status1 == 4 || status1 - 5 < 2 || status1 == 8)
                 boat_horizontal_locked = 0;
             else if (type != 0)
                 boat_horizontal_locked = 1;

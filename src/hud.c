@@ -5,6 +5,7 @@
 #include "game.h"
 #include "menu.h"
 #include "race.h"
+#include "race_stats.h"
 #include "boat.h"
 #include "camera.h"
 #include "track.h"
@@ -798,6 +799,81 @@ static sint32 hud_transition_prims(HUD_PRIM *prims)
         if (cursor->state == 2)
             cursor->state = 1;
     return 0;
+}
+
+void hud_stats_glyph(uint8 ch, HUD_GLYPH *glyph)
+{
+    const HUD_FONT *font = &hud_fonts[2];
+    char text[2] = {(char)ch, 0};
+    sint32 idx = text_find_char_idx(text, font->chars);
+    if ((uint32)idx >= font->count)
+        abort();
+    const HUD_METRIC *metric = &font->metrics[idx];
+    const HUD_SPRITE *src = &hud_sprs(HUD_LAYOUT_SINGLE)[font->glyph];
+    glyph->u = (src->tex_x & 63) * 4 + metric->u;
+    glyph->v = (src->tex_y & 255) + metric->v;
+    glyph->w = metric->w;
+    glyph->h = metric->h;
+    glyph->tpage = getTPage(0, 0, src->tex_x, src->tex_y);
+}
+
+void hud_stats_bars(uint32 *ot)
+{
+    static TILE bars[2][2];
+    sint32 height = (sint32)(race_stats_bar_height(1) * disp_state.view_height / 480);
+    if (!height)
+        return;
+    if (!gpu_register_packet_range(bars, sizeof(bars)))
+        abort();
+    for (uint32 idx = 0; idx < 2; ++idx)
+    {
+        TILE *bar = &bars[disp_state.scene_buffer][idx];
+        setTile(bar);
+        setRGB0(bar, 0, 0, 0);
+        setXY0(bar, 0, idx ? disp_state.view_height - height : 0);
+        setWH(bar, disp_state.view_width, height);
+        AddPrim(ot, bar);
+    }
+}
+
+void hud_stats_render(uint32 *ot)
+{
+    static struct
+    {
+        SPRT glyphs[2][480];
+        DR_MODE mode[2];
+    } packets;
+    sint32 buffer = disp_state.scene_buffer;
+    uint32 count = 0;
+    HUD_GLYPH glyph;
+    if (!gpu_register_packet_range(&packets, sizeof(packets)))
+        abort();
+    for (uint32 row = 0; row < 10; ++row)
+    {
+        sint32 x = (sint32)race_stats_x(row, 1);
+        if (x >= 368)
+            continue;
+        for (const char *text = race_stats.lines[row]; *text; ++text)
+        {
+            hud_stats_glyph((uint8)*text, &glyph);
+            if (count >= 480)
+                abort();
+            SPRT *spr = &packets.glyphs[buffer][count++];
+            setSprt(spr);
+            setRGB0(spr, 128, 128, 128);
+            setXY0(spr, x, race_stats_rows[row].y);
+            setUV0(spr, glyph.u, glyph.v);
+            setWH(spr, glyph.w, glyph.h);
+            spr->p[0].attr = race_stats_rows[row].clut;
+            AddPrim(ot, spr);
+            x += glyph.w - 2;
+        }
+    }
+    if (count)
+    {
+        SetDrawMode(&packets.mode[buffer], 1, 0, glyph.tpage, NULL);
+        AddPrim(ot, &packets.mode[buffer]);
+    }
 }
 
 static void hud_build_text_packets(void)

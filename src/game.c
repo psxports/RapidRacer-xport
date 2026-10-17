@@ -24,6 +24,7 @@
 #include "profile.h"
 #include "psx_gpu.h"
 #include "race.h"
+#include "race_stats.h"
 #include "render.h"
 #include "river.h"
 #include "route.h"
@@ -303,7 +304,7 @@ static sint32 race_loop_before_frame(RACE_LOOP *state, sint32 hd)
 #ifdef _DEBUG
             editor_vis_pad(&input_pads[0]);
 #endif
-            if (state->warmup == 0 && (menu_pause_run(view0) != 0 || (cfg->players == 2 && menu_pause_run(view1) != 0)))
+            if (!race_stats.active && state->warmup == 0 && (menu_pause_run(view0) != 0 || (cfg->players == 2 && menu_pause_run(view1) != 0)))
                 return 0;
             if (hd)
             {
@@ -347,6 +348,7 @@ static sint32 race_loop_before_frame(RACE_LOOP *state, sint32 hd)
             hd_sync_proj();
     }
     race_update_racers(dispatch_argument);
+    race_stats_update();
 #if 0
     perf_mark_frame();
 #endif

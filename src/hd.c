@@ -11,6 +11,7 @@
 #include "route.h"
 #include "hud.h"
 #include "race.h"
+#include "race_stats.h"
 #include "replay.h"
 #include "pickup.h"
 #include "effects.h"
@@ -3782,6 +3783,43 @@ static void hd_scene(const RACE_VIEW *view, float focal, sint32 update)
     hd_countdown(view, focal);
 }
 
+static void hd_race_stats(const RACE_VIEW *view)
+{
+    for (uint32 row = 0; row < 10; ++row)
+    {
+        float x = race_stats_x(row, hd_frame_fract);
+        if (x >= 368)
+            continue;
+        for (const char *text = race_stats.lines[row]; *text; ++text)
+        {
+            HUD_GLYPH glyph;
+            hud_stats_glyph((uint8)*text, &glyph);
+            hd_draw_sprite(view, x, race_stats_rows[row].y, glyph.w, glyph.h,
+                glyph.u, glyph.v, glyph.tpage, race_stats_rows[row].clut, 0x808080);
+            x += glyph.w - 2;
+        }
+    }
+}
+
+static void hd_race_stats_bars(const RACE_VIEW *view)
+{
+    static const uint8 order[6] = {0, 1, 2, 2, 1, 3};
+    float height = race_stats_bar_height(hd_frame_fract) / 240;
+    if (height <= 0)
+        return;
+    VID_VERTEX vertices[12] = {0};
+    for (uint32 idx = 0; idx < 12; ++idx)
+    {
+        uint32 corner = order[idx % 6];
+        float top = idx < 6 ? 1 : -1 + height;
+        vertices[idx].pos[0] = corner & 1 ? 1 : -1;
+        vertices[idx].pos[1] = top - (corner & 2 ? height : 0);
+        vertices[idx].pos[3] = 1;
+        vertices[idx].color[3] = 1;
+    }
+    hd_clip_draw(vertices, 12, hd_material(0, 0, 0, VID_BLEND_NONE, HD_DEPTH_NONE), hd_views[view->idx]);
+}
+
 void hd_render_player(const RACE_VIEW *view)
 {
     float focal;
@@ -3798,10 +3836,13 @@ void hd_render_player(const RACE_VIEW *view)
     }
     if (race_paused)
         hd_hud_render(view);
+    else if (race_stats_hide_hud())
+        hd_race_stats(view);
     else
     {
         hd_race_results(view);
     }
+    hd_race_stats_bars(view);
     hd_flush_ui();
     hd_pose_active = 0;
 }

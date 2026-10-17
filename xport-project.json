@@ -1,6 +1,10 @@
 {
+  "github": {
+    "repository": "psxports/RapidRacer-xport",
+    "branch": "main"
+  },
   "schema": 1,
-  "name": "Rapid Racer (xport)",
+  "name": "Rapid Racer",
   "short_name": "RR",
   "toolset": "C:\\Projects\\xports\\xport\\tools",
   "paths": {

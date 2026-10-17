@@ -1,5 +1,6 @@
 #include "menu_pause.h"
 #include "race.h"
+#include "race_stats.h"
 #include "hud.h"
 #include "horizon.h"
 #include "river.h"
@@ -343,9 +344,11 @@ sint32 track_render_player(const RACE_VIEW *context, sint32 buffer)
         {
             hud_publish(render_frame_hud(frame));
             race_render_results(context, ot_entry);
-            pickup_update_slots(context, ot_entry, boat_player(context));
+            if (!race_stats_hide_hud())
+                pickup_update_slots(context, ot_entry, boat_player(context));
             AddPrim(ot_entry, &ui_modes[0]);
         }
+        hud_stats_bars(ot_entry);
     }
     else if (race_paused != 0)
     {

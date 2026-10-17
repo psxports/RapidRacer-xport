@@ -18,6 +18,7 @@
 #include "text.h"
 #include "profile.h"
 #include "race.h"
+#include "race_stats.h"
 #include "hd.h"
 #include "banner.h"
 #include "tournament.h"
@@ -485,13 +486,20 @@ static sint32 race_finish_race(const RACE_VIEW *state, struct BOAT_MENU *menu, s
         sound_queue_command(sound_for_context(state), 0, 5);
     }
     result_state.finished = 1;
-    menu->mode = 5;
-    camera_for_view(state)->mode = 5;
+    if (race_cfg.players == 1 && game_selection.mode < 2)
+        menu->mode = 8;
+    else
+    {
+        menu->mode = 5;
+        camera_for_view(state)->mode = 5;
+    }
     result_state.bonus_timer = 0;
     race_select_best_time_rec(menu);
     --menu->lap_idx;
     time_format(&race_end_time, 500);
     result_state.pickups = menu->pickups[2].count;
+    if (menu->mode == 8)
+        race_stats_begin();
     return pickup_write_racer_indices(race_selection.ranks);
 }
 
@@ -505,6 +513,8 @@ static sint32 race_advance_page(const RACE_VIEW *state, struct BOAT_MENU *menu, 
 
     FUNCTION_MARKER(0x8003CCEC, "MAIN.EXE");
     cur = menu->lap_idx;
+    if (state == &race_views[0] && cur < 3)
+        race_stats.lap_pos[cur] = menu->rank + boat_leader_count + 1;
     menu->lap_idx = cur + 1u;
     if (game_selection.mode == 2)
     {
@@ -923,6 +933,11 @@ static sint32 race_render_progress(const RACE_VIEW *state, uint32 *ot)
 
     FUNCTION_MARKER(0x80020F7C, "MAIN.EXE");
     result = race_update_player(state, 0);
+    if (race_stats_hide_hud())
+    {
+        hud_stats_render(ot);
+        return 0;
+    }
     return (sint16)hud_render(state, ot, result);
 }
 
@@ -1083,6 +1098,8 @@ sint32 race_init_player(const RACE_VIEW *state, uint32 unused1, sint32 unused2)
     sint32 idx;
 
     FUNCTION_MARKER(0x8003C458, "MAIN.EXE");
+    if (state == &race_views[0])
+        race_stats_reset();
     menu->lap_idx = 0;
     menu->best_lap_idx = 20;
     menu->finish_state = 0;
