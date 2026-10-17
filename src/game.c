@@ -347,6 +347,9 @@ static sint32 race_loop_before_frame(RACE_LOOP *state, sint32 hd)
         if (hd)
             hd_sync_proj();
     }
+    input_update_vibration(view0);
+    if (cfg->players == 2)
+        input_update_vibration(view1);
     race_update_racers(dispatch_argument);
     race_stats_update();
 #if 0
@@ -629,6 +632,7 @@ static void game_main_loop_continue(sint32 menu_already_returned)
         sound_config_reverb_depth(0, 0);
         SpuSetReverb(0);
         sound_reset_recs(sound_for_context(&race_views[0]));
+        input_stop_vibration();
         if (race_cfg.players == 2)
             sound_reset_recs(sound_for_context(&race_views[1]));
         SpuSetKey(SPU_OFF, SPU_ALLCH);

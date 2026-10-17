@@ -13,6 +13,7 @@ typedef struct
     uint16 pressed;
     sint16 type;
     uint8 packet[34];
+    uint8 act_count, act_ready, act_types[2], act_align[6], act[2];
 } PAD;
 
 typedef struct
@@ -36,6 +37,8 @@ extern INPUT_CALIB input_calib;
 extern CONTROLLER_CALIBRATION input_calibrations[2];
 extern PAD input_pads[2];
 void input_init(void);
+void input_update_vibration(const struct RACE_VIEW *context);
+void input_stop_vibration(void);
 
 PAD *input_for_context(const struct RACE_VIEW *context);
 

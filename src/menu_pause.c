@@ -558,6 +558,7 @@ sint32 menu_pause_run(const RACE_VIEW *context)
     input = input_for_context(context);
     if ((input->pressed & 0x0800u) == 0 && forced == 0)
         return 0;
+    input_stop_vibration();
     disp_state.scene_buffer = 1 - disp_state.scene_buffer;
     game_render_frame();
     buffer_idx = disp_state.scene_buffer;
