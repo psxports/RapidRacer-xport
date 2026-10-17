@@ -1,6 +1,6 @@
 PROJECT_ROOT := $(abspath ../../..)
 SHORT_NAME := RR
-FULL_NAME := Rapid Racer (xport)
+FULL_NAME := Rapid Racer
 CONFIG ?= Release
 APP_SOURCES := $(wildcard $(PROJECT_ROOT)/src/*.c)
 APP_DEFINES := -DXPORT_NATIVE_GPU_CD -DWND_TITLE='"$(FULL_NAME)"' -DWND_WIDTH=960 -DWND_HEIGHT=720 -DFIELD_RATE=50

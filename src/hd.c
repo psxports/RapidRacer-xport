@@ -3368,7 +3368,7 @@ static sint32 hd_showcase_model(const RACE_VIEW *view, const MESH_MODEL *model, 
     matrix.t[0] = rec->pos[0];
     matrix.t[1] = track_horizon->ground;
     matrix.t[2] = rec->pos[2];
-    RotMatrixZf((1024 - (rec->angle & 4095)) * RAD12, &matrix);
+    RotMatrixYf((1024 - (rec->angle & 4095)) * RAD12, &matrix);
     hd_cull_point(&center, camera, &matrix, origin, focal);
     float radius = 1040 * focal;
     float radius_x = hd_scale_x(view->idx, radius * disp_state.view_height / disp_state.view_width);
@@ -3741,6 +3741,8 @@ static void hd_scene(const RACE_VIEW *view, float focal, sint32 update)
 #endif
     hd_focals[view->idx] = focal;
     hd_horizon(view, focal);
+    if (race_cfg.mode == 8)
+        hd_showcase_backdrop(view);
     hd_sun(view, focal, update, 0);
     // Fade through the authored fog color before merging into the actual backdrop
     CVECTOR color = track_horizon->colors[0].rgb;
@@ -3775,8 +3777,6 @@ static void hd_scene(const RACE_VIEW *view, float focal, sint32 update)
     hd_submit_world(view->idx);
     vid_fog(NULL);
     hd_sun(view, focal, update, 1);
-    if (race_cfg.mode == 8)
-        hd_showcase_backdrop(view);
     hd_player_markers(view, focal);
     hd_target_indicator(view);
     hd_countdown(view, focal);

@@ -1097,7 +1097,7 @@ static sint32 river_place_model(const CAMERA *camera, const BOAT *boat, const ME
     matrix.t[0] = x;
     matrix.t[1] = track_horizon->ground;
     matrix.t[2] = z;
-    RotMatrixZ(1024 - angle, &matrix);
+    RotMatrixY(1024 - angle, &matrix);
     psx_gte_snapshot(&controls);
     camera_bias_matrix(camera, &matrix, 0);
     // Original bounding projection uses its own depth cue

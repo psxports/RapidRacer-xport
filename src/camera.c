@@ -1151,7 +1151,7 @@ sint32 camera_init(CAMERA *state)
     uint32 route_idx = archive->count;
     ROUTE_SEGMENT *const *routes = archive->segs;
 
-    state->route = routes[route_idx - 5];
+    state->route = routes[race_cfg.mode == 8 ? 0 : route_idx - 5];
     if (race_cfg.players == 1)
     {
         static const sint16 up_offsets[9] = {140, 136, 141, 140, 136, 142, 140, 136, 130};
